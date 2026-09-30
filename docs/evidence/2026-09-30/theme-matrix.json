@@ -1,0 +1,146 @@
+[
+  {
+    "accent": "graphite",
+    "draft": "{\n  \"query\": {\n    \"match_all\": {}\n  },\n  \"size\": 25\n}",
+    "heading": "Appearance",
+    "locale": "en-US",
+    "mode": "light",
+    "overflow": false,
+    "width": 1108
+  },
+  {
+    "accent": "jade",
+    "draft": "{\n  \"query\": {\n    \"match_all\": {}\n  },\n  \"size\": 25\n}",
+    "heading": "Appearance",
+    "locale": "en-US",
+    "mode": "light",
+    "overflow": false,
+    "width": 1108
+  },
+  {
+    "accent": "blue",
+    "draft": "{\n  \"query\": {\n    \"match_all\": {}\n  },\n  \"size\": 25\n}",
+    "heading": "Appearance",
+    "locale": "en-US",
+    "mode": "light",
+    "overflow": false,
+    "width": 1108
+  },
+  {
+    "accent": "violet",
+    "draft": "{\n  \"query\": {\n    \"match_all\": {}\n  },\n  \"size\": 25\n}",
+    "heading": "Appearance",
+    "locale": "en-US",
+    "mode": "light",
+    "overflow": false,
+    "width": 1108
+  },
+  {
+    "accent": "graphite",
+    "draft": "{\n  \"query\": {\n    \"match_all\": {}\n  },\n  \"size\": 25\n}",
+    "heading": "Appearance",
+    "locale": "en-US",
+    "mode": "dark",
+    "overflow": false,
+    "width": 1108
+  },
+  {
+    "accent": "jade",
+    "draft": "{\n  \"query\": {\n    \"match_all\": {}\n  },\n  \"size\": 25\n}",
+    "heading": "Appearance",
+    "locale": "en-US",
+    "mode": "dark",
+    "overflow": false,
+    "width": 1108
+  },
+  {
+    "accent": "blue",
+    "draft": "{\n  \"query\": {\n    \"match_all\": {}\n  },\n  \"size\": 25\n}",
+    "heading": "Appearance",
+    "locale": "en-US",
+    "mode": "dark",
+    "overflow": false,
+    "width": 1108
+  },
+  {
+    "accent": "violet",
+    "draft": "{\n  \"query\": {\n    \"match_all\": {}\n  },\n  \"size\": 25\n}",
+    "heading": "Appearance",
+    "locale": "en-US",
+    "mode": "dark",
+    "overflow": false,
+    "width": 1108
+  },
+  {
+    "accent": "graphite",
+    "draft": "{\n  \"query\": {\n    \"match_all\": {}\n  },\n  \"size\": 25\n}",
+    "heading": "外观",
+    "locale": "zh-CN",
+    "mode": "light",
+    "overflow": false,
+    "width": 1108
+  },
+  {
+    "accent": "jade",
+    "draft": "{\n  \"query\": {\n    \"match_all\": {}\n  },\n  \"size\": 25\n}",
+    "heading": "外观",
+    "locale": "zh-CN",
+    "mode": "light",
+    "overflow": false,
+    "width": 1108
+  },
+  {
+    "accent": "blue",
+    "draft": "{\n  \"query\": {\n    \"match_all\": {}\n  },\n  \"size\": 25\n}",
+    "heading": "外观",
+    "locale": "zh-CN",
+    "mode": "light",
+    "overflow": false,
+    "width": 1108
+  },
+  {
+    "accent": "violet",
+    "draft": "{\n  \"query\": {\n    \"match_all\": {}\n  },\n  \"size\": 25\n}",
+    "heading": "外观",
+    "locale": "zh-CN",
+    "mode": "light",
+    "overflow": false,
+    "width": 1108
+  },
+  {
+    "accent": "graphite",
+    "draft": "{\n  \"query\": {\n    \"match_all\": {}\n  },\n  \"size\": 25\n}",
+    "heading": "外观",
+    "locale": "zh-CN",
+    "mode": "dark",
+    "overflow": false,
+    "width": 1108
+  },
+  {
+    "accent": "jade",
+    "draft": "{\n  \"query\": {\n    \"match_all\": {}\n  },\n  \"size\": 25\n}",
+    "heading": "外观",
+    "locale": "zh-CN",
+    "mode": "dark",
+    "overflow": false,
+    "width": 1108
+  },
+  {
+    "accent": "blue",
+    "draft": "{\n  \"query\": {\n    \"match_all\": {}\n  },\n  \"size\": 25\n}",
+    "heading": "外观",
+    "locale": "zh-CN",
+    "mode": "dark",
+    "overflow": false,
+    "width": 1108
+  },
+  {
+    "accent": "violet",
+    "draft": "{\n  \"query\": {\n    \"match_all\": {}\n  },\n  \"size\": 25\n}",
+    "heading": "外观",
+    "locale": "zh-CN",
+    "mode": "dark",
+    "overflow": false,
+    "width": 1108
+  }
+]

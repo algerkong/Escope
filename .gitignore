@@ -15,3 +15,6 @@ test-results/
 *.pfx
 *.sqlite
 *.sqlite-*
+src-tauri/icons/android/
+src-tauri/icons/ios/
+.claude/

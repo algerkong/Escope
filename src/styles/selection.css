@@ -1,0 +1,52 @@
+/* Text selection policy for the desktop shell.
+
+   Only chrome the user cannot copy is opted out: navigation, titles, toolbars, buttons and
+   control labels. Everything else keeps the browser default, so results, JSON, DSL, error
+   detail, endpoints and table data stay copyable. The surfaces the product promises to be
+   copyable are re-declared below so they keep winning when they sit inside a chrome region,
+   such as the palette and index inputs.
+
+   Both blocks are wrapped in :where() to hold the specificity at zero: the later block then
+   decides for any element matching both, and no !important is needed anywhere. */
+
+/* Chrome: navigation, titles, toolbars, buttons and labels. */
+:where(
+  .app-header,
+  .session-banner,
+  .results-toolbar,
+  .resource-sidebar .sidebar-heading,
+  .resource-bottom,
+  .ai-sidebar .sidebar-heading,
+  .settings-sidebar nav,
+  .settings-version,
+  .dialog-heading,
+  .palette-input,
+  .palette-option,
+  .line-numbers,
+  h1,
+  h2,
+  h3,
+  button,
+  label,
+  kbd
+) {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Data: editable fields, DSL/JSON payloads, error detail, endpoints and table data. */
+:where(
+  input,
+  textarea,
+  [contenteditable]:not([contenteditable="false"]),
+  pre,
+  code,
+  .endpoint,
+  .notice,
+  .connection-test-error,
+  .dialog-description,
+  table
+) {
+  -webkit-user-select: text;
+  user-select: text;
+}

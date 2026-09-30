@@ -17,5 +17,5 @@
     "noEmit": true,
     "types": ["vite/client", "vitest/globals"]
   },
-  "include": ["src", "tests/unit", "vite.config.ts"]
+  "include": ["src", "tests/unit", "tests/browser", "vite.config.ts"]
 }

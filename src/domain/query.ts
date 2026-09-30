@@ -1,3 +1,5 @@
+import { validateQueryDsl, type QueryDslErrorCode } from './query-dsl';
+
 export interface QueryDocument {
   readonly id: string;
   readonly connectionId: string | null;
@@ -33,13 +35,76 @@ export function createQuery(connectionId: string | null, view: QueryDocument['re
   };
 }
 
-export function createSnapshot(query: QueryDocument, requestId: string, now: Date): ExecutionSnapshot {
-  if (!query.connectionId) throw new Error('noConnection');
-  if (!query.index.trim()) throw new Error('invalidIndex');
-  return Object.freeze({
-    requestId, queryId: query.id, connectionId: query.connectionId, index: query.index,
+export type SnapshotRejectionCode = 'noConnection' | 'invalidIndex' | 'invalidTimestamp';
+
+export interface SnapshotRejection {
+  readonly code: QueryDslErrorCode | SnapshotRejectionCode;
+  readonly line?: number;
+  readonly column?: number;
+}
+
+/** Contract version of the DSL validation/format rules a validated snapshot was built with. */
+export const QUERY_DSL_CONTRACT_VERSION = 2;
+
+export interface ValidatedExecutionSnapshot extends ExecutionSnapshot {
+  readonly dslContractVersion: number;
+}
+
+export type ValidatedSnapshot =
+  | { readonly ok: true; readonly snapshot: ValidatedExecutionSnapshot }
+  | { readonly ok: false; readonly error: SnapshotRejection };
+
+type SnapshotGate =
+  | { readonly ok: true; readonly connectionId: string }
+  | { readonly ok: false; readonly code: SnapshotRejectionCode };
+
+/** Execution preconditions that stay a thrown error for the legacy `createSnapshot` path. */
+function gateSnapshot(query: QueryDocument): SnapshotGate {
+  if (!query.connectionId) return { ok: false, code: 'noConnection' };
+  if (!query.index.trim()) return { ok: false, code: 'invalidIndex' };
+  return { ok: true, connectionId: query.connectionId };
+}
+
+function snapshotFields(
+  query: QueryDocument,
+  connectionId: string,
+  requestId: string,
+  now: Date,
+): ExecutionSnapshot {
+  return {
+    requestId, queryId: query.id, connectionId, index: query.index,
     rawDsl: query.dsl, revision: query.revision, startedAt: now.toISOString(),
-  });
+  };
+}
+
+/**
+ * Freeze one execution: verbatim DSL, index scope and connection ownership are captured
+ * by value, so later draft edits or a connection switch cannot rebind this snapshot.
+ */
+export function createSnapshot(query: QueryDocument, requestId: string, now: Date): ExecutionSnapshot {
+  const gate = gateSnapshot(query);
+  if (!gate.ok) throw new Error(gate.code);
+  return Object.freeze(snapshotFields(query, gate.connectionId, requestId, now));
+}
+
+/**
+ * Versioned execution gate: rejects an unusable DSL draft, an unbound target or an
+ * invalid execution timestamp as a structured result instead of throwing, and stamps the
+ * DSL contract version used. The draft text itself is never rewritten here.
+ */
+export function createValidatedSnapshot(query: QueryDocument, requestId: string, now: Date): ValidatedSnapshot {
+  const validation = validateQueryDsl(query.dsl);
+  if (!validation.ok) return { ok: false, error: validation.error };
+  const gate = gateSnapshot(query);
+  if (!gate.ok) return { ok: false, error: { code: gate.code } };
+  if (Number.isNaN(now.getTime())) return { ok: false, error: { code: 'invalidTimestamp' } };
+  return {
+    ok: true,
+    snapshot: Object.freeze({
+      ...snapshotFields(query, gate.connectionId, requestId, now),
+      dslContractVersion: QUERY_DSL_CONTRACT_VERSION,
+    }),
+  };
 }
 
 export function acceptResponse(state: ExecutionState, response: {

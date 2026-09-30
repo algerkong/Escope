@@ -50,6 +50,32 @@ export function parsePreferences(value: unknown): Preferences {
   return result;
 }
 
+const preferenceKeys = Object.keys(defaultPreferences) as (keyof Preferences)[];
+/** Spelling written by builds before the F07 fix; accepted on read, never emitted. */
+const legacyStartAIKey = 'startAi';
+
+/**
+ * Contract boundary for payloads this build did not produce itself (the desktop database through
+ * IPC). `parsePreferences` fills gaps with defaults, which is right for an internal draft but
+ * wrong for stored data: an unknown, missing or invalid field must fail loudly instead of
+ * silently turning into a default the user never chose. `startAi` is the only accepted alias.
+ */
+export function requirePreferences(value: unknown): Preferences {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalidPreferences');
+  const source = { ...(value as Record<string, unknown>) };
+  if (legacyStartAIKey in source) {
+    if ('startAI' in source) throw new Error('invalidPreferences');
+    source.startAI = source[legacyStartAIKey];
+    delete source[legacyStartAIKey];
+  }
+  const parsed = parsePreferences(source);
+  if (Object.keys(source).length !== preferenceKeys.length) throw new Error('invalidPreferences');
+  for (const key of preferenceKeys) {
+    if (!Object.is(parsed[key], source[key])) throw new Error('invalidPreferences');
+  }
+  return parsed;
+}
+
 export function resolveLocale(preferences: Preferences, systemLanguage: string): 'zh-CN' | 'en-US' {
   return preferences.locale === 'system'
     ? (systemLanguage.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US')

@@ -1,21 +1,27 @@
 import { useState } from 'react';
-import { Check, Database, Pencil, Plus, Search, Trash2, AlertTriangle } from 'lucide-react';
+import { Check, Database, Pencil, Plus, Search, Trash2, AlertTriangle, PlugZap } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { ConnectionInput, ConnectionProfile } from '../../domain/connection';
 import { validateConnection } from '../../domain/connection';
 import { EmptyState, IconButton, Modal } from '../../components/controls';
 import { errorCode } from '../../services/ipc';
+import type { ConnectionTestState } from './useConnectionTests';
+import { ConnectionTestResult } from './ConnectionTestResult';
 
 interface Props {
   connections: ConnectionProfile[];
   activeId: string | null;
   busy: boolean;
+  canTest: boolean;
+  testResults: Record<string, ConnectionTestState>;
+  timeZone: string;
+  onTest: (id: string) => void;
   onSelect: (id: string) => Promise<void>;
   onSave: (input: ConnectionInput, id?: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
 }
 
-export function ConnectionPanel({ connections, activeId, busy, onSelect, onSave, onDelete }: Props) {
+export function ConnectionPanel({ connections, activeId, busy, canTest, testResults, timeZone, onTest, onSelect, onSave, onDelete }: Props) {
   const { t } = useTranslation();
   const [search, setSearch] = useState('');
   const [editing, setEditing] = useState<ConnectionProfile | 'new' | null>(null);
@@ -31,13 +37,17 @@ export function ConnectionPanel({ connections, activeId, busy, onSelect, onSave,
     <div className="subheading muted">{t('connections:count', { count: connections.length })}</div>
     {error ? <div className="notice error" role="alert">{t(`errors:${error}`)}</div> : null}
     {filtered.length ? <div className="connection-list">
-      {filtered.map((profile) => <article className="connection-row" key={profile.id} data-selected={profile.id === activeId}>
+      {filtered.map((profile) => <article className="connection-row" key={profile.id} data-selected={profile.id === activeId} aria-label={profile.displayName}>
         <Database size={20} className="muted" />
         <div className="connection-info"><div className="connection-title"><strong>{profile.displayName}</strong>
           <span className={`environment ${profile.environment}`}>{t(`connections:${profile.environment}`)}</span></div>
-          <div className="endpoint">{profile.endpoint}</div><span className="muted small">{t('notTested')}</span>
+          <div className="endpoint">{profile.endpoint}</div>
+          <ConnectionTestResult result={testResults[profile.id]} timeZone={timeZone} />
         </div>
         <div className="connection-actions">
+          <IconButton icon={PlugZap} label={canTest ? t('connections:test', { name: profile.displayName }) : t('connections:testDesktopOnly')}
+            disabled={busy || !canTest} aria-disabled={testResults[profile.id]?.status === 'running'}
+            onClick={() => { if (testResults[profile.id]?.status !== 'running') onTest(profile.id); }} />
           <button className="secondary compact-button" disabled={busy || profile.id === activeId} onClick={() => {
             setError(null); void onSelect(profile.id).catch((cause: unknown) => setError(errorCode(cause)));
           }}>{profile.id === activeId ? <Check size={14} /> : null}{t(profile.id === activeId ? 'selected' : 'select')}</button>

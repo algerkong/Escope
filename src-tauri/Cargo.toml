@@ -21,6 +21,12 @@ url = "2"
 uuid = { version = "1", features = ["v4"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread", "time"] }
+zeroize = "1"
+
+# F08.1: OS credential store. Only the maintained keyring platform backend is used,
+# no hand-written OS FFI. macOS/Linux backends stay out until they are verified.
+[target.'cfg(windows)'.dependencies]
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
 
 [dev-dependencies]
 tempfile = "3"

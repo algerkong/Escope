@@ -1,7 +1,7 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import type { ConnectionInput, ConnectionProfile } from '../domain/connection';
 import { selectConnection, validateConnection } from '../domain/connection';
-import { parsePreferences, type Preferences } from '../domain/preferences';
+import { parsePreferences, requirePreferences, type Preferences } from '../domain/preferences';
 
 export interface StoredState {
   preferences: Preferences;
@@ -23,7 +23,7 @@ export function createSessionStorage(): StorageService {
   return {
     kind: 'session',
     load: async () => structuredClone(state),
-    savePreferences: async (preferences) => { state.preferences = parsePreferences(preferences); },
+    savePreferences: async (preferences) => { state.preferences = requirePreferences(preferences); },
     saveConnection: async (input, id) => {
       const clean = validateConnection(input);
       const existing = state.connections.find((profile) => profile.id === id);
@@ -57,7 +57,9 @@ export function createStorage(): StorageService {
     kind: 'desktop',
     load: async () => {
       const state = await invoke<StoredState>('load_state');
-      return { ...state, preferences: parsePreferences(state.preferences) };
+      // Rust already validates the stored row; this is the frontend side of the same contract, so
+      // an unexpected payload fails the startup instead of quietly becoming default settings.
+      return { ...state, preferences: requirePreferences(state.preferences) };
     },
     savePreferences: (preferences) => invoke('save_preferences', { preferences }),
     saveConnection: (input, id) => invoke('save_connection', { input, id: id ?? null }),

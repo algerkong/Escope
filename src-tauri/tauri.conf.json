@@ -17,7 +17,8 @@
       "height": 900,
       "minWidth": 1024,
       "minHeight": 700,
-      "visible": true
+      "visible": true,
+      "decorations": false
     }],
     "security": {
       "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data:; font-src 'self'; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; frame-src 'none'",

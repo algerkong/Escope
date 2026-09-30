@@ -19,18 +19,19 @@ export function EmptyState({ icon: Icon, title, description, children }:
 }
 
 export function Modal({ open, onClose, title, description, children }:
-  { open: boolean; onClose: () => void; title: string; description: string; children: ReactNode }) {
+  { open: boolean; onClose: () => void; title: string; description?: string; children: ReactNode }) {
   const { t } = useTranslation();
   const previousFocus = useRef<HTMLElement | null>(null);
   return <Dialog.Root open={open} onOpenChange={(value) => { if (!value) onClose(); }}>
     <Dialog.Portal><Dialog.Overlay className="dialog-overlay" />
       <Dialog.Content className="dialog-content"
+        {...(description ? {} : { 'aria-describedby': undefined })}
         onOpenAutoFocus={() => { previousFocus.current = document.activeElement as HTMLElement | null; }}
         onCloseAutoFocus={(event) => { event.preventDefault(); previousFocus.current?.focus(); }}>
         <div className="dialog-heading"><Dialog.Title>{title}</Dialog.Title>
           <Dialog.Close asChild><IconButton icon={X} label={t('close')} /></Dialog.Close>
         </div>
-        <Dialog.Description className="muted dialog-description">{description}</Dialog.Description>
+        {description ? <Dialog.Description className="muted dialog-description">{description}</Dialog.Description> : null}
         {children}
       </Dialog.Content>
     </Dialog.Portal>

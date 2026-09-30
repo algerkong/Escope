@@ -11,11 +11,12 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src tests/unit",
+    "lint": "eslint src tests/unit tests/browser",
     "check": "npm run lint && npm run build && npm test && npm run build:prototype && npm run test:prototype",
     "tauri": "tauri",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
-    "build:desktop": "tauri build --no-bundle"
+    "build:desktop": "tauri build --no-bundle",
+    "build:installer:windows": "tauri build --bundles nsis --config src-tauri/tauri.windows.conf.json"
   },
   "dependencies": {
     "@fontsource/ibm-plex-sans": "^5.2.0",
@@ -23,6 +24,7 @@
     "@radix-ui/react-dialog": "^1.1.15",
     "@tauri-apps/api": "^2.9.1",
     "i18next": "^25.6.0",
+    "jsonc-parser": "3.3.1",
     "lucide-react": "0.468.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

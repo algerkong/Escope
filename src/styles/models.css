@@ -1,0 +1,47 @@
+/*
+ * Model profile settings page: notices, toolbar, profile rows and the editor dialog.
+ *
+ * Selectors are `.model`-scoped so global tokens and layout stay untouched. Profile names,
+ * endpoints and model ids are data and stay selectable; headings, badges and buttons are opted out
+ * by the global selection policy in `selection.css`.
+ */
+
+.models-page { display: flex; flex-direction: column; }
+.models-notice { border-radius: 6px; margin-bottom: 10px; }
+.models-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 4px 0 14px; }
+.models-filter { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+.models-filter input { padding: 5px 8px; font-size: .82rem; max-width: 240px; }
+.models-toolbar .primary { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+.models-state { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 0; font-size: .82rem; }
+.models-state.error { color: var(--error); }
+.models-state button { margin-left: 4px; }
+
+.model-list { list-style: none; margin: 10px 0 0; padding: 0; border: 1px solid var(--border); border-radius: 6px; }
+.model-row { display: flex; align-items: flex-start; gap: 14px; padding: 12px; border-bottom: 1px solid var(--border); }
+.model-row:last-child { border-bottom: 0; }
+.model-row.is-default { background: var(--subtle); }
+.model-default { display: inline-flex; align-items: center; gap: 6px; min-width: 132px; font-size: .8rem; color: var(--muted); }
+.model-row.is-default .model-default { color: var(--text); font-weight: 500; }
+.model-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+.model-heading { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.model-name { font-weight: 500; overflow-wrap: anywhere; }
+.model-badge {
+  font-size: .68rem; line-height: 1.7; padding: 0 5px; border-radius: 3px;
+  border: 1px solid var(--border); color: var(--muted); white-space: nowrap;
+}
+.model-badge.warn { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 40%, transparent); }
+.model-endpoint { font-size: .82rem; overflow-wrap: anywhere; }
+.model-id { font-size: .78rem; overflow-wrap: anywhere; }
+.model-actions { display: flex; gap: 4px; }
+
+.model-form { display: flex; flex-direction: column; gap: 4px; }
+.model-form label { font-size: .8rem; color: var(--muted); }
+.model-form input, .model-form select { padding: 6px 8px; }
+.model-endpoint-input, .model-id-input { font-family: var(--code-font); font-size: var(--code-size); }
+.model-hint { margin: 0 0 8px; }
+.model-form .notice { margin: 0 0 10px; }
+
+@media (max-width: 760px) {
+  .model-row { flex-wrap: wrap; }
+  .models-filter input { max-width: 100%; }
+}

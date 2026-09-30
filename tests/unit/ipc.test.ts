@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { invoke, isTauri } from '@tauri-apps/api/core';
-import { testConnection, type ConnectionIdentity, type ConnectionProbe } from '../../src/services/ipc';
+import {
+  cancelRequest, errorCode, executeQuery, readResource, testConnection,
+  type ConnectionIdentity, type ConnectionProbe, type QueryRequest, type ResourceRequest,
+} from '../../src/services/ipc';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), isTauri: vi.fn() }));
 
@@ -54,5 +57,93 @@ describe('read-only connection IPC', () => {
     resolve(identity);
     await expect(pending).resolves.toEqual(identity);
     expect(invoke).toHaveBeenCalledExactlyOnceWith('connection_test', { probe });
+  });
+});
+
+const resourceRequest: ResourceRequest = {
+  requestId: '5f0b1d3a-6f39-4a4c-9a3f-2b6c2a7e1d10',
+  connectionId: probe.connectionId,
+  resource: 'fieldCaps',
+  index: 'orders-*',
+};
+const queryRequest: QueryRequest = { requestId: 'q-1', connectionId: probe.connectionId, index: 'orders-*', rawDsl: '{"size":1}' };
+
+describe('read-only resource and query IPC', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(isTauri).mockReturnValue(true);
+  });
+
+  it('sends the resource request unchanged and keeps the verbatim response', async () => {
+    const response = { requestId: resourceRequest.requestId, connectionId: probe.connectionId, endpoint: 'http://fixture.test', rawResponse: '{"indices":[]}' };
+    vi.mocked(invoke).mockResolvedValue(response);
+    await expect(readResource(resourceRequest)).resolves.toEqual(response);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('resource_read', { request: resourceRequest });
+  });
+
+  it('omits the index scope for index discovery', async () => {
+    const request = { requestId: 'r-2', connectionId: probe.connectionId, resource: 'indices' as const };
+    vi.mocked(invoke).mockResolvedValue({ ...request, endpoint: 'http://fixture.test', rawResponse: '{}' });
+    await readResource(request);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('resource_read', { request });
+  });
+
+  it('rejects a resource response bound to another connection or missing its body', async () => {
+    vi.mocked(invoke).mockResolvedValue({ requestId: resourceRequest.requestId, connectionId: crypto.randomUUID(), endpoint: 'http://x', rawResponse: '{}' });
+    await expect(readResource(resourceRequest)).rejects.toMatchObject({ code: 'invalidResponse' });
+    vi.mocked(invoke).mockResolvedValue({ requestId: resourceRequest.requestId, connectionId: probe.connectionId, endpoint: 'http://x' });
+    await expect(readResource(resourceRequest)).rejects.toMatchObject({ code: 'invalidResponse' });
+  });
+
+  it('executes a frozen snapshot and keeps the partial flag', async () => {
+    const response = { requestId: queryRequest.requestId, connectionId: probe.connectionId, endpoint: 'http://fixture.test', rawResponse: '{"hits":{}}', partial: true };
+    vi.mocked(invoke).mockResolvedValue(response);
+    await expect(executeQuery(queryRequest)).resolves.toEqual(response);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('query_execute', { request: queryRequest });
+  });
+
+  it('rejects a query response without a boolean partial flag', async () => {
+    vi.mocked(invoke).mockResolvedValue({ requestId: queryRequest.requestId, connectionId: probe.connectionId, endpoint: 'http://x', rawResponse: '{}', partial: 'yes' });
+    await expect(executeQuery(queryRequest)).rejects.toMatchObject({ code: 'invalidResponse' });
+  });
+
+  it.each([undefined, null, 42])('rejects a query response with a non-string endpoint: %s', async (endpoint) => {
+    vi.mocked(invoke).mockResolvedValue({
+      requestId: queryRequest.requestId, connectionId: probe.connectionId, endpoint, rawResponse: '{}', partial: false,
+    });
+    await expect(executeQuery(queryRequest)).rejects.toMatchObject({ code: 'invalidResponse' });
+  });
+
+  it('cancels a request and rejects a non-boolean answer', async () => {
+    const request = { requestId: queryRequest.requestId, connectionId: probe.connectionId };
+    vi.mocked(invoke).mockResolvedValue(false);
+    await expect(cancelRequest(request)).resolves.toBe(false);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('request_cancel', { request });
+    vi.mocked(invoke).mockResolvedValue('done');
+    await expect(cancelRequest(request)).rejects.toMatchObject({ code: 'invalidResponse' });
+  });
+
+  it('keeps every live call unsupported in the browser preview', async () => {
+    vi.mocked(isTauri).mockReturnValue(false);
+    await expect(readResource(resourceRequest)).rejects.toMatchObject({ code: 'unsupported' });
+    await expect(executeQuery(queryRequest)).rejects.toMatchObject({ code: 'unsupported' });
+    await expect(cancelRequest({ requestId: queryRequest.requestId, connectionId: probe.connectionId })).rejects.toMatchObject({ code: 'unsupported' });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe('error code mapping', () => {
+  it('keeps storageUnavailable as the default fallback for unrecognized failures', () => {
+    for (const failure of [new Error('boom'), 'command not found', null, undefined, 42, { requestId: 'x' }, { code: 42 }]) {
+      expect(errorCode(failure)).toBe('storageUnavailable');
+    }
+  });
+
+  it('uses the caller fallback for unrecognized failures without weakening structured codes', () => {
+    for (const failure of [new Error('boom'), 'command not found', null, undefined, { code: 42 }]) {
+      expect(errorCode(failure, 'unexpected')).toBe('unexpected');
+    }
+    expect(errorCode({ code: 'timeout' }, 'unexpected')).toBe('timeout');
+    expect(errorCode(new Error('notFound'), 'unexpected')).toBe('notFound');
   });
 });

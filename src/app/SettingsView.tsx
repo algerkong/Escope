@@ -6,7 +6,10 @@ import type { ConnectionInput, ConnectionProfile } from '../domain/connection';
 import type { Preferences } from '../domain/preferences';
 import { EmptyState } from '../components/controls';
 import { ConnectionPanel } from '../features/connections/ConnectionPanel';
+import { connectionTestLabel, type ConnectionTestState } from '../features/connections/useConnectionTests';
+import { ClusterResource } from '../features/cluster/ClusterResource';
 import { PreferencesPanel } from '../features/settings/PreferencesPanel';
+import type { ClusterBackend } from '../services/cluster';
 
 const icons = { general: Globe, appearance: Monitor, typography: Type, shortcuts: Keyboard,
   connections: Cable, models: Sparkles, cluster: Database, nodes: Server, shards: Boxes, indices: Layers };
@@ -20,9 +23,14 @@ interface Props {
   connections: ConnectionProfile[];
   activeId: string | null;
   busy: boolean;
+  canTest: boolean;
+  testResults: Record<string, ConnectionTestState>;
+  testConnection: (id: string) => void;
   selectConnection: (id: string) => Promise<void>;
   saveConnection: (input: ConnectionInput, id?: string) => Promise<void>;
   deleteConnection: (id: string) => Promise<void>;
+  /** Injectable read-only metadata backend; component tests pass a fake, the app uses the IPC. */
+  clusterBackend?: ClusterBackend;
 }
 
 export function SettingsView(props: Props) {
@@ -30,6 +38,7 @@ export function SettingsView(props: Props) {
   const [search, setSearch] = useState('');
   const { route } = props;
   const isManagement = ['connections', 'cluster', 'nodes', 'shards', 'indices'].includes(route);
+  const activeProfile = props.connections.find((item) => item.id === props.activeId) ?? null;
   const Icon = icons[route];
   return <div className="settings-layout">
     <aside className="settings-sidebar">
@@ -55,19 +64,17 @@ export function SettingsView(props: Props) {
     </aside>
     <main className="settings-main"><div className={`settings-content ${isManagement ? 'wide' : ''}`}>
       <h1 tabIndex={-1} id="settings-title"><Icon size={21} />{t(`settings:${route}`)}</h1>
-      {['general', 'appearance', 'typography', 'shortcuts'].includes(route) ?
+      {route === 'general' || route === 'appearance' || route === 'typography' || route === 'shortcuts' ?
         <PreferencesPanel route={route} preferences={props.preferences} update={props.updatePreferences} /> :
         route === 'connections' ? <ConnectionPanel connections={props.connections} activeId={props.activeId} busy={props.busy}
+          canTest={props.canTest} testResults={props.testResults} timeZone={props.preferences.timeZone} onTest={props.testConnection}
           onSelect={props.selectConnection} onSave={props.saveConnection} onDelete={props.deleteConnection} /> :
-          <div className="resource-placeholder">
-            <div className="resource-target muted"><Database size={16} />{props.connections.find((item) => item.id === props.activeId)?.displayName ?? t('noConnection')}
-              <span>{t('notConnected')}</span></div>
-            <EmptyState icon={Icon} title={t(route === 'models' ? 'settings:noModel' : 'settings:noMetrics')}
-              description={t(route === 'models' ? 'settings:modelPending' : 'settings:resourcePending')}>
-              {route !== 'models' && !props.activeId ? <button className="secondary" onClick={() => props.navigate('connections')}>
-                <Cable size={15} />{t('connections:add')}</button> : null}
-            </EmptyState>
-          </div>}
+        route === 'models' ? <div className="resource-placeholder">
+          <EmptyState icon={Sparkles} title={t('settings:noModel')} description={t('settings:modelPending')} />
+        </div> :
+        <ClusterResource route={route} profile={activeProfile} desktop={props.canTest}
+          testLabel={t(props.activeId ? connectionTestLabel(props.testResults[props.activeId]) : 'notConnected')}
+          backend={props.clusterBackend} onAddConnection={() => props.navigate('connections')} />}
     </div></main>
   </div>;
 }

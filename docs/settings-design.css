@@ -1,0 +1,215 @@
+/* EScope settings: neutral desktop preferences, grouped forms, restrained accent. */
+.settings-page {
+  grid-template-columns:248px minmax(0,1fr);
+  align-items:start;
+  background:var(--app);
+}
+.settings-page .settings-nav {
+  align-self:stretch;
+  padding:20px 10px 28px;
+  background:var(--sidebar);
+  border-right:1px solid var(--border);
+}
+.settings-nav-title {
+  margin:0 12px 16px;
+  font-size:1.05rem;
+  font-weight:600;
+}
+.settings-page .settings-nav #settings-back {
+  margin:0 0 12px;
+  padding:7px 12px;
+  color:var(--muted);
+  font-size:.85rem;
+}
+.settings-search-shell {
+  display:flex;
+  align-items:center;
+  gap:7px;
+  margin:0 2px 14px;
+  padding:0 11px;
+  height:34px;
+  border-radius:18px;
+  background:color-mix(in srgb,var(--text) 6%,var(--sidebar));
+  color:var(--muted);
+}
+.settings-search-shell .icon { width:14px; height:14px; }
+.settings-page .settings-search-shell .setting-search {
+  appearance:none;
+  flex:1;
+  min-width:0;
+  width:100%;
+  height:100%;
+  margin:0;
+  padding:0;
+  border:0;
+  border-radius:0;
+  background:transparent;
+  box-shadow:none;
+  font-size:.85rem;
+}
+.settings-search-shell:focus-within { outline:2px solid var(--accent); outline-offset:2px; }
+.settings-search-shell input:focus-visible { outline:none; }
+.settings-nav-group {
+  padding:13px 12px 5px;
+  color:var(--muted);
+  font-size:.8rem;
+}
+.settings-page .settings-nav button {
+  min-height:32px;
+  padding:6px 12px;
+  margin:2px 0;
+  gap:9px;
+  border-radius:6px;
+  font-size:.9rem;
+  line-height:1.45;
+}
+.settings-page .settings-nav button .icon { width:15px; height:15px; }
+.settings-page .settings-nav button:hover {
+  background:color-mix(in srgb,var(--text) 4%,var(--sidebar));
+}
+.settings-page .settings-nav button[aria-current="page"] {
+  color:var(--text);
+  background:color-mix(in srgb,var(--text) 7%,var(--sidebar));
+}
+.settings-page .settings-content {
+  min-width:0;
+  width:100%;
+  max-width:810px;
+  margin:0 auto;
+  padding:56px 40px 72px;
+  align-self:start;
+}
+.settings-page .settings-content h1 {
+  margin:0 0 36px;
+  font-size:1.65rem;
+  line-height:1.35;
+  font-weight:600;
+}
+.settings-page .settings-content h2 {
+  margin:30px 0 12px;
+  font-size:.9rem;
+  line-height:1.5;
+  font-weight:500;
+  color:var(--muted);
+}
+.settings-row-group {
+  border:1px solid var(--border);
+  border-radius:8px;
+  padding:0 14px;
+  background:var(--app);
+}
+.settings-page .setting-row {
+  min-height:58px;
+  padding:12px 0;
+  gap:20px;
+  border-bottom:1px solid var(--border);
+  font-size:.9rem;
+}
+.settings-row-group > .setting-row:last-child { border-bottom:0; }
+.settings-page .setting-row > label { line-height:1.6; min-width:0; }
+.settings-page .setting-row select,
+.settings-page .setting-row input[type="number"] {
+  min-height:30px;
+  padding:4px 9px;
+  border:1px solid var(--border);
+  border-radius:6px;
+  background:var(--app);
+  color:var(--muted);
+  font-size:.85rem;
+}
+.settings-page .setting-row select { width:auto; max-width:52%; }
+.settings-page .setting-row input[type="number"] { width:64px; color:var(--text); }
+.settings-page .setting-row input[type="checkbox"] {
+  appearance:none;
+  position:relative;
+  flex:0 0 32px;
+  width:32px;
+  height:19px;
+  border:0;
+  border-radius:12px;
+  padding:0;
+  background:color-mix(in srgb,var(--muted) 30%,var(--app));
+  cursor:pointer;
+}
+.settings-page .setting-row input[type="checkbox"]::after {
+  content:"";
+  position:absolute;
+  width:15px;
+  height:15px;
+  left:2px;
+  top:2px;
+  border-radius:50%;
+  background:var(--app);
+  box-shadow:0 1px 3px #0002;
+}
+.settings-page .setting-row input[type="checkbox"]:checked { background:var(--accent); }
+.settings-page .setting-row input[type="checkbox"]:checked::after {
+  transform:translateX(13px);
+  background:var(--on-accent);
+}
+.settings-page .mode-control { gap:12px; padding:5px 0; }
+.settings-page .mode-control button { border:0; padding:6px; min-width:76px; background:var(--subtle); }
+.settings-page .mode-control button[aria-pressed="true"] { outline-width:2px; outline-offset:1px; }
+.settings-page .mode-thumb { width:64px; height:42px; }
+.settings-page .settings-reset {
+  margin-top:24px;
+  padding:6px 10px;
+  border:1px solid var(--border);
+  border-radius:6px;
+  color:var(--muted);
+  font-size:.85rem;
+}
+.settings-page .settings-reset:hover { background:var(--subtle); color:var(--text); }
+.settings-page #keyboard-settings > p { font-size:.85rem; line-height:1.7; }
+.settings-page #language-row > label { flex:0 1 auto; }
+.settings-page #language-row select { max-width:100%; }
+.settings-page .settings-content:has(.configuration-window:not([hidden])) {
+  max-width:1240px;
+  padding-top:56px;
+}
+.settings-page .platform-head { margin-bottom:28px; align-items:center; }
+.settings-page .platform-head h1 { margin:0; font-size:1.65rem; }
+.settings-page .platform-head .command { min-height:32px; font-size:.85rem; padding:6px 10px; }
+.settings-page .platform-subtitle { font-size:.8rem; color:var(--muted); }
+.settings-page .platform-content > p { font-size:.9rem; line-height:1.8; }
+.settings-page .platform-toolbar { margin:20px 0 14px; }
+.settings-page .platform-toolbar input,
+.settings-page .platform-toolbar select { min-height:32px; font-size:.85rem; padding:6px 10px; }
+.settings-page .platform-table { border:1px solid var(--border); border-radius:8px; }
+.settings-page .platform-table th { background:var(--sidebar); font-size:.8rem; padding:11px 14px; }
+.settings-page .platform-table td { padding:12px 14px; }
+.settings-page .platform-table tbody tr:last-child td { border-bottom:0; }
+.settings-page .platform-table .platform-link { text-decoration:none; color:var(--text); }
+.settings-page .platform-table .platform-link:hover { text-decoration:underline; }
+.settings-page .platform-table .command { padding:5px 9px; font-size:.8rem; }
+.settings-page .metric-band { margin-bottom:28px; }
+.settings-page .metric-value { font-size:1.65rem; }
+.settings-page .overview-grid { gap:32px; }
+.settings-page .overview-grid h2 { margin-top:0; }
+.settings-page .health-row { font-size:.9rem; }
+.platform-dialog .platform-dialog-head { padding:18px 24px; }
+.platform-dialog .platform-dialog-head h2 { font-size:1.15rem; font-weight:600; }
+.platform-dialog .platform-form { gap:20px; }
+.platform-dialog .platform-form label { font-size:.9rem; gap:8px; }
+.platform-dialog .platform-form input,
+.platform-dialog .platform-form select { min-height:34px; padding:6px 10px; font-size:.9rem; }
+.platform-dialog .platform-form footer { margin-top:4px; padding-top:20px; }
+.platform-dialog .command { font-size:.85rem; padding:7px 12px; }
+@media(max-width:1000px) {
+  .settings-page { grid-template-columns:220px minmax(0,1fr); }
+  .settings-page .settings-content { padding:36px 24px 56px; }
+  .settings-page .settings-content:has(.configuration-window:not([hidden])) { padding-top:36px; }
+}
+@media(max-width:760px) {
+  .settings-page { grid-template-columns:minmax(0,1fr); }
+  .settings-page .settings-nav { padding:16px 12px; }
+  .settings-page .settings-content,
+  .settings-page .settings-content:has(.configuration-window:not([hidden])) { padding:28px 18px 48px; }
+  .settings-page .setting-row { gap:12px; flex-wrap:wrap; }
+  .settings-page .setting-row select { max-width:100%; }
+  .settings-page .mode-control { gap:6px; }
+}
+@media(forced-colors:active) {
+  .settings-page .setting-row input[type="checkbox"] { appearance:auto; }
+  .settings-page .setting-row input[type="checkbox"]::after { display:none; }
+}

@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light" data-accent="graphite">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EScope · Appearance study</title>
+  <script>
+    try {
+      const saved = JSON.parse(localStorage.getItem("escope-appearance") || "{}");
+      const mode = ["system", "light", "dark"].includes(saved.mode) ? saved.mode : "system";
+      document.documentElement.dataset.theme = mode === "system" ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : mode;
+      document.documentElement.dataset.accent = ["graphite", "jade", "blue", "violet"].includes(saved.accent) ? saved.accent : "graphite";
+    } catch {}
+  </script>
+  <link rel="stylesheet" href="./assets/tailwind.css">
+  <script src="./assets/lucide.min.js"></script>
+  <style>
+    :root { color-scheme: light; --app:#fff; --sidebar:#f6f6f7; --subtle:#f4f5f6; --text:#24262a; --muted:#646870; --border:#e5e6e9; --accent:#292c31; --on-accent:#fff; --error:#b42337; --error-bg:#fff0f2; }
+    :root[data-theme="dark"] { color-scheme:dark; --app:#191a1c; --sidebar:#151618; --subtle:#222427; --text:#ecedef; --muted:#adb1ba; --border:#34373d; --accent:#e4e6ea; --on-accent:#202226; --error:#ffa6b1; --error-bg:#3a242b; }
+    :root[data-accent="jade"] { --accent:#087c69; --on-accent:#fff; }
+    :root[data-accent="blue"] { --accent:#285bcc; --on-accent:#fff; }
+    :root[data-accent="violet"] { --accent:#7151bc; --on-accent:#fff; }
+    :root[data-theme="dark"][data-accent="jade"] { --accent:#6cdbc1; --on-accent:#102e27; }
+    :root[data-theme="dark"][data-accent="blue"] { --accent:#94b9ff; --on-accent:#142849; }
+    :root[data-theme="dark"][data-accent="violet"] { --accent:#c6b0ff; --on-accent:#302049; }
+    * { box-sizing:border-box; letter-spacing:0; }
+    body { margin:0; font:14px/1.5 "Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; background:var(--app); color:var(--text); }
+    button,select { font:inherit; cursor:pointer; }
+    button { color:inherit; }
+    button:focus-visible,select:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+    select { border:1px solid var(--border); background:var(--app); color:var(--text); padding:6px 10px; border-radius:6px; max-width:100%; }
+    .icon { width:16px; height:16px; stroke-width:1.7; flex-shrink:0; }
+    .icon-button { display:grid; place-items:center; width:32px; height:32px; border-radius:6px; flex-shrink:0; }
+    .icon-button:hover,.tab:hover { background:var(--subtle); }
+    .swatch { width:26px; height:26px; border:4px solid var(--app); border-radius:50%; outline:1px solid var(--border); }
+    .swatch[aria-pressed="true"] { outline:2px solid var(--accent); outline-offset:2px; }
+    .segment { display:flex; gap:2px; padding:3px; background:var(--subtle); border-radius:6px; flex-shrink:0; }
+    .segment button { padding:4px 12px; border-radius:4px; font-size:12px; min-height:28px; }
+    .segment button[aria-pressed="true"] { background:var(--app); box-shadow:0 1px 3px #00000014; }
+    .workspace { display:grid; grid-template-columns:216px minmax(0,1fr) 304px; min-height:680px; }
+    .workspace.ai-hidden { grid-template-columns:216px minmax(0,1fr); }
+    .workspace.ai-hidden .assistant { display:none; }
+    .nav-row { display:flex; align-items:center; gap:10px; padding:8px 12px; border-radius:6px; font-size:13px; }
+    .selected { background:var(--subtle); }
+    .active-index { color:var(--accent); background:color-mix(in srgb,var(--accent) 9%,transparent); }
+    .tab { min-height:42px; display:flex; align-items:center; gap:8px; padding:0 16px; }
+    .table-wrap { overflow:auto; min-height:330px; }
+    table { border-collapse:collapse; width:100%; font-size:12px; text-align:left; white-space:nowrap; }
+    th { background:var(--subtle); color:var(--muted); font-weight:500; }
+    th,td { border-bottom:1px solid var(--border); padding:13px 16px; }
+    tbody tr:hover { background:var(--subtle); }
+    .failed { color:var(--error); background:var(--error-bg); border-radius:4px; padding:3px 6px; font-size:11px; }
+    pre,code { font-family:"Cascadia Code","SFMono-Regular",Consolas,monospace; }
+    pre { font-size:12px; line-height:1.8; margin:0; overflow:auto; }
+    [hidden] { display:none !important; }
+    .condition { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
+    .field { border:1px solid var(--border); border-radius:5px; padding:6px 10px; font-size:12px; }
+    @media(max-width:1199px) { .workspace { grid-template-columns:190px minmax(0,1fr); } .assistant { grid-column:2; border-top:1px solid var(--border); } .workspace.ai-hidden { grid-template-columns:190px minmax(0,1fr); } }
+    @media(max-width:760px) { .workspace,.workspace.ai-hidden { grid-template-columns:minmax(0,1fr); } .resource { display:none; } .assistant { grid-column:1; } .settings { gap:16px !important; } }
+  </style>
+</head>
+<body>
+  <header class="flex flex-wrap items-center justify-between gap-4 border-b border-line px-6 py-4">
+    <div class="flex items-center gap-3"><div class="grid h-8 w-8 place-items-center rounded-md bg-accent text-on-accent"><i data-lucide="scan-line" class="icon"></i></div><span class="text-base font-semibold">EScope</span><span class="text-xs text-muted" data-i18n="study"></span></div>
+    <div class="settings flex flex-wrap items-center gap-6">
+      <label class="flex items-center gap-2 text-xs text-muted"><span data-i18n="appearance"></span><select id="appearance"><option value="system" data-i18n="system"></option><option value="light" data-i18n="light"></option><option value="dark" data-i18n="dark"></option></select></label>
+      <div class="flex items-center gap-3" role="group" data-label="accent">
+        <button class="swatch" data-accent="graphite" style="background:#52565e" data-label="graphite"></button>
+        <button class="swatch" data-accent="jade" style="background:#188873" data-label="jade"></button>
+        <button class="swatch" data-accent="blue" style="background:#396cd7" data-label="blue"></button>
+        <button class="swatch" data-accent="violet" style="background:#8b6aca" data-label="violet"></button>
+      </div>
+      <label class="flex items-center gap-2 text-muted"><i data-lucide="languages" class="icon"></i><select id="locale" data-label="language"><option value="zh-CN">简体中文</option><option value="en-US">English</option></select></label>
+    </div>
+  </header>
+  <div class="workspace" id="workspace">
+    <aside class="resource flex flex-col border-r border-line bg-sidebar px-3 py-5">
+      <div class="mb-6 flex items-center gap-2 px-3 text-xs text-muted"><i data-lucide="folder-open" class="icon"></i><span data-i18n="workspace"></span></div>
+      <div class="nav-row selected"><i data-lucide="database" class="icon"></i><span class="font-medium">Commerce</span><span class="ml-auto text-[10px] text-muted">DEV</span></div>
+      <div class="mb-5 mt-1 px-10 text-[11px] text-muted">localhost:9200</div>
+      <div class="mb-2 px-3 text-[11px] text-muted" data-i18n="indices"></div>
+      <div class="nav-row active-index"><i data-lucide="layers" class="icon"></i><span>orders-*</span><span class="ml-auto text-[10px]">3</span></div>
+      <div class="nav-row text-muted"><i data-lucide="layers" class="icon"></i><span>payments-*</span></div>
+      <div class="nav-row text-muted"><i data-lucide="layers" class="icon"></i><span>events-*</span></div>
+      <div class="mb-2 mt-8 px-3 text-[11px] text-muted" data-i18n="fields"></div>
+      <div class="nav-row"><span class="w-4 text-xs text-muted">T</span>order_id</div>
+      <div class="nav-row"><span class="w-4 text-xs text-muted">T</span>status</div>
+      <div class="nav-row"><span class="w-4 text-xs text-muted">#</span>amount</div>
+      <div class="nav-row"><i data-lucide="calendar" class="icon text-muted"></i>created_at</div>
+      <div class="nav-row"><span class="w-4 text-xs text-muted">{ }</span>payment</div>
+      <div class="mt-auto flex items-center gap-2 border-t border-line px-3 pt-5 text-xs text-muted"><i data-lucide="shield-check" class="icon"></i><span data-i18n="readOnly"></span></div>
+    </aside>
+    <main class="min-w-0">
+      <div class="flex items-center justify-between border-b border-line">
+        <div class="tab border-b-2 border-accent text-xs"><i data-lucide="file-search" class="icon"></i><span data-i18n="queryName"></span><span class="ml-2 h-1.5 w-1.5 rounded-full bg-accent"></span></div>
+        <button id="toggle-ai" class="icon-button mr-3" aria-pressed="true" data-label="toggleAI"><i data-lucide="panel-right" class="icon"></i></button>
+      </div>
+      <section class="border-b border-line px-6 py-5">
+        <div class="mb-5 flex flex-wrap items-center justify-between gap-3"><div><h1 class="text-lg font-semibold" data-i18n="queryName"></h1><p class="mt-1 text-xs text-muted">Commerce <span class="px-1">/</span> orders-*</p></div><span class="rounded border border-line px-2 py-1 text-[10px] text-muted" data-i18n="demo"></span></div>
+        <div class="mb-5 flex flex-wrap items-center justify-between gap-3">
+          <div class="segment" role="group" data-label="queryMode"><button data-mode="visual" aria-pressed="true" data-i18n="visual"></button><button data-mode="dsl" aria-pressed="false">DSL</button></div>
+          <div class="flex items-center gap-2 text-xs text-muted"><i data-lucide="clock-3" class="icon"></i><span data-i18n="time"></span><span class="text-[10px]">UTC+08:00</span></div>
+        </div>
+        <div id="visual-query" class="space-y-3">
+          <div class="condition"><span class="w-10 text-[11px] text-muted" data-i18n="where"></span><code class="field">status</code><span class="text-xs text-muted" data-i18n="equals"></span><code class="field">failed</code></div>
+          <div class="condition"><span class="w-10 text-[11px] text-muted">AND</span><code class="field">amount</code><span class="text-xs text-muted">&gt;</span><code class="field">500</code></div>
+        </div>
+        <pre id="dsl-query" hidden class="rounded-md bg-subtle p-4"></pre>
+      </section>
+      <section>
+        <div class="flex flex-wrap items-center justify-between gap-3 px-6 py-4">
+          <div class="flex items-center gap-2"><span class="text-sm font-medium" data-i18n="results"></span><span class="rounded bg-subtle px-2 py-0.5 text-xs">6</span><span class="text-[11px] text-muted" data-i18n="sample"></span></div>
+          <div class="segment" role="group" data-label="resultMode"><button data-view="table" aria-pressed="true" data-i18n="table"></button><button data-view="json" aria-pressed="false">JSON</button></div>
+        </div>
+        <div class="table-wrap" id="table-view"><table><thead><tr><th>order_id</th><th>status</th><th class="text-right">amount</th><th>payment.error</th><th>created_at</th></tr></thead><tbody id="rows"></tbody></table></div>
+        <pre id="json-view" hidden class="mx-6 mb-5 rounded-md bg-subtle p-4"></pre>
+        <div class="flex flex-wrap justify-between gap-2 border-t border-line px-6 py-3 text-[11px] text-muted"><span data-i18n="shown"></span><span data-i18n="timezone"></span></div>
+      </section>
+    </main>
+    <aside class="assistant flex flex-col border-l border-line">
+      <div class="flex h-[43px] items-center gap-2 border-b border-line px-5 text-xs font-medium"><i data-lucide="sparkles" class="icon"></i><span data-i18n="assistant"></span><span class="ml-auto text-[10px] text-muted" data-i18n="example"></span></div>
+      <div class="flex-1 px-5 py-6">
+        <div class="mb-6 flex items-center gap-2 text-[11px] text-muted"><i data-lucide="paperclip" class="icon"></i><span>orders-* · </span><span data-i18n="schemaOnly"></span></div>
+        <div class="mb-6 border-l-2 border-line pl-3 text-sm" data-i18n="question"></div>
+        <div class="mb-3 flex items-center gap-2 text-xs font-medium"><i data-lucide="scan-line" class="icon text-accent"></i>EScope</div>
+        <p class="mb-5 text-[13px] leading-7" data-i18n="answer"></p>
+        <div class="mb-2 text-[11px] text-muted" data-i18n="proposal"></div>
+        <pre class="rounded-md border border-line bg-subtle p-3">"aggs": {
+  "errors": {
+    "terms": {
+      "field":
+        "payment.error.keyword"
+    }
+  }
+}</pre>
+        <p class="mt-4 text-xs leading-6 text-muted" data-i18n="review"></p>
+      </div>
+      <div class="mx-5 mb-5 flex items-start gap-2 border-t border-line pt-4 text-[11px] leading-5 text-muted"><i data-lucide="lock-keyhole" class="icon mt-0.5"></i><span data-i18n="privacy"></span></div>
+    </aside>
+  </div>
+  <script>
+    const messages = {
+      "zh-CN": { study:"样式预览", appearance:"外观", system:"跟随系统", light:"日间", dark:"夜间", accent:"主题色", graphite:"石墨", jade:"玉绿", blue:"清蓝", violet:"柔紫", language:"语言", workspace:"本地工作区", indices:"索引", fields:"字段", readOnly:"只读 · 本地优先", queryName:"支付失败排查", demo:"演示数据", toggleAI:"显示或隐藏 AI 面板", queryMode:"查询模式", visual:"可视化", time:"最近 24 小时", where:"条件", equals:"等于", results:"查询结果", sample:"内置样本", resultMode:"结果视图", table:"表格", shown:"显示 6 条演示文档", timezone:"显示时区 UTC+08:00", assistant:"AI 助手", example:"示例", schemaOnly:"仅字段结构", question:"帮我按支付错误码统计失败订单。", answer:"可以保留现有筛选条件，并按错误码分组。以下是聚合部分的候选内容。", proposal:"候选查询 · 尚未执行", review:"示例假设该字段存在 keyword 子字段。真实查询需要先校验 Mapping。", privacy:"静态示例，未连接 Elasticsearch，也未调用模型。" },
+      "en-US": { study:"Appearance study", appearance:"Appearance", system:"System", light:"Light", dark:"Dark", accent:"Accent color", graphite:"Graphite", jade:"Jade", blue:"Blue", violet:"Violet", language:"Language", workspace:"Local workspace", indices:"Indices", fields:"Fields", readOnly:"Read-only · Local first", queryName:"Failed payments", demo:"Demo data", toggleAI:"Show or hide AI panel", queryMode:"Query mode", visual:"Visual", time:"Last 24 hours", where:"WHERE", equals:"equals", results:"Results", sample:"Built-in sample", resultMode:"Result view", table:"Table", shown:"Showing 6 demo documents", timezone:"Display timezone UTC+08:00", assistant:"AI assistant", example:"Example", schemaOnly:"Schema only", question:"Group the failed orders by payment error code.", answer:"Keep the current filters and group by error code. Here is a candidate aggregation fragment.", proposal:"Proposed query · Not executed", review:"This example assumes a keyword subfield exists. A real query must validate the mapping first.", privacy:"Static example. No Elasticsearch connection or model call." }
+    };
+    const sample = [
+      { order_id:"ORD-20941", status:"failed", amount:1280, payment:{error:"CARD_DECLINED"}, created_at:"2026-09-30T01:42:18Z" },
+      { order_id:"ORD-20938", status:"failed", amount:899, payment:{error:"GATEWAY_TIMEOUT"}, created_at:"2026-09-30T01:38:06Z" },
+      { order_id:"ORD-20932", status:"failed", amount:2450, payment:{error:"CARD_DECLINED"}, created_at:"2026-09-30T01:31:44Z" },
+      { order_id:"ORD-20925", status:"failed", amount:680, payment:{error:"INSUFFICIENT_FUNDS"}, created_at:"2026-09-30T01:24:12Z" },
+      { order_id:"ORD-20917", status:"failed", amount:1599, payment:{error:"GATEWAY_TIMEOUT"}, created_at:"2026-09-30T01:16:50Z" },
+      { order_id:"ORD-20904", status:"failed", amount:3290, payment:{error:"CARD_DECLINED"}, created_at:"2026-09-30T01:02:09Z" }
+    ];
+    let saved = {};
+    try {
+      const parsed = JSON.parse(localStorage.getItem("escope-appearance") || "{}");
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) saved = parsed;
+    } catch {}
+    const state = { mode:["system","light","dark"].includes(saved.mode) ? saved.mode : "system", accent:document.documentElement.dataset.accent, locale:saved.locale === "en-US" ? "en-US" : "zh-CN" };
+    const systemTheme = matchMedia("(prefers-color-scheme: dark)");
+    function render() {
+      document.documentElement.dataset.theme = state.mode === "system" ? (systemTheme.matches ? "dark" : "light") : state.mode;
+      document.documentElement.dataset.accent = state.accent;
+      document.documentElement.lang = state.locale;
+      document.title = `EScope · ${messages[state.locale].study}`;
+      document.getElementById("appearance").value = state.mode;
+      document.getElementById("locale").value = state.locale;
+      document.querySelectorAll("[data-i18n]").forEach(element => { element.textContent = messages[state.locale][element.dataset.i18n]; });
+      document.querySelectorAll("[data-label]").forEach(element => { const label = messages[state.locale][element.dataset.label]; element.setAttribute("aria-label",label); element.title = label; });
+      document.querySelectorAll("button[data-accent]").forEach(button => button.setAttribute("aria-pressed",String(button.dataset.accent === state.accent)));
+      const body = document.getElementById("rows");
+      body.replaceChildren();
+      const numbers = new Intl.NumberFormat(state.locale,{minimumFractionDigits:2,maximumFractionDigits:2});
+      const dates = new Intl.DateTimeFormat(state.locale,{timeZone:"Asia/Shanghai",hour:"2-digit",minute:"2-digit",second:"2-digit",hourCycle:"h23"});
+      sample.forEach(documentData => {
+        const row = document.createElement("tr");
+        [documentData.order_id, documentData.status, numbers.format(documentData.amount), documentData.payment.error, dates.format(new Date(documentData.created_at))].forEach((value,index) => {
+          const cell = document.createElement("td");
+          if(index === 1) { const status = document.createElement("span"); status.className = "failed"; status.textContent = value; cell.append(status); }
+          else { cell.textContent = value; }
+          if(index === 2) { cell.className = "text-right tabular-nums"; }
+          if(index === 3 || index === 4) { cell.className = "text-muted"; }
+          row.append(cell);
+        });
+        body.append(row);
+      });
+      try { localStorage.setItem("escope-appearance",JSON.stringify(state)); } catch {}
+    }
+    document.getElementById("appearance").addEventListener("change",event => { state.mode = event.target.value; render(); });
+    document.getElementById("locale").addEventListener("change",event => { state.locale = event.target.value; render(); });
+    document.querySelectorAll("button[data-accent]").forEach(button => button.addEventListener("click",() => { state.accent = button.dataset.accent; render(); }));
+    document.querySelectorAll("[data-mode]").forEach(button => button.addEventListener("click",() => {
+      document.querySelectorAll("[data-mode]").forEach(sibling => sibling.setAttribute("aria-pressed",String(sibling === button)));
+      document.getElementById("visual-query").hidden = button.dataset.mode !== "visual";
+      document.getElementById("dsl-query").hidden = button.dataset.mode !== "dsl";
+    }));
+    document.querySelectorAll("[data-view]").forEach(button => button.addEventListener("click",() => {
+      document.querySelectorAll("[data-view]").forEach(sibling => sibling.setAttribute("aria-pressed",String(sibling === button)));
+      document.getElementById("table-view").hidden = button.dataset.view !== "table";
+      document.getElementById("json-view").hidden = button.dataset.view !== "json";
+    }));
+    document.getElementById("toggle-ai").addEventListener("click",event => {
+      const hidden = document.getElementById("workspace").classList.toggle("ai-hidden");
+      event.currentTarget.setAttribute("aria-pressed",String(!hidden));
+    });
+    document.getElementById("json-view").textContent = JSON.stringify(sample,null,2);
+    document.getElementById("dsl-query").textContent = JSON.stringify({query:{bool:{filter:[{term:{status:"failed"}},{range:{amount:{gt:500}}},{range:{created_at:{gte:"now-24h",lte:"now"}}}]}}},null,2);
+    systemTheme.addEventListener("change",() => { if(state.mode === "system") render(); });
+    render();
+    if(window.lucide) lucide.createIcons();
+  </script>
+  <script src="./settings-preview.js"></script>
+  <script src="./platform-preview.js"></script>
+  <script src="./query-preview.js"></script>
+  <script src="./settings-style.js"></script>
+</body>
+</html>

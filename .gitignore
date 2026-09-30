@@ -1,0 +1,17 @@
+node_modules/
+docs/assets/
+dist/
+src-tauri/target/
+src-tauri/gen/
+work/
+test-results/
+*.local
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.sqlite
+*.sqlite-*

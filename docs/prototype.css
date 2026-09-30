@@ -1,0 +1,13 @@
+@import "tailwindcss";
+@source "./*.html";
+@source "./*.js";
+@theme inline {
+  --color-app: var(--app);
+  --color-sidebar: var(--sidebar);
+  --color-subtle: var(--subtle);
+  --color-ink: var(--text);
+  --color-muted: var(--muted);
+  --color-line: var(--border);
+  --color-accent: var(--accent);
+  --color-on-accent: var(--on-accent);
+}

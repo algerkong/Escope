@@ -1,13 +1,16 @@
+mod connection;
 mod error;
 mod operation;
 mod storage;
 
+use connection::{ConnectionIdentity, ConnectionProbe, ReadOnlyClient};
 use error::AppError;
 use std::sync::Mutex;
 use storage::{ConnectionInput, ConnectionProfile, Database, Preferences, StoredState};
 use tauri::{Manager, State};
 
 struct StorageState(Mutex<Result<Database, AppError>>);
+struct NetworkState(Result<ReadOnlyClient, AppError>);
 
 fn with_database<T>(
     state: &StorageState,
@@ -57,8 +60,34 @@ fn delete_connection(state: State<'_, StorageState>, id: String) -> Result<(), A
 
 #[tauri::command]
 fn query_execute() -> Result<(), AppError> {
-    operation::authorize("query.execute")?;
     Err(AppError::new("unsupported"))
+}
+
+#[tauri::command]
+async fn connection_test(
+    state: State<'_, StorageState>,
+    network: State<'_, NetworkState>,
+    probe: ConnectionProbe,
+) -> Result<ConnectionIdentity, AppError> {
+    probe.validate()?;
+    let result = async {
+        let profile = with_database(&state, |db| db.connection(&probe.connection_id))?;
+        let client = network.0.as_ref().map_err(Clone::clone)?;
+        client
+            .test(
+                &profile,
+                ConnectionProbe {
+                    request_id: probe.request_id.clone(),
+                    connection_id: probe.connection_id.clone(),
+                },
+            )
+            .await
+    }
+    .await;
+    result.map_err(|mut error: AppError| {
+        error.request_id = Some(probe.request_id);
+        error
+    })
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -75,6 +104,7 @@ pub fn run() {
                 Database::open(&directory.join("escope.sqlite"))
             })();
             app.manage(StorageState(Mutex::new(database)));
+            app.manage(NetworkState(ReadOnlyClient::new()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -84,6 +114,7 @@ pub fn run() {
             select_connection,
             delete_connection,
             query_execute,
+            connection_test,
         ])
         .run(tauri::generate_context!())
         .expect("EScope desktop runtime failed");

@@ -128,6 +128,15 @@ pub struct StoredState {
 pub struct Database(Connection);
 
 impl Database {
+    pub fn connection(&self, id: &str) -> Result<ConnectionProfile, AppError> {
+        Uuid::parse_str(id).map_err(|_| AppError::new("invalidInput"))?;
+        self.load()?
+            .connections
+            .into_iter()
+            .find(|profile| profile.id == id)
+            .ok_or_else(|| AppError::new("notFound"))
+    }
+
     pub fn open(path: &Path) -> Result<Self, AppError> {
         let mut conn = Connection::open(path)?;
         conn.busy_timeout(std::time::Duration::from_secs(3))?;
@@ -407,6 +416,27 @@ mod tests {
             db.delete_connection("missing").unwrap_err().code,
             "notFound"
         );
+    }
+
+    #[test]
+    fn connection_lookup_uses_saved_id_without_changing_selection() {
+        let mut db = Database::open(Path::new(":memory:")).unwrap();
+        let first = db.save_connection(input("First"), None).unwrap();
+        let second = db.save_connection(input("Second"), None).unwrap();
+        db.select_connection(Some(second.id.clone())).unwrap();
+        let snapshot = db.connection(&first.id).unwrap();
+        let mut updated = input("Renamed");
+        updated.endpoint = "https://changed.example.test".into();
+        db.save_connection(updated, Some(first.id.clone())).unwrap();
+        assert_eq!(snapshot.endpoint, first.endpoint);
+        assert_eq!(
+            db.connection(&first.id).unwrap().endpoint,
+            "https://changed.example.test"
+        );
+        assert_eq!(db.load().unwrap().active_connection_id, Some(second.id));
+        assert_eq!(db.connection("not-an-id").unwrap_err().code, "invalidInput");
+        db.delete_connection(&first.id).unwrap();
+        assert_eq!(db.connection(&first.id).unwrap_err().code, "notFound");
     }
 
     #[test]

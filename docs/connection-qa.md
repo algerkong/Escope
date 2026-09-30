@@ -3,6 +3,41 @@
 日期：2026-09-30。平台：当前 Windows 主机。范围：F06.2/C01.1 后端与类型化 IPC。
 收尾上轮未提交的网络改动并补回归；不是完整连接向导、查询版、F06/C01/C02 父任务验收。
 
+## C01.2 本轮续交付（OMP）
+
+本节为同日最新结果，下文保留 F06.2/C01.1 历史记录。下文“UI 尚未接入”仅描述当时状态。
+
+- 接手时已有未提交的测试按钮、身份展示、App 生命周期/跨连接状态与 14 项连接测试；
+  保留这些代码、截图和浏览器探针，不把它们算成本轮重新实现。
+- OMP-A 审查并补 5 项回归：未测试连接失效不产生虚假状态、主题切换不请求、
+  删除后迟到失败、在途改地址拒绝旧响应、未知错误与 UTC 显示。
+- 审查发现非结构化连接异常误报 SQLite 失败，增加 `errorCode(error, fallback)`，
+  连接测试显式使用 `unexpected`；存储调用默认行为不变。再补连接 2 项、IPC 2 项回归。
+- 连接生命周期覆盖 requestId/connectionId/endpoint 绑定、重复抑制、重测、卸载、
+  删除、编辑成功/失败、设置往返与语言/主题变化。身份成功不代表搜索授权。
+- 本轮不改布局，不启动浏览器、Vite、WebView 或 ES；真实后端取消仍未实现。
+
+主代理独立执行：
+
+| 命令 | 本轮实际结果 |
+| --- | --- |
+| `npm run check` | lint、类型、正式/原型构建通过；正式 74 项、原型 16 项通过 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --locked` | 含 F08.1：29 项通过、2 项忽略（真实 ES / Windows 密钥库） |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` | 通过 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings` | 通过 |
+| `git diff --check` | 通过 |
+
+正式测试合计以主代理完整输出为准：连接 21、IPC 8，加其他原有测试共 74。
+OMP 续跑报告内把定向总数 29 的分项 IPC 误写为 10，未采纳该分项数字。
+UI/原生快捷键/缩放/真实桌面 IPC 留至 [集中人工验收](manual-acceptance.md)，没有新截图。
+新凭证模块详情见 [F08.1 验收](credentials-qa.md)。
+
+OMP 本轮两个前端 relay 均 `completed` / exit 0；会话
+`01a0f13f-c16d-7000-8f18-dc902cb9d844`。
+本机归档根 `C:/Users/Administrator/AppData/Local/Temp/delegate-relay/`，
+初轮 `EScope-2026-09-30T07-37-59-562Z`，审查续跑 `EScope-2026-09-30T07-46-44-111Z`。
+归档仅用于本机追溯，测试成功以独立执行结果为准；不提交或公开日志。
+
 ## 实现范围
 
 | 位置 | 本次能力 |

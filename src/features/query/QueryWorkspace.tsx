@@ -1,4 +1,4 @@
-import { Bookmark, Braces, Database, FileCheck2, Layers, LoaderCircle, Play, Plus, Save, Settings, ShieldCheck, Star, TriangleAlert, Undo2 } from 'lucide-react';
+import { Bookmark, Braces, Database, FileCheck2, History, Layers, LoaderCircle, Play, Plus, Save, Settings, ShieldCheck, Star, TriangleAlert, Undo2 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ConnectionProfile } from '../../domain/connection';
@@ -27,6 +27,8 @@ import { useQueryResources } from './useQueryResources';
 import { useQueryExecutions } from './useQueryExecutions';
 import { useWorkspacePanels } from './useWorkspacePanels';
 import { WorkspaceTabs, workspaceTabId } from './WorkspaceTabs';
+import { ExecutionHistoryDialog, WorkspaceRecoveryStatus } from './WorkspaceRecovery';
+import type { WorkspaceRecoveryController } from './useWorkspaceRecovery';
 import '../../styles/query-live.css';
 
 const IDLE: ExecutionState = { status: 'idle' };
@@ -65,9 +67,10 @@ interface Props {
   libraryService?: QueryLibraryService;
   /** Restore a saved query as a new tab; the App owns tab creation and never auto-executes it. */
   restoreQuery?: (document: QueryDocument) => void;
+  recovery?: WorkspaceRecoveryController;
 }
 
-export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResults, toggleAI, onSettings, updateQuery, selectTab, openIndex, addQuery, closeTab, backend = desktopQueryBackend, modelService = desktopModelService, aiBackend, canQuery, active = true, onCommandReady, libraryService = defaultQueryLibraryService, restoreQuery }: Props) {
+export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResults, toggleAI, onSettings, updateQuery, selectTab, openIndex, addQuery, closeTab, backend = desktopQueryBackend, modelService = desktopModelService, aiBackend, canQuery, active = true, onCommandReady, libraryService = defaultQueryLibraryService, restoreQuery, recovery }: Props) {
   const { t } = useTranslation();
   const [closing, setClosing] = useState<QueryDocument | null>(null);
   const [checked, setChecked] = useState<Record<string, { source: string; error: QueryDslError | null }>>({});
@@ -86,10 +89,11 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
     ensureIndices, refreshIndices, ensureFields, refreshFields, loadMapping, invalidateConnections,
     indicesFor, fieldsFor, mappingFor,
   } = useQueryResources(backend);
-  const { entries, run, cancel, release, reconcile, loadMore } = useQueryExecutions(backend);
+  const { entries, run, cancel, release, reconcile, loadMore } = useQueryExecutions(backend, recovery?.onHistory);
   const panels = useWorkspacePanels(aiOpen, active);
   const library = useQueryLibrary(libraryService);
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [saveDraftOpen, setSaveDraftOpen] = useState(false);
   const [savedEntryIds, setSavedEntryIds] = useState<Record<string, string>>({});
 
@@ -101,16 +105,21 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const query = tab?.document ?? home;
   const queryId = query.id;
   const showingQuery = tab?.kind === 'query';
-  const editorMode = editorModes[queryId] ?? 'dsl';
-  const visualValid = !showingQuery || editorMode !== 'visual' || visualValidity[queryId] !== false;
+  const recoveryTab = recovery?.workspace.tabs.find((item) => item.document.id === queryId);
+  const editorMode = recoveryTab?.editorMode ?? editorModes[queryId] ?? 'dsl';
+  const visualDraft = recoveryTab?.visualDraft ?? visualDrafts[queryId];
+  const visualValid = !showingQuery || editorMode !== 'visual'
+    || (visualValidity[queryId] !== false && (visualDraft?.problems.length ?? 0) === 0);
   const updateVisualValidity = useCallback((valid: boolean) => {
     setVisualValidity((current) => current[queryId] === valid ? current : { ...current, [queryId]: valid });
   }, [queryId]);
   const updateVisualDraft = useCallback((draft: VisualEditorDraft) => {
-    setVisualDrafts((current) => ({ ...current, [queryId]: draft }));
-  }, [queryId]);
-  const dirtyVisualIds = useMemo(() => new Set(Object.entries(visualDrafts)
-    .filter(([, draft]) => draft.problems.length > 0).map(([id]) => id)), [visualDrafts]);
+    if (recovery) recovery.setVisualDraft(queryId, draft);
+    else setVisualDrafts((current) => ({ ...current, [queryId]: draft }));
+  }, [queryId, recovery]);
+  const dirtyVisualIds = useMemo(() => new Set(recovery
+    ? recovery.workspace.tabs.filter((tab) => (tab.visualDraft?.problems.length ?? 0) > 0).map((tab) => tab.document.id)
+    : Object.entries(visualDrafts).filter(([, draft]) => draft.problems.length > 0).map(([id]) => id)), [visualDrafts, recovery]);
   // In visual mode an invalid/unsupported draft means the displayed DSL is stale behind it; saving
   // then would silently persist the old text, so the draft actions are disabled until it is fixed
   // or the editor is switched back to JSON, where the textarea is the source of truth.
@@ -119,6 +128,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const target = profiles.find((profile) => profile.id === query.connectionId);
   const resourceTarget = profiles.find((profile) => profile.id === state.activeConnectionId);
   const available = backend.available && (canQuery ?? true);
+  const restoring = recovery?.status === 'loading';
   const connectionId = query.connectionId;
   const endpoint = target?.endpoint ?? null;
   const resourceConnectionId = state.activeConnectionId;
@@ -131,9 +141,9 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const execution: ExecutionState = entry?.state ?? IDLE;
   const dslValid = useMemo(() => validateQueryDsl(dsl).ok, [dsl]);
   const endpoints = useMemo(() => new Map(profiles.map((profile) => [profile.id, profile.endpoint])), [profiles]);
-  const canRun = tab !== undefined && available && target !== undefined && indexValue.trim() !== '' && dslValid && visualValid
+  const canRun = !restoring && tab !== undefined && available && target !== undefined && indexValue.trim() !== '' && dslValid && visualValid
     && execution.status !== 'running' && !entry?.continuing;
-  const runTitle = !available ? t('queryLive:runUnavailable')
+  const runTitle = restoring ? t('workspaceRecovery:loading') : !available ? t('queryLive:runUnavailable')
     : target === undefined ? t('queryLive:runNeedsConnection')
       : indexValue.trim() === '' ? t('queryLive:runNeedsIndex')
         : !dslValid ? t('queryLive:runInvalidDsl')
@@ -182,18 +192,18 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   }, [available, connectionId, endpoint, indexValue, ensureFields, refreshFields]);
 
   const selectIndex = useCallback((name: string) => {
-    if (!active || !available || resourceConnectionId === null || resourceEndpoint === null || name.trim() === '') return;
+    if (!active || !available || restoring || resourceConnectionId === null || resourceEndpoint === null || name.trim() === '') return;
     const { document, created } = openIndex(resourceConnectionId, name.trim());
     ensureFields(resourceConnectionId, resourceEndpoint, document.index);
-    if (created) void run(document, resourceEndpoint);
-  }, [active, available, resourceConnectionId, resourceEndpoint, openIndex, ensureFields, run]);
+    if (created) void run(document, resourceEndpoint, 'index');
+  }, [active, available, restoring, resourceConnectionId, resourceEndpoint, openIndex, ensureFields, run]);
 
   const runQuery = useCallback(async () => {
     if (!canRun || !active) return;
     setRejections((current) => ({ ...current, [query.id]: null }));
-    const error = await run(query, target?.endpoint ?? null);
+    const error = await run(query, target?.endpoint ?? null, tab?.kind);
     if (error) setRejections((current) => ({ ...current, [query.id]: error }));
-  }, [query, canRun, active, target, run]);
+  }, [query, canRun, active, target, tab?.kind, run]);
 
   const linkedEntryId = savedEntryIds[query.id];
   const linkedEntry = linkedEntryId === undefined ? null
@@ -330,6 +340,13 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
       <WorkspaceTabs state={state} profiles={profiles} entries={entries} aiOpen={aiOpen}
         dirtyIds={dirtyVisualIds}
         onSelect={selectTab} onClose={requestClose} onAdd={() => addQuery()} onToggleAI={toggleAI} />
+      <div className="workspace-recovery-bar">
+        {recovery ? <WorkspaceRecoveryStatus recovery={recovery} /> : null}
+        <div className="workspace-recovery-actions">
+          <IconButton icon={Bookmark} label={t('queryLibrary:open')} onClick={() => setLibraryOpen(true)} />
+          {recovery ? <IconButton icon={History} label={t('queryHistory:open')} onClick={() => setHistoryOpen(true)} /> : null}
+        </div>
+      </div>
       <div ref={panel} id="workspace-panel" role="tabpanel" aria-labelledby={workspaceTabId(state.activeTabId)}
         className="workspace-panel" data-kind={tab?.kind ?? 'home'}
         onScroll={(event) => {
@@ -351,7 +368,8 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
           <div className="segment" role="group" aria-label={t('query:mode')}>
             {(['visual', 'dsl'] as const).map((mode) => <button key={mode} type="button"
               aria-pressed={editorMode === mode} onClick={() => {
-                setEditorModes((current) => ({ ...current, [query.id]: mode }));
+                if (recovery) recovery.setEditorMode(query.id, mode);
+                else setEditorModes((current) => ({ ...current, [query.id]: mode }));
                 if (mode === 'visual') loadFields(false);
               }}>{t(`query:${mode}`)}</button>)}
           </div>
@@ -373,7 +391,6 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
           {linkedEntry ? <IconButton className={`qlib-star${linkedEntry.favorite ? ' active' : ''}`} icon={Star}
             aria-pressed={linkedEntry.favorite} label={t(linkedEntry.favorite ? 'queryLibrary:favoriteRemove' : 'queryLibrary:favoriteAdd')}
             onClick={() => library.setFavorite(linkedEntry.id, !linkedEntry.favorite)} /> : null}
-          <IconButton icon={Bookmark} label={t('queryLibrary:open')} onClick={() => setLibraryOpen(true)} />
           {library.saveStatus.status !== 'idle' ? <span className={`qlib-save-state ${library.saveStatus.status}`} role="status">
             {library.saveStatus.status === 'saving'
               ? <><LoaderCircle className="spin" size={13} aria-hidden="true" />{t('queryLibrary:saving')}</> : null}
@@ -384,9 +401,9 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
           <button className="primary run-button" disabled={!canRun} title={runTitle} onClick={() => void runQuery()}><Play size={14} />{t('query:run')}</button>
         </div>
         <div hidden={editorMode !== 'visual'}>
-          {editorModes[query.id] !== undefined ? <VisualQueryEditor key={query.id} rawDsl={query.dsl}
+          {editorMode === 'visual' || editorModes[query.id] !== undefined ? <VisualQueryEditor key={query.id} rawDsl={query.dsl}
             fields={queryFields.status === 'ready' ? queryFields.data.fields : []}
-            draft={visualDrafts[queryId]} onDraftChange={updateVisualDraft}
+            draft={visualDraft ?? undefined} onDraftChange={updateVisualDraft}
             onChange={(dsl) => patchQuery({ dsl })} onValidityChange={updateVisualValidity} /> : null}
         </div>
         <div className="dsl-editor" hidden={editorMode !== 'dsl'}>
@@ -416,6 +433,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
       <QueryResults kind={showingQuery ? 'query' : 'preview'} query={query} entry={entry}
         available={available} stale={stale} endpointChanged={endpointChanged} documentIds={documentIds} active={active} wrapJson={preferences.wrapJson}
         canRun={canRun} grouping={preferences.grouping} exportService={libraryService}
+        layout={recoveryTab?.grid} onLayoutChange={recoveryTab ? (layout) => recovery?.setGridLayout(queryId, layout) : undefined}
         renderToolbar={showingQuery ? undefined : (summary, controls) => <DataPreview document={query} target={target} available={available}
           locked={tab?.kind === 'index'} busy={execution.status === 'running' || Boolean(entry?.continuing)} summary={summary}
           onOpen={selectIndex} onRefresh={() => { void runQuery(); }} onNewQuery={() => addQuery(query)}
@@ -438,6 +456,8 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
       entries={library.entries} saveStatus={library.saveStatus} profiles={profiles} onClose={() => setLibraryOpen(false)}
       onRestore={restoreQuery ? restoreSaved : undefined} onDelete={library.deleteEntry} onToggleFavorite={toggleSavedFavorite}
       onRetrySave={library.retrySave} onReload={library.reload} />
+    {recovery ? <ExecutionHistoryDialog open={historyOpen} recovery={recovery} profiles={profiles}
+      onClose={() => setHistoryOpen(false)} onRestore={restoreQuery} /> : null}
     <Modal open={closing !== null} onClose={() => setClosing(null)} title={t('query:closeTitle')}
       description={t('query:closeDetail', { name: closing?.name || t('query:title') })}>
       <div className="dialog-actions"><button className="secondary" onClick={() => setClosing(null)}>{t('cancel')}</button>

@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "workspace": {
+    "activeConnectionId": "fixture-connection",
+    "activeTabId": "query-full",
+    "tabs": [
+      {
+        "kind": "query",
+        "document": {
+          "id": "query-full",
+          "connectionId": "fixture-connection",
+          "name": "Draft \u6d4b\u8bd5",
+          "index": "orders-*",
+          "dsl": "{\"query\":{\"term\":{\"n\":9007199254740993}},\"size\":25}",
+          "revision": 3,
+          "resultView": "json"
+        },
+        "grid": {
+          "columnOrder": ["meta:row", "field:n", "meta:id", "meta:index"],
+          "columnSizing": { "meta:row": 52, "field:n": 190.5 },
+          "columnVisibility": { "meta:index": false },
+          "sorting": [{ "id": "field:n", "desc": true }]
+        },
+        "editorMode": "visual",
+        "visualDraft": {
+          "source": "{\"query\":{\"term\":{\"n\":9007199254740993}},\"size\":25}",
+          "form": {
+            "mode": "all",
+            "conditions": [
+              {
+                "id": "condition-1",
+                "field": "n",
+                "operator": "eq",
+                "context": "filter",
+                "valueType": "number",
+                "value": "unfinished-",
+                "original": {
+                  "field": "n",
+                  "valueType": "number",
+                  "value": "9007199254740993",
+                  "raw": "9007199254740993"
+                }
+              }
+            ],
+            "size": "25",
+            "sort": { "field": "n", "direction": "asc" }
+          },
+          "problems": [{ "code": "valueInvalidNumber", "conditionId": "condition-1" }]
+        }
+      },
+      {
+        "kind": "index",
+        "document": {
+          "id": "index-full",
+          "connectionId": "removed-fixture",
+          "name": "",
+          "index": "old-orders",
+          "dsl": "{\"query\":{\"match_all\":{}},\"size\":25,\"sort\":[\"_shard_doc\"]}",
+          "revision": 0,
+          "resultView": "table"
+        },
+        "grid": { "columnOrder": [], "columnSizing": {}, "columnVisibility": {}, "sorting": [] },
+        "editorMode": "dsl",
+        "visualDraft": null
+      }
+    ],
+    "lastTabByConnection": { "fixture-connection": "query-full", "removed-fixture": "index-full" }
+  },
+  "history": [
+    {
+      "snapshot": {
+        "requestId": "request-full",
+        "queryId": "query-full",
+        "connectionId": "fixture-connection",
+        "index": "orders-*",
+        "rawDsl": "{\"query\":{\"term\":{\"n\":9007199254740993}},\"size\":25}",
+        "revision": 2,
+        "startedAt": "2026-10-09T12:00:00.000Z"
+      },
+      "name": "Draft \u6d4b\u8bd5",
+      "kind": "query",
+      "status": "partial",
+      "finishedAt": "2026-10-09T12:00:01.123Z",
+      "errorCode": null
+    }
+  ]
+}

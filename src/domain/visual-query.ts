@@ -29,7 +29,7 @@ export interface VisualOriginal {
 }
 
 export interface VisualCondition {
-  /** Local row identity for the UI; never serialized. */
+  /** Local row identity, persisted with drafts but never sent in the search DSL. */
   readonly id: string;
   readonly field: string;
   readonly operator: VisualOperator;

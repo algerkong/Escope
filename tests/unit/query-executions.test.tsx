@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createQuery } from '../../src/domain/query';
 import { DATA_PREVIEW_DSL, supportsSnapshotPaging } from '../../src/domain/query-pagination';
 import { useQueryExecutions } from '../../src/features/query/useQueryExecutions';
+import type { ExecutionHistoryEntry } from '../../src/domain/workspace-recovery';
 import type { PitOpenResponse, QueryBackend, QueryRequest, QueryResponse } from '../../src/services/ipc';
 
 const endpoint = 'https://fixture.test';
@@ -46,6 +47,77 @@ describe('snapshot paging eligibility', () => {
       '{"sort":["_doc"],"collapse":{"field":"x"}}', 'invalid']) {
       expect(supportsSnapshotPaging(raw)).toBe(false);
     }
+  });
+});
+
+describe('execution history events', () => {
+  it('records exact immutable snapshots and honest success without response bodies or PIT ids', async () => {
+    const api = backend();
+    const history = vi.fn<(entry: ExecutionHistoryEntry) => void>();
+    const { result } = renderHook(() => useQueryExecutions(api, history));
+    await act(async () => { await result.current.run(query, endpoint, 'index'); });
+    const start = history.mock.calls[0]![0];
+    const end = history.mock.calls[1]![0];
+    expect(start).toMatchObject({ kind: 'index', status: 'running', finishedAt: null });
+    expect(end).toMatchObject({ kind: 'index', status: 'success', errorCode: null, snapshot: { rawDsl: query.dsl } });
+    expect(end.snapshot).toBe(start.snapshot);
+    expect(Object.isFrozen(start.snapshot)).toBe(true);
+    expect(end.finishedAt).not.toBeNull();
+    expect(JSON.stringify(history.mock.calls)).not.toMatch(/rawResponse|pitId|_source|pit-1/);
+    await act(async () => { await result.current.run({ ...query, dsl: 'invalid' }, endpoint); });
+    expect(history).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not replace cancellation with the late success of an abandoned PIT open', async () => {
+    const api = backend();
+    const pending = deferred<PitOpenResponse>();
+    api.openPit.mockReturnValueOnce(pending.promise);
+    const history = vi.fn<(entry: ExecutionHistoryEntry) => void>();
+    const { result } = renderHook(() => useQueryExecutions(api, history));
+    let run!: ReturnType<typeof result.current.run>;
+    act(() => { run = result.current.run(query, endpoint); });
+    act(() => result.current.cancel(query.id));
+    await act(async () => {
+      pending.resolve({ ...api.openPit.mock.calls[0]![0], endpoint, pitId: 'late-history-pit' });
+      await run;
+    });
+    expect(history.mock.calls.map(([entry]) => entry.status)).toEqual(['running', 'cancelled']);
+    expect(history.mock.calls[1]![0].errorCode).toBe('cancelled');
+    expect(api.execute).not.toHaveBeenCalled();
+  });
+
+  it('records continuation failure separately using the frozen DSL and actual next-page request id', async () => {
+    const api = backend();
+    api.execute.mockImplementationOnce(async (request) => response(request, 'first', 1, true));
+    const history = vi.fn<(entry: ExecutionHistoryEntry) => void>();
+    const { result } = renderHook(() => useQueryExecutions(api, history));
+    await act(async () => { await result.current.run(query, endpoint); });
+    api.execute.mockRejectedValueOnce({ code: 'timeout' });
+    await act(async () => { await result.current.loadMore({ ...query, dsl: '{"size":999}', index: 'edited' }); });
+    expect(history.mock.calls.map(([entry]) => entry.status)).toEqual(['running', 'partial', 'running', 'failed']);
+    expect(history.mock.calls[3]![0]).toMatchObject({
+      kind: 'continuation', errorCode: 'timeout',
+      snapshot: { requestId: api.execute.mock.calls[1]![0].requestId, rawDsl: query.dsl, index: query.index },
+    });
+    expect(history.mock.calls[3]![0].snapshot.requestId).not.toBe(history.mock.calls[1]![0].snapshot.requestId);
+    expect(JSON.stringify(history.mock.calls)).not.toMatch(/searchAfter|pitId/);
+  });
+
+  it('marks an unfinished component lifetime interrupted, with no invented completion time', async () => {
+    const api = backend();
+    const pending = deferred<PitOpenResponse>();
+    api.openPit.mockReturnValueOnce(pending.promise);
+    const history = vi.fn<(entry: ExecutionHistoryEntry) => void>();
+    const hook = renderHook(() => useQueryExecutions(api, history));
+    let run!: ReturnType<typeof hook.result.current.run>;
+    act(() => { run = hook.result.current.run(query, endpoint); });
+    hook.unmount();
+    await act(async () => {
+      pending.resolve({ ...api.openPit.mock.calls[0]![0], endpoint, pitId: 'interrupted-pit' });
+      await run;
+    });
+    expect(history.mock.calls.map(([entry]) => entry.status)).toEqual(['running', 'interrupted']);
+    expect(history.mock.calls[1]![0]).toMatchObject({ finishedAt: null, errorCode: null });
   });
 });
 

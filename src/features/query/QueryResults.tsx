@@ -6,6 +6,7 @@ import type { ExecutionState, QueryDocument } from '../../domain/query';
 import { formatRawJson, sliceRaw, type ResultHit } from '../../domain/query-result';
 import { supportsSnapshotPaging } from '../../domain/query-pagination';
 import { INITIAL_RESULT_GRID_STATE, type ResultGridState } from '../../domain/result-grid';
+import type { ResultGridLayout } from '../../domain/workspace-recovery';
 import { QueryResultGrid, type GridScrollPosition } from './QueryResultGrid';
 import { ResultExportDialog } from './QueryLibrary';
 import type { ExecutionEntry, ExecutionPage } from './useQueryExecutions';
@@ -36,6 +37,9 @@ interface Props {
   onLoadMore: () => void;
   /** When provided, the loaded rows can be exported as CSV or JSONL through this service. */
   exportService?: QueryLibraryService;
+  /** Persisted layout only. Pages, selection and scroll belong to this live execution. */
+  layout?: ResultGridLayout;
+  onLayoutChange?: (layout: ResultGridLayout) => void;
 }
 
 /**
@@ -44,7 +48,7 @@ interface Props {
  * number. Failed, cancelled and partial executions stay visually distinct from success, and
  * an unavailable (browser) workspace offers neither a request nor a retry.
  */
-export function QueryResults({ kind = 'query', active = true, documentIds, wrapJson = false, grouping = true, renderToolbar, query, entry, available, stale, endpointChanged, onCancel, onRun, canRun = true, onViewChange, onLoadMore, exportService }: Props) {
+export function QueryResults({ kind = 'query', active = true, documentIds, wrapJson = false, grouping = true, renderToolbar, query, entry, available, stale, endpointChanged, onCancel, onRun, canRun = true, onViewChange, onLoadMore, exportService, layout, onLayoutChange }: Props) {
   const { t, i18n } = useTranslation();
   const copy = useCopyText(query.id);
   const [gridStates, setGridStates] = useState<Record<string, { executionKey: string; value: ResultGridState }>>({});
@@ -62,8 +66,9 @@ export function QueryResults({ kind = 'query', active = true, documentIds, wrapJ
   useEffect(() => { setDetail(null); }, [query.id, requestKey, active]);
   const executionKey = requestKey ?? query.id;
   const savedGrid = gridStates[query.id];
-  const gridState = savedGrid?.executionKey === executionKey ? savedGrid.value
+  const liveGrid = savedGrid?.executionKey === executionKey ? savedGrid.value
     : savedGrid ? { ...savedGrid.value, pageIndex: 0, rowSelection: {} } : INITIAL_RESULT_GRID_STATE;
+  const gridState = layout ? { ...liveGrid, ...layout } : liveGrid;
   const lastPage = pages[pages.length - 1];
   const savedScroll = scroll.current.get(query.id);
   const positions = savedScroll?.executionKey === executionKey ? savedScroll : undefined;
@@ -155,7 +160,10 @@ export function QueryResults({ kind = 'query', active = true, documentIds, wrapJ
 
   const table = <QueryResultGrid key={query.id} rows={displayHits} fieldNames={columns} state={gridState} executionKey={executionKey}
     active={active} scrollPosition={positions?.table} onScrollPositionChange={(position) => recordScroll('table', position)}
-    onStateChange={(value) => setGridStates((current) => ({ ...current, [query.id]: { executionKey, value } }))}
+    onStateChange={(value) => {
+      setGridStates((current) => ({ ...current, [query.id]: { executionKey, value } }));
+      onLayoutChange?.(value);
+    }}
     onDocument={({ hit, pageIndex }) => setDetail({ hit, page: pageIndex, queryId: query.id, requestKey })}
     footerActions={continuation} />;
 

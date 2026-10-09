@@ -1,0 +1,40 @@
+.workspace-recovery-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  min-width: 0;
+}
+.workspace-recovery-state {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: .8rem;
+  color: var(--muted);
+  min-width: 0;
+  flex: 1;
+}
+.workspace-recovery-state > span { overflow-wrap: anywhere; }
+.workspace-recovery-state > svg { flex-shrink: 0; }
+.workspace-recovery-state.failed { color: var(--error); }
+.workspace-recovery-actions { display: flex; gap: 2px; margin-left: auto; flex-shrink: 0; }
+.qhistory-panel { min-width: 0; display: grid; gap: 10px; }
+.qhistory-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: .8rem; }
+.qhistory-search { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 120px; }
+.qhistory-search input { min-width: 0; width: 100%; }
+.qhistory-list { list-style: none; padding: 0; margin: 0; overflow: auto; max-height: min(52vh, 500px); }
+.qhistory-entry { padding: 8px 0; border-bottom: 1px solid var(--border); min-width: 0; }
+.qhistory-entry-heading { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.qhistory-entry-heading > svg, .qhistory-entry-heading > button { flex-shrink: 0; }
+.qhistory-entry-heading > strong { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: .86rem; font-weight: 500; }
+.qhistory-outcome { font-size: .74rem; flex-shrink: 0; color: var(--muted); }
+.qhistory-outcome.success { color: var(--success); }
+.qhistory-outcome.failed { color: var(--error); }
+.qhistory-outcome.partial, .qhistory-outcome.interrupted { color: var(--warning); }
+.qhistory-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; color: var(--muted); font-size: .74rem; margin-top: 3px; }
+.qhistory-meta > span { overflow-wrap: anywhere; min-width: 0; }
+.qhistory-empty { text-align: center; padding: 20px 8px; color: var(--muted); font-size: .86rem; }
+.qhistory-list:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }

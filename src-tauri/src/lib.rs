@@ -17,6 +17,7 @@ mod read_only;
 mod resources;
 mod saved_queries;
 mod storage;
+mod workspace_recovery;
 
 use connection::{ConnectionIdentity, ConnectionProbe, ReadOnlyClient};
 use connection_auth::ResolvedAuth;
@@ -363,6 +364,8 @@ pub fn run() {
             saved_queries::saved_queries_load,
             saved_queries::saved_queries_save,
             saved_queries::saved_queries_export,
+            workspace_recovery::workspace_recovery_load,
+            workspace_recovery::workspace_recovery_save,
             ai::ai_chat,
             ai::ai_chat_cancel,
             models::models_load,

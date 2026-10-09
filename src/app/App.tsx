@@ -12,10 +12,12 @@ import type { StorageService, StoredState } from '../services/storage';
 import { errorCode, testConnection, type QueryBackend } from '../services/ipc';
 import { createModelService, type ModelService } from '../services/models';
 import { createQueryLibraryService, type QueryLibraryService } from '../services/query-library';
+import { createWorkspaceRecoveryService, type WorkspaceRecoveryService } from '../services/workspace-recovery';
 import { connectionTestLabel, useConnectionTests } from '../features/connections/useConnectionTests';
 import { IconButton, SelectControl } from '../components/controls';
 import { WindowTitleBar } from '../components/window/WindowTitleBar';
 import { QueryWorkspace, type QueryCommand } from '../features/query/QueryWorkspace';
+import { useWorkspaceRecovery } from '../features/query/useWorkspaceRecovery';
 import { SettingsView } from './SettingsView';
 import { PreferencesSaveError } from '../features/settings/PreferencesSaveError';
 import { settingsRoutes, type SettingsRoute } from './routes';
@@ -39,9 +41,10 @@ export function applyPreferences(p: Preferences) {
 }
 
 export function App({ service, initial, connectionProbe = testConnection, queryBackend, aiBackend, modelService: suppliedModelService,
-  queryLibraryService: suppliedQueryLibraryService }:
+  queryLibraryService: suppliedQueryLibraryService, workspaceRecoveryService: suppliedRecoveryService }:
   { service: StorageService; initial: StoredState; connectionProbe?: typeof testConnection; queryBackend?: QueryBackend;
-    aiBackend?: AiChatBackend; modelService?: ModelService; queryLibraryService?: QueryLibraryService }) {
+    aiBackend?: AiChatBackend; modelService?: ModelService; queryLibraryService?: QueryLibraryService;
+    workspaceRecoveryService?: WorkspaceRecoveryService }) {
   const { t } = useTranslation();
   const [preferences, setPreferences] = useState(initial.preferences);
   const preferencesRef = useRef(preferences);
@@ -49,17 +52,14 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
   const preferenceQueue = useRef(Promise.resolve());
   const [profiles, setProfiles] = useState(initial.connections);
   const connectionTests = useConnectionTests(connectionProbe);
-  const [state, renderWorkspace] = useState<WorkspaceState>(() => {
+  const [initialWorkspace] = useState<WorkspaceState>(() => {
     const activeConnectionId = selectConnection(initial.connections, initial.activeConnectionId);
     return createWorkspace(activeConnectionId, initial.preferences.startView);
   });
-  const workspaceRef = useRef(state);
-  // Reserve new tabs synchronously so repeated activation cannot start duplicate previews.
-  const setState = useCallback((change: (current: WorkspaceState) => WorkspaceState) => {
-    const next = change(workspaceRef.current);
-    workspaceRef.current = next;
-    renderWorkspace(next);
-  }, []);
+  const [recoveryService] = useState(() => suppliedRecoveryService ?? createWorkspaceRecoveryService());
+  const recovery = useWorkspaceRecovery(recoveryService, initialWorkspace, profiles);
+  // The recovery controller reserves mutations synchronously, including repeated index clicks.
+  const { workspace: state, workspaceRef, updateWorkspace: setState } = recovery;
   const [view, setView] = useState<'query' | 'settings'>('query');
   const [route, setRoute] = useState<SettingsRoute>('general');
   const [aiOpen, setAI] = useState(initial.preferences.startAI);
@@ -142,7 +142,7 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
         if (version === selectionVersion.current) setSelectionError({ id, code: errorCode(error) });
       });
     } else selectionVersion.current++;
-  }, [profiles, queueSelection, setState]);
+  }, [profiles, queueSelection, setState, workspaceRef]);
   const addQuery = useCallback((source?: QueryDocument) => {
     navigateWorkspace((current) => {
       const query = createQuery(source ? source.connectionId : current.activeConnectionId, startupView.current);
@@ -166,7 +166,7 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
     const tab = existing ?? createIndexTab(connectionId, index, startupView.current);
     navigateWorkspace((current) => addWorkspaceTab(current, tab));
     return { document: tab.document, created: existing === undefined };
-  }, [navigateWorkspace]);
+  }, [navigateWorkspace, workspaceRef]);
   const mutate = async (action: () => Promise<void>) => {
     if (mutationLock.current) throw { code: 'busy' };
     mutationLock.current = true; setBusy(true);
@@ -222,6 +222,12 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
   const updateQuery = (id: string, patch: Partial<Pick<QueryDocument, 'name' | 'index' | 'dsl' | 'resultView'>>) =>
     setState((current) => updateWorkspaceDocument(current, id, patch));
   const closeTab = (id: string) => navigateWorkspace((current) => closeWorkspaceTab(current, id));
+  const reloadWorkspace = () => {
+    // An explicit restore is newer than a connection-selection write still in flight.
+    selectionVersion.current++;
+    setSelectionError(null);
+    recovery.reload();
+  };
 
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
@@ -290,10 +296,11 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
     <PreferencesSaveError code={saveError} saving={savingPreferences} onRetry={persistPreferences}
       onClose={() => setSaveError(null)} />
     <div className="view-container" hidden={view !== 'query'}>
-      <QueryWorkspace state={state} profiles={profiles} preferences={preferences} aiOpen={aiOpen} testResults={connectionTests.results}
+      <QueryWorkspace key={recovery.restoreVersion} state={state} profiles={profiles} preferences={preferences} aiOpen={aiOpen} testResults={connectionTests.results}
         backend={queryBackend} canQuery={service.kind === 'desktop'} active={view === 'query'} onCommandReady={setQueryCommand}
         modelService={modelService} aiBackend={aiBackend}
         libraryService={queryLibraryService}
+        recovery={{ ...recovery, reload: reloadWorkspace }}
         toggleAI={() => setAI((value) => !value)} onSettings={openSettings} updateQuery={updateQuery}
         selectTab={selectTab} openIndex={openIndex} addQuery={addQuery} restoreQuery={restoreQuery} closeTab={closeTab} />
     </div>

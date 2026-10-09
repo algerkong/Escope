@@ -3,6 +3,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next';
 import { IconButton, SelectControl } from '../../components/controls';
 import type { FieldCapability } from '../../domain/resource';
+import type { VisualEditorDraft } from '../../domain/workspace-recovery';
 import {
   buildVisualDsl, parseVisualForm, VISUAL_SIZE_MAX,
   type ProblemCode, type VisualBuildProblem, type VisualCondition, type VisualForm,
@@ -19,11 +20,7 @@ interface Props {
   onDraftChange?: (draft: VisualEditorDraft) => void;
 }
 
-export interface VisualEditorDraft {
-  readonly source: string;
-  readonly form: VisualForm | null;
-  readonly problems: readonly VisualBuildProblem[];
-}
+export type { VisualEditorDraft } from '../../domain/workspace-recovery';
 
 const OPERATORS: readonly VisualOperator[] = ['eq', 'neq', 'match', 'gt', 'gte', 'lt', 'lte', 'exists', 'missing'];
 const VALUE_TYPES: readonly VisualValueType[] = ['string', 'number', 'boolean'];

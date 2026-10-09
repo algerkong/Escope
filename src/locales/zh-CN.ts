@@ -104,6 +104,7 @@ export const zh: { [N in keyof typeof en]: Record<keyof typeof en[N], string> } 
     invalidCertificate: 'CA 证书无效，请提供不含私钥的 PEM 公共证书。',
     tlsError: 'TLS 校验失败，请检查证书签发方、主机名与有效期。',
     exportFailed: '导出文件未能写入，未确认完整导出。',
+    workspaceConflict: '已保存工作区已发生变化，请明确重新载入后再保存。',
     rateLimited: '服务正在限制请求，请稍后重试。',
     redirectBlocked: '服务返回了重定向，请直接配置最终 Elasticsearch 地址。',
     httpError: '服务返回了非成功的 HTTP 状态。',

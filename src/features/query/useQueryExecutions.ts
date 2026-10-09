@@ -8,6 +8,7 @@ import {
   type QueryResultParse, type QuerySummary,
 } from '../../domain/query-result';
 import { supportsSnapshotPaging } from '../../domain/query-pagination';
+import { finishHistory, historyEntry, type ExecutionHistoryEntry } from '../../domain/workspace-recovery';
 import { errorCode, type QueryBackend, type QueryResponse } from '../../services/ipc';
 
 /** One successfully received page: verbatim body, parsed summary and its continuation cursor. */
@@ -43,6 +44,7 @@ type InFlight = {
   readonly connectionId: string;
   readonly endpoint: string;
   readonly backend: QueryBackend;
+  readonly history: ExecutionHistoryEntry;
 };
 
 /** The cancel contract carries only the request and connection identity. */
@@ -64,13 +66,15 @@ function isBound(response: QueryResponse, operation: InFlight): boolean {
 }
 
 /** Per-document execution isolation; a managed PIT starts before page one and is never reopened for an old cursor. */
-export function useQueryExecutions(backend: QueryBackend) {
+export function useQueryExecutions(backend: QueryBackend, onHistory?: (entry: ExecutionHistoryEntry) => void) {
   const [entries, renderEntries] = useState<Record<string, ExecutionEntry>>({});
   const inFlight = useRef(new Map<string, InFlight>());
   const alive = useRef(true);
   const backendRef = useRef(backend);
   backendRef.current = backend;
   const entriesRef = useRef<Record<string, ExecutionEntry>>({});
+  const historyRef = useRef(onHistory);
+  historyRef.current = onHistory;
 
   // Event handlers need the new state before React commits (cancel -> rerun, duplicate clicks).
   const setEntries = useCallback((change: (current: Record<string, ExecutionEntry>) => Record<string, ExecutionEntry>) => {
@@ -102,6 +106,7 @@ export function useQueryExecutions(backend: QueryBackend) {
       const pending = [...requests.values()];
       requests.clear();
       for (const request of pending) {
+        historyRef.current?.(finishHistory(request.history, 'interrupted'));
         void request.backend.cancel(cancelRequestOf(request)).catch(() => undefined);
         if (request.pitId) closePit(request.pitId, request.connectionId, request.backend);
       }
@@ -118,6 +123,7 @@ export function useQueryExecutions(backend: QueryBackend) {
     const active = inFlight.current.get(queryId);
     if (active) {
       inFlight.current.delete(queryId);
+      historyRef.current?.(finishHistory(active.history, 'cancelled', 'cancelled'));
       void active.backend.cancel(cancelRequestOf(active)).catch(() => undefined);
     }
     const open = snapshotOf(entriesRef.current[queryId]);
@@ -135,7 +141,8 @@ export function useQueryExecutions(backend: QueryBackend) {
   }, [closePit, setEntries]);
 
   /** Freeze and execute one snapshot. Returns a structured rejection when the draft is unusable. */
-  const run = useCallback(async (query: QueryDocument, endpoint: string | null): Promise<SnapshotRejection | null> => {
+  const run = useCallback(async (query: QueryDocument, endpoint: string | null,
+    kind: 'query' | 'index' = 'query'): Promise<SnapshotRejection | null> => {
     if (inFlight.current.has(query.id) || !alive.current) return null;
     const validated = createValidatedSnapshot(query, crypto.randomUUID(), new Date());
     if (!validated.ok) return validated.error;
@@ -148,8 +155,10 @@ export function useQueryExecutions(backend: QueryBackend) {
     const operation: InFlight = {
       requestId: paging ? crypto.randomUUID() : snapshot.requestId,
       connectionId: snapshot.connectionId, endpoint: target, pitId: null, backend: backendRef.current,
+      history: historyEntry(snapshot, query.name, kind),
     };
     inFlight.current.set(query.id, operation);
+    historyRef.current?.(operation.history);
     const owns = () => alive.current && inFlight.current.get(query.id) === operation;
     setEntries((current) => ({
       ...current,
@@ -161,6 +170,7 @@ export function useQueryExecutions(backend: QueryBackend) {
     const fail = (code: string, rawResponse: string | null) => {
       if (!owns()) return;
       inFlight.current.delete(query.id);
+      historyRef.current?.(finishHistory(operation.history, code === 'cancelled' ? 'cancelled' : 'failed', code));
       if (operation.pitId) closePit(operation.pitId, operation.connectionId, operation.backend);
       setEntries((current) => ({
         ...current,
@@ -225,6 +235,7 @@ export function useQueryExecutions(backend: QueryBackend) {
         };
       });
       inFlight.current.delete(query.id);
+      historyRef.current?.(finishHistory(operation.history, partial ? 'partial' : 'success'));
     } catch (error) {
       fail(errorCode(error, 'unexpected'), null);
     }
@@ -248,10 +259,13 @@ export function useQueryExecutions(backend: QueryBackend) {
     if (!snapshot || !lastPage || cursor === null) return;
     const { connectionId } = snapshot;
     const endpoint = entry.endpoint ?? '';
+    const requestId = crypto.randomUUID();
     const operation: InFlight = {
-      requestId: crypto.randomUUID(), connectionId, endpoint, pitId: entry.pitId, backend: backendRef.current,
+      requestId, connectionId, endpoint, pitId: entry.pitId, backend: backendRef.current,
+      history: historyEntry({ ...snapshot, requestId, startedAt: new Date().toISOString() }, query.name, 'continuation'),
     };
     inFlight.current.set(query.id, operation);
+    historyRef.current?.(operation.history);
     const owns = () => alive.current && inFlight.current.get(query.id) === operation;
     setEntries((current) => {
       const existing = current[query.id];
@@ -261,6 +275,7 @@ export function useQueryExecutions(backend: QueryBackend) {
     const settleError = (code: string) => {
       if (!owns()) return;
       inFlight.current.delete(query.id);
+      historyRef.current?.(finishHistory(operation.history, code === 'cancelled' ? 'cancelled' : 'failed', code));
       const dead = code === 'notFound' || code === 'invalidResponse' || code === 'cancelled';
       if (dead && operation.pitId) closePit(operation.pitId, connectionId, operation.backend);
       setEntries((current) => {
@@ -326,6 +341,7 @@ export function useQueryExecutions(backend: QueryBackend) {
         };
       });
       inFlight.current.delete(query.id);
+      historyRef.current?.(finishHistory(operation.history, page.partial ? 'partial' : 'success'));
     } catch (error) {
       settleError(errorCode(error, 'unexpected'));
     }

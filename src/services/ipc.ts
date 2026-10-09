@@ -3,7 +3,7 @@ import { isValidPitId } from '../domain/query-result';
 
 export type ErrorCode = 'invalidInput' | 'invalidName' | 'invalidEndpoint' | 'invalidEnvironment'
   | 'invalidIndex' | 'invalidQuery' | 'duplicateRequest'
-  | 'storageUnavailable' | 'notFound' | 'unsupported' | 'permissionDenied' | 'serverForbidden' | 'cancelled'
+  | 'storageUnavailable' | 'workspaceConflict' | 'notFound' | 'unsupported' | 'permissionDenied' | 'serverForbidden' | 'cancelled'
   | 'busy' | 'networkError' | 'timeout' | 'authenticationFailed' | 'rateLimited'
   | 'credentialNotFound' | 'credentialUnavailable' | 'credentialFailure'
   | 'invalidCertificate' | 'tlsError' | 'exportFailed'

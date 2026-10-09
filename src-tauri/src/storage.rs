@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 /// Highest schema version this build understands. A file above it fails closed instead of being
 /// opened with an unknown layout.
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 /// Hard upper bound for one credential cleanup batch, so no caller can request unbounded work.
 pub const MAX_CLEANUP_BATCH: usize = 64;
@@ -21,6 +21,15 @@ pub const MAX_MODEL_PROFILES: usize = 128;
 /// Hard upper bound for the saved-query document, matching the SQLite check on
 /// `saved_query_library` and the bound the Q07 IPC layer repeats before serializing.
 pub const MAX_SAVED_QUERIES_BYTES: usize = 4 * 1024 * 1024;
+
+/// Hard upper bound for the stored workspace-recovery document, matching the UTF-8 byte check on
+/// `workspace_recovery.json` (migration 006) and the bound the Q07 IPC layer enforces before
+/// serializing (`workspace_recovery::MAX_RECOVERY_BYTES`).
+const MAX_WORKSPACE_RECOVERY_BYTES: usize = crate::workspace_recovery::MAX_RECOVERY_BYTES;
+
+/// JS-safe upper bound of the recovery revision counter, mirrored by the SQLite check on
+/// `workspace_recovery.revision`.
+const MAX_WORKSPACE_RECOVERY_REVISION: i64 = 9_007_199_254_740_991;
 
 /// Hard upper bound for stored connections, applied to every read and write path.
 const MAX_CONNECTIONS: i64 = 1000;
@@ -635,6 +644,7 @@ impl Database {
                 3 => tx.execute_batch(include_str!("../migrations/003_models.sql"))?,
                 4 => tx.execute_batch(include_str!("../migrations/004_model_credentials.sql"))?,
                 5 => tx.execute_batch(include_str!("../migrations/005_connection_settings.sql"))?,
+                6 => tx.execute_batch(include_str!("../migrations/006_workspace_recovery.sql"))?,
                 _ => return Err(AppError::new("unsupported")),
             }
             tx.commit()?;
@@ -757,6 +767,67 @@ impl Database {
             [json],
         )?;
         Ok(())
+    }
+
+    /// The singleton workspace-recovery row exactly as stored, or `None` when no document was
+    /// saved yet. Reading never inserts, repairs or rewrites anything; typed validation of the
+    /// document, and with it the `invalidResponse` contract of the load command, belongs to
+    /// `workspace_recovery`.
+    pub(crate) fn workspace_recovery_row(&self) -> Result<Option<WorkspaceRecoveryRow>, AppError> {
+        read_workspace_recovery_row(&self.0)
+    }
+
+    /// Compare-and-swap the recovery document in one SQL transaction. `json` is applied only when
+    /// the stored revision still equals `expected_revision` (`0` means no row exists yet), and the
+    /// whole document is stored with `revision + 1` atomically, returning the new revision. The
+    /// stored document is validated before the revision is compared, so a corrupt or future row is
+    /// never overwritten - not even by a writer whose expected revision happens to match. A stale
+    /// writer gets `workspaceConflict` and the stored bytes stay untouched; the caller validates
+    /// the incoming document before it reaches this method.
+    pub(crate) fn save_workspace_recovery(
+        &mut self,
+        expected_revision: u64,
+        json: &str,
+    ) -> Result<u64, AppError> {
+        let Ok(expected_revision) = i64::try_from(expected_revision) else {
+            return Err(AppError::new("invalidInput"));
+        };
+        if !(0..=MAX_WORKSPACE_RECOVERY_REVISION).contains(&expected_revision)
+            || json.len() > MAX_WORKSPACE_RECOVERY_BYTES
+        {
+            return Err(AppError::new("invalidInput"));
+        }
+        let tx = self.0.transaction()?;
+        match read_workspace_recovery_row(&tx)? {
+            Some(row) => {
+                crate::workspace_recovery::decode_stored(&row.json)?;
+                if row.revision != expected_revision {
+                    return Err(AppError::new("workspaceConflict"));
+                }
+                let next = row
+                    .revision
+                    .checked_add(1)
+                    .filter(|next| *next <= MAX_WORKSPACE_RECOVERY_REVISION)
+                    .ok_or_else(|| AppError::new("storageUnavailable"))?;
+                tx.execute(
+                    "UPDATE workspace_recovery SET revision=?1, json=?2 WHERE singleton=1",
+                    params![next, json],
+                )?;
+                tx.commit()?;
+                Ok(next as u64)
+            }
+            None => {
+                if expected_revision != 0 {
+                    return Err(AppError::new("workspaceConflict"));
+                }
+                tx.execute(
+                    "INSERT INTO workspace_recovery(singleton,revision,json) VALUES (1,1,?1)",
+                    [json],
+                )?;
+                tx.commit()?;
+                Ok(1)
+            }
+        }
     }
 
     pub fn save_preferences(&self, preferences: Preferences) -> Result<(), AppError> {
@@ -1718,6 +1789,57 @@ fn read_model_row(conn: &Connection, id: &str) -> Result<Option<ModelProfile>, A
         )
         .optional()?;
     raw.map(RawModel::into_profile).transpose()
+}
+
+/// One workspace-recovery row exactly as stored, before typed validation. Both the load and the
+/// compare-and-swap save read through this, so they apply the same schema-level checks.
+pub(crate) struct WorkspaceRecoveryRow {
+    pub(crate) revision: i64,
+    pub(crate) json: String,
+}
+
+/// Debug output must never leak a stored draft body: the document is a byte length only.
+impl std::fmt::Debug for WorkspaceRecoveryRow {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WorkspaceRecoveryRow")
+            .field("revision", &self.revision)
+            .field("json_bytes", &self.json.len())
+            .finish()
+    }
+}
+
+/// Read the singleton recovery row inside any connection or transaction. A row whose revision is
+/// outside the JS-safe counter range or whose document exceeds the byte bound fails closed with
+/// `invalidResponse`: typed validation of the document belongs to `workspace_recovery`, and
+/// neither caller may repair or rewrite such a row.
+fn read_workspace_recovery_row(
+    connection: &Connection,
+) -> Result<Option<WorkspaceRecoveryRow>, AppError> {
+    let row = connection
+        .query_row(
+            "SELECT revision,
+                CASE WHEN length(CAST(json AS BLOB)) <= ?1 THEN json ELSE NULL END
+             FROM workspace_recovery WHERE singleton=1",
+            [MAX_WORKSPACE_RECOVERY_BYTES as i64],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|error| match error {
+            rusqlite::Error::InvalidColumnType(..)
+            | rusqlite::Error::IntegralValueOutOfRange(..)
+            | rusqlite::Error::FromSqlConversionFailure(..) => AppError::new("invalidResponse"),
+            _ => AppError::new("storageUnavailable"),
+        })?;
+    let Some((revision, json)) = row else {
+        return Ok(None);
+    };
+    if !(0..=MAX_WORKSPACE_RECOVERY_REVISION).contains(&revision)
+        || json.len() > MAX_WORKSPACE_RECOVERY_BYTES
+    {
+        return Err(AppError::new("invalidResponse"));
+    }
+    Ok(Some(WorkspaceRecoveryRow { revision, json }))
 }
 
 fn now() -> i64 {
@@ -3245,5 +3367,248 @@ mod tests {
         assert!(!record.has_custom_ca);
         assert!(db.transport_snapshot(&created.id).unwrap().ca().is_none());
         assert_eq!(db.pending_credential_cleanup_count().unwrap(), 0);
+    }
+
+    /// A saved-query document as the previous release stored it, byte for byte.
+    const SAVED_QUERY_DOCUMENT: &str = r#"{"version":1,"entries":[]}"#;
+
+    /// A version 5 database as the previous release left it: connection/model/credential metadata,
+    /// the CA column and the saved-query library, but no recovery table.
+    fn v5_database(path: &Path) -> (Connection, String, CredentialRef, String) {
+        let (conn, connection_id, reference, model_id) = v4_database(path);
+        conn.execute_batch(include_str!("../migrations/005_connection_settings.sql"))
+            .unwrap();
+        conn.execute(
+            "INSERT INTO saved_query_library(singleton,json) VALUES (1,?1)",
+            [SAVED_QUERY_DOCUMENT],
+        )
+        .unwrap();
+        (conn, connection_id, reference, model_id)
+    }
+
+    #[test]
+    fn workspace_recovery_migration_preserves_v5_rows_and_reopens() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("v5-recovery.sqlite");
+        let (conn, connection_id, _, model_id) = v5_database(&path);
+        drop(conn);
+
+        let db = Database::open(&path).unwrap();
+        assert_eq!(
+            db.0.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            SCHEMA_VERSION
+        );
+        // The migration only adds the table: it starts empty and nothing is inserted.
+        assert!(db.workspace_recovery_row().unwrap().is_none());
+        // Every pre-existing row survived untouched.
+        assert_eq!(
+            db.saved_queries_json().unwrap().as_deref(),
+            Some(SAVED_QUERY_DOCUMENT)
+        );
+        let summaries = db.connection_summaries().unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].profile.id, connection_id);
+        let models = db.models().unwrap();
+        assert_eq!(models.profiles.len(), 1);
+        assert_eq!(models.profiles[0].id, model_id);
+        assert_eq!(db.preferences().unwrap().mode, "dark");
+        drop(db);
+
+        // Reopening an already-migrated file is a no-op and keeps the schema version.
+        let db = Database::open(&path).unwrap();
+        assert_eq!(
+            db.0.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            6
+        );
+        assert_eq!(
+            db.saved_queries_json().unwrap().as_deref(),
+            Some(SAVED_QUERY_DOCUMENT)
+        );
+        assert!(db.workspace_recovery_row().unwrap().is_none());
+    }
+
+    #[test]
+    fn failed_workspace_recovery_migration_keeps_version_five_and_every_row() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("v5-conflict.sqlite");
+        let (conn, connection_id, _, model_id) = v5_database(&path);
+        // Force the sixth step to fail after the transaction begins: the table name is taken by
+        // a foreign table the migration must not clobber.
+        conn.execute_batch("CREATE TABLE workspace_recovery (bogus TEXT);")
+            .unwrap();
+        drop(conn);
+
+        assert!(Database::open(&path).is_err());
+        let conn = Connection::open(&path).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 5);
+        // The foreign table is left exactly as it was; the failing CREATE never happened.
+        let columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(workspace_recovery)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(columns, vec!["bogus".to_owned()]);
+        // Every previous row survives the rolled-back step.
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM connections WHERE id=?1",
+                [&connection_id],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM model_profiles WHERE id=?1",
+                [&model_id],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT json FROM saved_query_library WHERE singleton=1",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+            SAVED_QUERY_DOCUMENT
+        );
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM credential_cleanup", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn workspace_recovery_rows_with_invalid_revision_or_size_fail_closed() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("foreign-recovery.sqlite");
+        let db = Database::open(&path).unwrap();
+        // A revision no writer of this build could have produced. The SQL check is bypassed on
+        // purpose: the read must fail closed on its own.
+        db.run_sql_for_test(
+            "PRAGMA ignore_check_constraints=ON;
+             INSERT INTO workspace_recovery(singleton,revision,json) VALUES (1,9007199254740992,'{}');",
+        )
+        .unwrap();
+        assert_eq!(
+            db.workspace_recovery_row().unwrap_err().code,
+            "invalidResponse"
+        );
+        // An oversize document (8389634 UTF-8 bytes) fails the same way.
+        db.run_sql_for_test(
+            "UPDATE workspace_recovery SET revision=1, json=hex(zeroblob(4194817));",
+        )
+        .unwrap();
+        assert_eq!(
+            db.workspace_recovery_row().unwrap_err().code,
+            "invalidResponse"
+        );
+        // A well-formed row reads back exactly as stored.
+        db.run_sql_for_test(
+            "UPDATE workspace_recovery SET revision=4, json='{\"version\":1,\"workspace\":null,\"history\":[]}';",
+        )
+        .unwrap();
+        let row = db.workspace_recovery_row().unwrap().unwrap();
+        assert_eq!(row.revision, 4);
+        assert_eq!(row.json, r#"{"version":1,"workspace":null,"history":[]}"#);
+    }
+
+    #[test]
+    fn workspace_recovery_save_is_a_compare_and_swap_and_stays_bounded() {
+        let mut db = Database::open(Path::new(":memory:")).unwrap();
+        let first = r#"{"version":1,"workspace":null,"history":[]}"#;
+        let second = r#"{"version":1,"workspace":{"activeConnectionId":null,"activeTabId":null,"tabs":[],"lastTabByConnection":{}},"history":[]}"#;
+
+        // Absent row: expected 0 inserts revision 1; anything else is a conflict.
+        assert_eq!(
+            db.save_workspace_recovery(5, first).unwrap_err().code,
+            "workspaceConflict"
+        );
+        assert_eq!(db.save_workspace_recovery(0, first).unwrap(), 1);
+        assert_eq!(db.workspace_recovery_row().unwrap().unwrap().json, first);
+
+        // A stale writer cannot overwrite the stored bytes.
+        assert_eq!(
+            db.save_workspace_recovery(0, second).unwrap_err().code,
+            "workspaceConflict"
+        );
+        assert_eq!(db.workspace_recovery_row().unwrap().unwrap().json, first);
+        assert_eq!(db.save_workspace_recovery(1, second).unwrap(), 2);
+        let row = db.workspace_recovery_row().unwrap().unwrap();
+        assert_eq!(row.revision, 2);
+        assert_eq!(row.json, second);
+
+        // An expected revision outside the JS-safe range is refused before any read.
+        assert_eq!(
+            db.save_workspace_recovery(u64::MAX, first)
+                .unwrap_err()
+                .code,
+            "invalidInput"
+        );
+
+        // The application bound keeps the previous document; the SQL check refuses a document
+        // that bypasses it.
+        let oversized = "x".repeat(MAX_WORKSPACE_RECOVERY_BYTES + 1);
+        assert_eq!(
+            db.save_workspace_recovery(2, &oversized).unwrap_err().code,
+            "invalidInput"
+        );
+        assert_eq!(db.workspace_recovery_row().unwrap().unwrap().json, second);
+        assert!(db
+            .run_sql_for_test("UPDATE workspace_recovery SET json=hex(zeroblob(4194816))")
+            .is_ok());
+        assert!(db
+            .run_sql_for_test("UPDATE workspace_recovery SET json=hex(zeroblob(4194817))")
+            .is_err());
+    }
+
+    #[test]
+    fn workspace_recovery_read_only_storage_does_not_claim_success() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("readonly-recovery.sqlite");
+        let mut db = Database::open(&path).unwrap();
+        let document = r#"{"version":1,"workspace":null,"history":[]}"#;
+        assert_eq!(db.save_workspace_recovery(0, document).unwrap(), 1);
+        db.run_sql_for_test("PRAGMA query_only=ON;").unwrap();
+
+        // Reads still work; a write fails closed and the stored row is untouched.
+        assert_eq!(db.workspace_recovery_row().unwrap().unwrap().revision, 1);
+        assert_eq!(
+            db.save_workspace_recovery(1, document).unwrap_err().code,
+            "storageUnavailable"
+        );
+        assert_eq!(db.workspace_recovery_row().unwrap().unwrap().json, document);
+    }
+
+    #[test]
+    fn workspace_recovery_read_failure_is_not_an_empty_or_damaged_document() {
+        let connection = Connection::open_in_memory().unwrap();
+        assert_eq!(
+            read_workspace_recovery_row(&connection).unwrap_err().code,
+            "storageUnavailable"
+        );
+        connection
+            .execute_batch(
+                "CREATE TABLE workspace_recovery (singleton INTEGER, revision, json);
+                 INSERT INTO workspace_recovery VALUES (1, 'invalid-counter', '{}');",
+            )
+            .unwrap();
+        assert_eq!(
+            read_workspace_recovery_row(&connection).unwrap_err().code,
+            "invalidResponse"
+        );
     }
 }

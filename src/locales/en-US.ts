@@ -102,6 +102,7 @@ export const en = {
     invalidCertificate: 'The CA certificate is invalid. Provide public PEM certificates without private keys.',
     tlsError: 'TLS verification failed. Check the certificate issuer, hostname and validity period.',
     exportFailed: 'The export could not be written. No completed export was confirmed.',
+    workspaceConflict: 'The saved workspace changed. Reload it explicitly before saving again.',
     rateLimited: 'The server is limiting requests. Try again later.',
     redirectBlocked: 'The server returned a redirect. Use the final Elasticsearch endpoint.',
     httpError: 'The server returned an unsuccessful HTTP status.',

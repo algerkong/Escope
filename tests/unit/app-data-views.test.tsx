@@ -64,6 +64,65 @@ async function fixture(selected = false, removed = false, withRuntime = false) {
 }
 
 describe('Data Views in the query workspace', () => {
+  it('applies time only after review, retains old results, and restores moving intent without rerunning', async () => {
+    const f = await fixture(true);
+    const first = f.mount();
+    await f.saved();
+    expect(f.backend.execute).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Run query' }));
+    await screen.findByText('original-result');
+    const reads = f.backend.readResource.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Time range' }));
+    expect(screen.getByLabelText('Time field')).toHaveValue('@timestamp');
+    fireEvent.click(screen.getByRole('button', { name: 'Preview final DSL' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /Use this field without verified/ }));
+    expect((screen.getByLabelText('Final query DSL') as HTMLTextAreaElement).value).toContain('9007199254740993');
+    fireEvent.click(screen.getByRole('button', { name: 'Apply to draft' }));
+    expect(screen.getByRole('group', { name: 'Managed time' })).toBeVisible();
+    expect(screen.getByText('original-result')).toBeVisible();
+    expect(f.backend.execute).toHaveBeenCalledTimes(1);
+    expect(f.backend.readResource).toHaveBeenCalledTimes(reads);
+    await f.saved();
+    const applied = (await f.recovery.load()).document.workspace!.tabs[0]!.document;
+    expect(applied.timeRange?.definition.range).toEqual({ kind: 'relative', amount: 15, unit: 'minutes' });
+    expect(screen.getByLabelText('Query DSL')).toHaveValue(applied.dsl);
+    fireEvent.click(screen.getByRole('button', { name: 'Run query' }));
+    await screen.findByRole('group', { name: 'Executed time' });
+    await f.saved();
+    const executed = (await f.recovery.load()).document.history[0]!.snapshot;
+    expect(executed.timeRange?.bounds.resolvedAt).toBe(executed.startedAt);
+    expect(f.backend.execute.mock.calls[1]![0].rawDsl).toBe(executed.rawDsl);
+    expect(f.backend.execute.mock.calls[1]![0]).not.toHaveProperty('timeRange');
+    expect(screen.getByRole('group', { name: 'Executed time' })).toHaveTextContent(executed.timeRange!.bounds.from);
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(async () => expect((await f.library.load()).entries[0]?.timeRange).toEqual(applied.timeRange));
+    await f.user.click(screen.getAllByRole('button', { name: 'Settings' })[0]!);
+    await f.user.click(screen.getByRole('button', { name: 'Appearance' }));
+    await f.user.click(screen.getByRole('button', { name: 'Dark' }));
+    await f.user.click(screen.getByRole('button', { name: 'Back to query' }));
+    await act(async () => { await i18n.changeLanguage('zh-CN'); });
+    expect(screen.getByRole('group', { name: '执行时间' })).toHaveTextContent(executed.timeRange!.bounds.from);
+    await act(async () => { await i18n.changeLanguage('en-US'); });
+    expect(f.backend.execute).toHaveBeenCalledTimes(2);
+    await f.saved();
+    first.unmount();
+    f.mount();
+    await f.saved();
+    expect(screen.getByRole('group', { name: 'Managed time' })).toBeVisible();
+    expect(screen.queryByRole('group', { name: 'Executed time' })).not.toBeInTheDocument();
+    expect(f.backend.execute).toHaveBeenCalledTimes(2);
+    fireEvent.change(screen.getByLabelText('Query DSL'), { target: { value: `${applied.dsl} ` } });
+    expect(screen.queryByRole('group', { name: 'Managed time' })).not.toBeInTheDocument();
+    await f.saved();
+    expect((await f.recovery.load()).document.workspace!.tabs[0]!.document.timeRange).toBeUndefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Run query' }));
+    await screen.findByText('original-result');
+    expect(f.backend.execute.mock.calls[2]![0].rawDsl).toBe(`${applied.dsl} `);
+    expect(f.backend.openPit).not.toHaveBeenCalled();
+    await f.saved();
+  });
+
   it('reviews and applies runtime DSL without executing, preserves prior results, and restores both definition and exact applied text', async () => {
     const f = await fixture(true, false, true);
     const first = f.mount();

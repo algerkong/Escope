@@ -24,6 +24,7 @@
 use crate::data_views::{optional_selection, DataViewSelection};
 use crate::error::AppError;
 use crate::query_parameters::{optional_parameters, QueryParameters};
+use crate::query_time_range::{optional_query_time_range, QueryTimeRange};
 use crate::storage::Database;
 use crate::{with_database, StorageState};
 use serde::{Deserialize, Serialize};
@@ -86,6 +87,12 @@ pub struct SavedQueryEntry {
         skip_serializing_if = "Option::is_none"
     )]
     pub data_view: Option<DataViewSelection>,
+    #[serde(
+        default,
+        deserialize_with = "optional_query_time_range",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub time_range: Option<QueryTimeRange>,
 }
 
 /// Debug output must never leak a draft body: the DSL is shown as its byte length only.
@@ -162,6 +169,9 @@ impl SavedQueryEntry {
         }
         if let Some(data_view) = &self.data_view {
             data_view.validate(self.connection_id.as_deref(), &self.index)?;
+        }
+        if let Some(time_range) = &self.time_range {
+            time_range.validate(self.connection_id.as_deref(), &self.index, &self.dsl)?;
         }
         if self.updated_at.is_empty()
             || self.updated_at.len() > MAX_UPDATED_AT_CHARS
@@ -478,6 +488,7 @@ mod tests {
             updated_at: "2026-10-09T12:00:00.000Z".to_owned(),
             parameters: None,
             data_view: None,
+            time_range: None,
         }
     }
 
@@ -726,5 +737,45 @@ mod tests {
         };
         let rendered = format!("{library:?}");
         assert!(!rendered.contains("9007199254740993"));
+    }
+
+    #[test]
+    fn managed_time_round_trips_without_binding_to_a_live_connection_or_losing_intent() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/query-time-range-v1.json"
+        ))
+        .unwrap();
+        let draft = &fixture["draft"];
+        let mut saved = entry("time-saved");
+        saved.connection_id = Some(draft["connectionId"].as_str().unwrap().into());
+        saved.index = draft["index"].as_str().unwrap().into();
+        saved.dsl = draft["dsl"].as_str().unwrap().into();
+        saved.time_range = Some(serde_json::from_value(draft["timeRange"].clone()).unwrap());
+        let library = SavedQueryLibrary {
+            version: 1,
+            entries: vec![saved],
+        };
+        let (_directory, storage) = temp_storage();
+        with_database(&storage, |db| save_library(db, library.clone())).unwrap();
+        assert_eq!(with_database(&storage, load_library).unwrap(), library);
+        assert!(!format!("{library:?}").contains("2026-10-09T11:45"));
+        for invalid in [
+            serde_json::Value::Null,
+            serde_json::json!({"version":2}),
+            serde_json::json!({"version":1,"binding":{"connectionId":"other","index":"orders"}}),
+        ] {
+            let mut value = serde_json::to_value(&library).unwrap();
+            value["entries"][0]["timeRange"] = invalid;
+            assert!(decode_library(&value.to_string()).is_err());
+        }
+        let mut changed = library.clone();
+        changed.entries[0].dsl = "{}".into();
+        assert_eq!(
+            with_database(&storage, |db| save_library(db, changed))
+                .unwrap_err()
+                .code,
+            "invalidInput"
+        );
+        assert_eq!(with_database(&storage, load_library).unwrap(), library);
     }
 }

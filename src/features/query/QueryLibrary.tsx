@@ -228,6 +228,7 @@ const LIMIT_MESSAGE_KEYS: Record<string, string> = {
   libraryUnavailable: 'libraryUnavailable',
   invalidParameters: 'limitInvalidParameters',
   invalidDataView: 'limitInvalidDataView',
+  invalidTimeRange: 'limitInvalidTimeRange',
 };
 
 function limitMessage(t: TFunction, code: string): string {

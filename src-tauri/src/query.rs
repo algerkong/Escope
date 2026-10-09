@@ -601,6 +601,37 @@ mod tests {
         }
     }
 
+    #[test]
+    fn frozen_time_literals_are_forwarded_exactly_and_local_metadata_is_not_an_ipc_field() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/query-time-range-v1.json"
+        ))
+        .unwrap();
+        let raw = fixture["snapshot"]["rawDsl"].as_str().unwrap();
+        let nanos = raw.replace(".456000000Z", ".456789123Z");
+        for raw in [raw, nanos.as_str()] {
+            assert_eq!(
+                request("orders", raw).prepare().unwrap().body,
+                raw.as_bytes()
+            );
+            let mut continuation = request("orders", raw);
+            continuation.pit_id = Some("time-pit".into());
+            continuation.search_after = Some("[9007199254740993]".into());
+            let body = continuation.prepare().unwrap().body;
+            let values: BTreeMap<String, Box<RawValue>> = serde_json::from_slice(&body).unwrap();
+            let original: BTreeMap<String, Box<RawValue>> = serde_json::from_str(raw).unwrap();
+            assert_eq!(values["query"].get(), original["query"].get());
+            assert_eq!(values["search_after"].get(), "[9007199254740993]");
+            assert!(values["query"].get().contains("9007199254740993"));
+            assert!(!values.contains_key("timeRange"));
+        }
+        let value = serde_json::json!({
+            "requestId": REQUEST, "connectionId": CONNECTION, "index": "orders", "rawDsl": raw,
+            "timeRange": fixture["snapshot"]["timeRange"]
+        });
+        assert!(serde_json::from_value::<QueryExecuteRequest>(value).is_err());
+    }
+
     fn profile() -> ConnectionProfile {
         ConnectionProfile {
             id: CONNECTION.into(),

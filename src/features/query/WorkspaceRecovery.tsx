@@ -7,6 +7,7 @@ import type { QueryDocument } from '../../domain/query';
 import { MAX_EXECUTION_HISTORY, restoreHistoryQuery, type ExecutionHistoryEntry } from '../../domain/workspace-recovery';
 import type { WorkspaceRecoveryController } from './useWorkspaceRecovery';
 import { executionErrorKey } from './error-message';
+import { TimeRangeSummary } from './QueryTimeRangeDialog';
 import '../../styles/workspace-recovery.css';
 
 export function WorkspaceRecoveryStatus({ recovery }: { recovery: WorkspaceRecoveryController }) {
@@ -108,6 +109,7 @@ export function ExecutionHistoryDialog({ open, recovery, profiles, onClose, onRe
               <Clock3 size={12} aria-hidden="true" /><time dateTime={entry.snapshot.startedAt}>{timeFormat.format(new Date(entry.snapshot.startedAt))}</time>
               {duration !== null ? <span>{t('queryHistory:duration', { value: numberFormat.format(duration) })}</span> : null}
             </div>
+            {entry.snapshot.timeRange ? <TimeRangeSummary time={entry.snapshot.timeRange} /> : null}
           </li>;
         })}
       </ul>

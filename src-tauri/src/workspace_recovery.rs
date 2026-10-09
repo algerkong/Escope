@@ -32,6 +32,9 @@
 use crate::data_views::{optional_selection, DataViewSelection};
 use crate::error::AppError;
 use crate::query_parameters::{optional_parameters, QueryParameters};
+use crate::query_time_range::{
+    optional_execution_time_range, optional_query_time_range, ExecutionTimeRange, QueryTimeRange,
+};
 use crate::storage::Database;
 use crate::{with_database, StorageState};
 use serde::de::value::{MapAccessDeserializer, StrDeserializer};
@@ -341,6 +344,12 @@ pub struct TabDocument {
         skip_serializing_if = "Option::is_none"
     )]
     pub data_view: Option<DataViewSelection>,
+    #[serde(
+        default,
+        deserialize_with = "optional_query_time_range",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub time_range: Option<QueryTimeRange>,
 }
 
 /// Debug output must never leak a draft body: the DSL is shown as its byte length only.
@@ -545,6 +554,12 @@ pub struct ExecutionSnapshot {
         deserialize_with = "crate::data_views::optional_selection"
     )]
     pub data_view: Option<crate::data_views::DataViewSelection>,
+    #[serde(
+        default,
+        deserialize_with = "optional_execution_time_range",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub time_range: Option<ExecutionTimeRange>,
 }
 
 /// Debug output must never leak a frozen request body: the DSL is a byte length only.
@@ -709,7 +724,9 @@ impl RecoveryTab {
     fn validate(&self) -> Result<(), AppError> {
         self.document.validate()?;
         if self.kind == TabKind::Index
-            && (self.document.parameters.is_some() || self.document.data_view.is_some())
+            && (self.document.parameters.is_some()
+                || self.document.data_view.is_some()
+                || self.document.time_range.is_some())
         {
             return Err(invalid());
         }
@@ -739,6 +756,9 @@ impl TabDocument {
         }
         if let Some(data_view) = &self.data_view {
             data_view.validate(self.connection_id.0.as_deref(), &self.index)?;
+        }
+        if let Some(time_range) = &self.time_range {
+            time_range.validate(self.connection_id.0.as_deref(), &self.index, &self.dsl)?;
         }
         Ok(())
     }
@@ -871,8 +891,20 @@ impl VisualOriginal {
 impl ExecutionHistoryEntry {
     fn validate(&self) -> Result<(), AppError> {
         self.snapshot.validate()?;
-        if matches!(self.kind, HistoryKind::Index) && self.snapshot.data_view.is_some() {
+        if matches!(self.kind, HistoryKind::Index)
+            && (self.snapshot.data_view.is_some() || self.snapshot.time_range.is_some())
+        {
             return Err(invalid());
+        }
+        if let Some(time_range) = &self.snapshot.time_range {
+            let anchor = &time_range.bounds.resolved_at;
+            if if self.kind == HistoryKind::Continuation {
+                anchor > &self.snapshot.started_at
+            } else {
+                anchor != &self.snapshot.started_at
+            } {
+                return Err(invalid());
+            }
         }
         validate_name(&self.name)?;
         let pending = matches!(
@@ -939,6 +971,9 @@ impl ExecutionSnapshot {
         }
         if let Some(selection) = &self.data_view {
             selection.validate(Some(&self.connection_id), &self.index)?;
+        }
+        if let Some(time_range) = &self.time_range {
+            time_range.validate(&self.raw_dsl)?;
         }
         Ok(())
     }
@@ -1178,6 +1213,7 @@ mod tests {
             result_view: ResultView::Table,
             parameters: None,
             data_view: None,
+            time_range: None,
         }
     }
 
@@ -1219,6 +1255,7 @@ mod tests {
             revision: 2,
             started_at: START.to_owned(),
             data_view: None,
+            time_range: None,
         }
     }
 
@@ -2494,5 +2531,69 @@ mod tests {
         let mut invalid = encoded(&document);
         invalid["history"][0]["kind"] = serde_json::json!("index");
         refused(&invalid, "runtime definition on locked index execution");
+    }
+
+    #[test]
+    fn time_intent_and_frozen_history_round_trip_independently_in_schema_v7() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/query-time-range-v1.json"
+        ))
+        .unwrap();
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("time-recovery.sqlite");
+        let mut database = Database::open(&path).unwrap();
+        let mut tab = query_tab("time-query", "{}");
+        tab.document = serde_json::from_value(fixture["draft"].clone()).unwrap();
+        let mut history = entry("time-request", "{}");
+        history.snapshot = serde_json::from_value(fixture["snapshot"].clone()).unwrap();
+        let mut document = base_document(vec![tab], vec![history]);
+        document.workspace.0.as_mut().unwrap().active_connection_id =
+            document.workspace.0.as_ref().unwrap().tabs[0]
+                .document
+                .connection_id
+                .clone();
+        save(&mut database, 0, document.clone()).unwrap();
+        drop(database);
+        let mut database = Database::open(&path).unwrap();
+        assert_eq!(load(&database).unwrap().document, document);
+        assert_ne!(
+            document.workspace.0.as_ref().unwrap().tabs[0].document.dsl,
+            document.history[0].snapshot.raw_dsl
+        );
+        let mut edited = document.clone();
+        edited.workspace.0.as_mut().unwrap().tabs[0].document.dsl = "{}".into();
+        assert_eq!(
+            save(&mut database, 1, edited).unwrap_err().code,
+            "invalidInput"
+        );
+        assert_eq!(load(&database).unwrap().document, document);
+        for candidate in [
+            serde_json::Value::Null,
+            serde_json::json!({"version":2}),
+            serde_json::json!({"version":1,"secret":"fixture-only"}),
+        ] {
+            let mut invalid = encoded(&document);
+            invalid["workspace"]["tabs"][0]["document"]["timeRange"] = candidate.clone();
+            refused(&invalid, "invalid time draft");
+            let mut invalid = encoded(&document);
+            invalid["history"][0]["snapshot"]["timeRange"] = candidate;
+            refused(&invalid, "invalid time history");
+        }
+        let mut invalid = encoded(&document);
+        invalid["workspace"]["tabs"][0]["kind"] = serde_json::json!("index");
+        refused(&invalid, "time definition on locked index tab");
+        let mut invalid = encoded(&document);
+        invalid["history"][0]["kind"] = serde_json::json!("index");
+        refused(&invalid, "time definition on locked index history");
+        let mut invalid = encoded(&document);
+        invalid["history"][0]["snapshot"]["startedAt"] =
+            serde_json::json!("2026-10-09T12:31:00.000Z");
+        refused(&invalid, "query anchor must equal execution start");
+        let mut continuation = document.clone();
+        continuation.history[0].kind = HistoryKind::Continuation;
+        continuation.history[0].snapshot.started_at = "2026-10-09T12:31:00.000Z".into();
+        assert!(continuation.validate().is_ok());
+        continuation.history[0].snapshot.started_at = "2026-10-09T12:00:00.000Z".into();
+        assert!(continuation.validate().is_err());
     }
 }

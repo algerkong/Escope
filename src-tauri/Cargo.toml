@@ -35,6 +35,9 @@ zeroize = "1"
 # C01.3: the maintained base64 implementation for Basic/API Key authorization encodings. No
 # hand-rolled encoding; already in the tree through reqwest.
 base64 = "0.22"
+# Q02: strict ISO/nanosecond parsing and IANA local-time validation, never a network clock.
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+chrono-tz = "0.10.4"
 # Q07/E01: native file dialogs for a user-chosen export path. The plugin is initialized in
 # `lib.rs`; the export command itself lives in `saved_queries.rs`.
 tauri-plugin-dialog = "2"

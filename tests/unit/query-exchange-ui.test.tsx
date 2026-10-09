@@ -7,7 +7,8 @@ import { QueryExchangeDialog } from '../../src/features/query/QueryExchangeDialo
 import { QueryLibraryDialog, useQueryLibrary } from '../../src/features/query/QueryLibrary';
 import { createSessionQueryLibraryService } from '../../src/services/query-library';
 import { createSessionQueryExchangeService, type QueryExchangeService } from '../../src/services/query-exchange';
-import { createEmptyLibrary, type SavedQueryLibrary } from '../../src/domain/query-library';
+import { createEmptyLibrary, entryFromDocument, type SavedQueryLibrary } from '../../src/domain/query-library';
+import type { QueryDocument } from '../../src/domain/query';
 import { importQueryExchange, parseQueryExchangeText } from '../../src/domain/query-exchange';
 import type { ConnectionProfile } from '../../src/domain/connection';
 import { i18n } from '../../src/locales';
@@ -17,9 +18,10 @@ const profile: ConnectionProfile = { id: 'local-a', displayName: 'Fixture source
   environment: 'development', sortOrder: 0, auth: 'none' };
 beforeEach(async () => { await i18n.changeLanguage('en-US'); });
 
-async function mount(mode: 'export' | 'import' = 'import') {
+async function mount(mode: 'export' | 'import' = 'import', initialLibrary?: SavedQueryLibrary) {
   const store = createSessionQueryLibraryService();
-  if (mode === 'export') {
+  if (initialLibrary) await store.save(initialLibrary, createEmptyLibrary());
+  else if (mode === 'export') {
     const initial = importQueryExchange(bundle, [{ sourceKey: 'source-a', target: { connectionId: profile.id, endpoint: profile.endpoint } }], createEmptyLibrary(), [profile]);
     await store.save({ ...initial, entries: initial.entries.map((entry) => entry.parameters ? {
       ...entry, dsl: entry.dsl.replace('{"$param":"minimum"}', '987654321234567890'),
@@ -61,6 +63,26 @@ function mapAndReview() {
 }
 
 describe('query definition exchange UI', () => {
+  it('requires separate acknowledgment before excluding local managed time from an exchange file', async () => {
+    const fixture = JSON.parse(readFileSync('tests/fixtures/query-time-range-v1.json', 'utf8')) as { draft: QueryDocument };
+    const entry = entryFromDocument(fixture.draft, { id: 'time', name: 'Time draft', favorite: false, now: new Date() });
+    const { saveFile } = await mount('export', { version: 1, entries: [entry] });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select all queries' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review definitions' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'I reviewed the definitions and their literals for sensitive content.' }));
+    expect(screen.getByRole('button', { name: 'Save JSON file' })).toBeDisabled();
+    const confirmation = screen.getByRole('checkbox', { name: /I accept that time management is excluded/ });
+    fireEvent.click(confirmation);
+    fireEvent.click(screen.getByRole('button', { name: 'Review definitions' }));
+    expect(confirmation).not.toBeChecked();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'I reviewed the definitions and their literals for sensitive content.' }));
+    fireEvent.click(confirmation);
+    fireEvent.click(screen.getByRole('button', { name: 'Save JSON file' }));
+    await screen.findByText('Definition file saved.');
+    expect(saveFile.mock.calls[0]![0].queries[0]!.dsl).toBe(fixture.draft.dsl);
+    expect(saveFile.mock.calls[0]![0].queries[0]).not.toHaveProperty('timeRange');
+  });
+
   it('requires file review and explicit mapping even for identical connection names', async () => {
     const { importDefinitions, store } = await mount();
     await chooseFile();

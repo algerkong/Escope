@@ -4,6 +4,7 @@ import { utf8ByteLength, MAX_ENTRY_DSL_BYTES, MAX_ENTRY_INDEX_BYTES } from './qu
 import type { VisualForm, VisualBuildProblem } from './visual-query';
 import { parametersPayload, parseQueryParameters } from './query-parameters';
 import { freezeDataViewSelection, parseDataViewSelection, selectDataView } from './data-views';
+import { copyQueryTimeRange, freezeExecutionTimeRange, parseExecutionTimeRange, parseQueryTimeRange } from './query-time-range';
 
 export const WORKSPACE_RECOVERY_VERSION = 1;
 export const MAX_WORKSPACE_TABS = 50;
@@ -76,7 +77,8 @@ export function recoveryWorkspace(state: WorkspaceState, previous?: RecoveryWork
       return {
         kind: tab.kind, document: { id, connectionId, name, index, dsl, revision, resultView,
           ...(tab.document.parameters === undefined ? {} : { parameters: parametersPayload(tab.document.parameters) }),
-          ...(tab.document.dataView === undefined ? {} : { dataView: selectDataView(tab.document.dataView.definition) }) },
+          ...(tab.document.dataView === undefined ? {} : { dataView: selectDataView(tab.document.dataView.definition) }),
+          ...(tab.document.timeRange === undefined ? {} : { timeRange: copyQueryTimeRange(tab.document.timeRange) }) },
         grid: saved?.grid ?? gridLayout(INITIAL_RESULT_GRID_STATE),
         editorMode: saved?.editorMode ?? 'dsl',
         visualDraft: saved?.visualDraft?.source === dsl ? saved.visualDraft : null,
@@ -90,7 +92,8 @@ export function historyEntry(snapshot: ExecutionSnapshot, name: string, kind: Ex
   const { requestId, queryId, connectionId, index, rawDsl, revision, startedAt } = snapshot;
   return {
     snapshot: Object.freeze({ requestId, queryId, connectionId, index, rawDsl, revision, startedAt,
-      ...(snapshot.dataView === undefined ? {} : { dataView: freezeDataViewSelection(snapshot.dataView) }) }),
+      ...(snapshot.dataView === undefined ? {} : { dataView: freezeDataViewSelection(snapshot.dataView) }),
+      ...(snapshot.timeRange === undefined ? {} : { timeRange: freezeExecutionTimeRange(snapshot.timeRange) }) }),
     name, kind, status: 'running', finishedAt: null, errorCode: null,
   };
 }
@@ -104,6 +107,7 @@ export function finishHistory(entry: ExecutionHistoryEntry, status: Exclude<Hist
 }
 
 export function restoreHistoryQuery(entry: ExecutionHistoryEntry, id = crypto.randomUUID()): QueryDocument {
+  // Historical DSL already has the actual absolute boundaries. Never restore moving-time management.
   return {
     id, connectionId: entry.snapshot.connectionId, index: entry.snapshot.index,
     dsl: entry.snapshot.rawDsl, name: entry.name, revision: 0, resultView: 'table',
@@ -210,11 +214,12 @@ function visualDraft(value: unknown, dsl: string): boolean {
       && member(problem.code, PROBLEMS) && (problem.conditionId === undefined || id(problem.conditionId)));
 }
 function validDocument(value: unknown): value is unknown & QueryDocument {
-  return shape(value, ['id', 'connectionId', 'name', 'index', 'dsl', 'revision', 'resultView'], ['parameters', 'dataView'])
+  return shape(value, ['id', 'connectionId', 'name', 'index', 'dsl', 'revision', 'resultView'], ['parameters', 'dataView', 'timeRange'])
     && id(value.id) && nullableId(value.connectionId) && name(value.name) && text(value.index, MAX_ENTRY_INDEX_BYTES)
     && text(value.dsl, MAX_ENTRY_DSL_BYTES) && integer(value.revision) && member(value.resultView, ['table', 'json'])
     && (!Object.hasOwn(value, 'parameters') || parseQueryParameters(value.parameters) !== null)
-    && (!Object.hasOwn(value, 'dataView') || parseDataViewSelection(value.dataView, value.connectionId, value.index) !== null);
+    && (!Object.hasOwn(value, 'dataView') || parseDataViewSelection(value.dataView, value.connectionId, value.index) !== null)
+    && (!Object.hasOwn(value, 'timeRange') || parseQueryTimeRange(value.timeRange, value.connectionId, value.index, value.dsl) !== null);
 }
 function validWorkspace(value: unknown): boolean {
   if (value === null) return true;
@@ -232,7 +237,7 @@ function validWorkspace(value: unknown): boolean {
       const target = JSON.stringify([tab.document.connectionId, tab.document.index]);
       if (tab.document.connectionId === null || tab.document.index.trim() === '' || tab.document.index !== tab.document.index.trim()
         || tab.editorMode !== 'dsl' || tab.visualDraft !== null || tab.document.parameters !== undefined
-        || tab.document.dataView !== undefined || targets.has(target)) return false;
+        || tab.document.dataView !== undefined || tab.document.timeRange !== undefined || targets.has(target)) return false;
       targets.add(target);
     }
   }
@@ -242,17 +247,21 @@ function validWorkspace(value: unknown): boolean {
     && utf8ByteLength(JSON.stringify(value)) <= MAX_WORKSPACE_BYTES;
 }
 function validSnapshot(value: unknown): boolean {
-  return shape(value, ['requestId', 'queryId', 'connectionId', 'index', 'rawDsl', 'revision', 'startedAt'], ['dataView'])
+  return shape(value, ['requestId', 'queryId', 'connectionId', 'index', 'rawDsl', 'revision', 'startedAt'], ['dataView', 'timeRange'])
     && id(value.requestId) && id(value.queryId) && id(value.connectionId) && text(value.index, MAX_ENTRY_INDEX_BYTES)
     && value.index.trim() !== '' && text(value.rawDsl, MAX_ENTRY_DSL_BYTES) && integer(value.revision) && timestamp(value.startedAt)
-    && (!Object.hasOwn(value, 'dataView') || parseDataViewSelection(value.dataView, value.connectionId, value.index) !== null);
+    && (!Object.hasOwn(value, 'dataView') || parseDataViewSelection(value.dataView, value.connectionId, value.index) !== null)
+    && (!Object.hasOwn(value, 'timeRange') || parseExecutionTimeRange(value.timeRange, value.rawDsl) !== null);
 }
 function validHistory(value: unknown): value is unknown & ExecutionHistoryEntry {
   if (!shape(value, ['snapshot', 'name', 'kind', 'status', 'finishedAt', 'errorCode'])
     || !validSnapshot(value.snapshot) || !name(value.name) || !member(value.kind, ['query', 'index', 'continuation'])
     || !member(value.status, ['running', 'success', 'partial', 'failed', 'cancelled', 'interrupted'])) return false;
   const pending = value.status === 'running' || value.status === 'interrupted';
-  return (value.kind !== 'index' || (value.snapshot as ExecutionSnapshot).dataView === undefined)
+  const snapshot = value.snapshot as ExecutionSnapshot;
+  return (value.kind !== 'index' || snapshot.dataView === undefined && snapshot.timeRange === undefined)
+    && (snapshot.timeRange === undefined || (value.kind === 'continuation'
+      ? snapshot.timeRange.bounds.resolvedAt <= snapshot.startedAt : snapshot.timeRange.bounds.resolvedAt === snapshot.startedAt))
     && (pending ? value.finishedAt === null : timestamp(value.finishedAt))
     && (value.errorCode === null || (typeof value.errorCode === 'string' && /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(value.errorCode)))
     && (value.status === 'failed' ? value.errorCode !== null : value.status === 'cancelled' || value.errorCode === null)

@@ -2,6 +2,7 @@ import { validateQueryDsl, type QueryDslErrorCode } from './query-dsl';
 import { DATA_PREVIEW_DSL } from './query-pagination';
 import type { QueryParameters } from './query-parameters';
 import { freezeDataViewSelection, parseDataViewSelection, type DataViewSelection } from './data-views';
+import { freezeTimeRange, parseQueryTimeRange, type ExecutionTimeRange, type QueryTimeRange } from './query-time-range';
 
 export interface QueryDocument {
   readonly id: string;
@@ -13,6 +14,7 @@ export interface QueryDocument {
   resultView: 'table' | 'json';
   parameters?: QueryParameters;
   dataView?: DataViewSelection;
+  timeRange?: QueryTimeRange;
 }
 
 export interface ExecutionSnapshot {
@@ -24,6 +26,7 @@ export interface ExecutionSnapshot {
   readonly revision: number;
   readonly startedAt: string;
   readonly dataView?: DataViewSelection;
+  readonly timeRange?: ExecutionTimeRange;
 }
 
 export type ExecutionState =
@@ -41,7 +44,7 @@ export function createQuery(connectionId: string | null, view: QueryDocument['re
   };
 }
 
-export type SnapshotRejectionCode = 'noConnection' | 'invalidIndex' | 'invalidTimestamp' | 'invalidDataView';
+export type SnapshotRejectionCode = 'noConnection' | 'invalidIndex' | 'invalidTimestamp' | 'invalidDataView' | 'invalidTimeRange';
 
 export interface SnapshotRejection {
   readonly code: QueryDslErrorCode | SnapshotRejectionCode;
@@ -50,7 +53,7 @@ export interface SnapshotRejection {
 }
 
 /** Contract version of the DSL validation/format rules a validated snapshot was built with. */
-export const QUERY_DSL_CONTRACT_VERSION = 3;
+export const QUERY_DSL_CONTRACT_VERSION = 4;
 
 export interface ValidatedExecutionSnapshot extends ExecutionSnapshot {
   readonly dslContractVersion: number;
@@ -79,28 +82,33 @@ function snapshotFields(
   connectionId: string,
   requestId: string,
   now: Date,
+  resolved: { readonly dsl: string; readonly timeRange?: ExecutionTimeRange },
 ): ExecutionSnapshot {
   return {
     requestId, queryId: query.id, connectionId, index: query.index,
-    rawDsl: query.dsl, revision: query.revision, startedAt: now.toISOString(),
+    rawDsl: resolved.dsl, revision: query.revision, startedAt: now.toISOString(),
     ...(query.dataView === undefined ? {} : { dataView: freezeDataViewSelection(query.dataView) }),
+    ...(resolved.timeRange === undefined ? {} : { timeRange: resolved.timeRange }),
   };
 }
 
 /**
- * Freeze one execution: verbatim DSL, index scope and connection ownership are captured
- * by value, so later draft edits or a connection switch cannot rebind this snapshot.
+ * Freeze one execution: only an explicitly managed time clause is resolved. Everything else
+ * keeps its tokens, index scope and connection ownership.
  */
 export function createSnapshot(query: QueryDocument, requestId: string, now: Date): ExecutionSnapshot {
   const gate = gateSnapshot(query);
   if (!gate.ok) throw new Error(gate.code);
-  return Object.freeze(snapshotFields(query, gate.connectionId, requestId, now));
+  if (Number.isNaN(now.getTime())) throw new RangeError('invalidTimestamp');
+  const resolved = freezeTimeRange(query, now);
+  if (!resolved.ok) throw new Error('invalidTimeRange');
+  return Object.freeze(snapshotFields(query, gate.connectionId, requestId, now, resolved));
 }
 
 /**
  * Versioned execution gate: rejects an unusable DSL draft, an unbound target or an
  * invalid execution timestamp as a structured result instead of throwing, and stamps the
- * DSL contract version used. The draft text itself is never rewritten here.
+ * DSL contract version used. Managed relative time freezes at this instant; the draft stays intact.
  */
 export function createValidatedSnapshot(query: QueryDocument, requestId: string, now: Date): ValidatedSnapshot {
   const validation = validateQueryDsl(query.dsl);
@@ -108,10 +116,12 @@ export function createValidatedSnapshot(query: QueryDocument, requestId: string,
   const gate = gateSnapshot(query);
   if (!gate.ok) return { ok: false, error: { code: gate.code } };
   if (Number.isNaN(now.getTime())) return { ok: false, error: { code: 'invalidTimestamp' } };
+  const resolved = freezeTimeRange(query, now);
+  if (!resolved.ok) return { ok: false, error: { code: 'invalidTimeRange' } };
   return {
     ok: true,
     snapshot: Object.freeze({
-      ...snapshotFields(query, gate.connectionId, requestId, now),
+      ...snapshotFields(query, gate.connectionId, requestId, now, resolved),
       dslContractVersion: QUERY_DSL_CONTRACT_VERSION,
     }),
   };
@@ -188,7 +198,7 @@ export function updateWorkspaceDocument(
       if (tab.document.id !== id) return tab;
       // An index tab cannot be rebound by a generic editor update.
       const allowed: QueryDocumentPatch = tab.kind === 'index' ? (patch.resultView ? { resultView: patch.resultView } : {}) : patch;
-      const { dataView, ...fields } = allowed;
+      const { dataView, timeRange, ...fields } = allowed;
       const next = { ...tab.document, ...fields };
       if (dataView === null || (dataView === undefined && next.index !== tab.document.index)) delete next.dataView;
       else if (dataView !== undefined) {
@@ -196,27 +206,36 @@ export function updateWorkspaceDocument(
         if (!selected) return tab;
         next.dataView = selected;
       }
+      if (timeRange === null || timeRange === undefined && (next.dsl !== tab.document.dsl || next.index !== tab.document.index)) {
+        delete next.timeRange;
+      } else if (timeRange !== undefined) {
+        const parsed = parseQueryTimeRange(timeRange, next.connectionId, next.index, next.dsl);
+        if (!parsed) return tab;
+        next.timeRange = parsed;
+      }
       const viewChanged = JSON.stringify(next.dataView) !== JSON.stringify(tab.document.dataView);
-      const changed = viewChanged || Object.entries(fields).some(([key, value]) => tab.document[key as keyof QueryDocument] !== value);
+      const timeChanged = JSON.stringify(next.timeRange) !== JSON.stringify(tab.document.timeRange);
+      const changed = viewChanged || timeChanged || Object.entries(fields).some(([key, value]) => tab.document[key as keyof QueryDocument] !== value);
       if (!changed) return tab;
       const revised = (allowed.dsl !== undefined && allowed.dsl !== tab.document.dsl)
         || (allowed.index !== undefined && allowed.index !== tab.document.index)
         || (allowed.name !== undefined && allowed.name !== tab.document.name)
         || (allowed.parameters !== undefined && JSON.stringify(allowed.parameters) !== JSON.stringify(tab.document.parameters))
-        || viewChanged;
+        || viewChanged || timeChanged;
       return { ...tab, document: { ...next, revision: tab.document.revision + (revised ? 1 : 0) } };
     }),
   };
 }
 
 export type QueryDocumentPatch = Partial<Pick<QueryDocument, 'name' | 'index' | 'dsl' | 'resultView' | 'parameters'>>
-  & { dataView?: DataViewSelection | null };
+  & { dataView?: DataViewSelection | null; timeRange?: QueryTimeRange | null };
 
 export function matchesQueryDraft(current: QueryDocument | undefined, expected: QueryDocument): boolean {
   return current !== undefined && current.id === expected.id && current.revision === expected.revision
     && current.connectionId === expected.connectionId && current.index === expected.index && current.dsl === expected.dsl
     && JSON.stringify(current.parameters) === JSON.stringify(expected.parameters)
-    && JSON.stringify(current.dataView) === JSON.stringify(expected.dataView);
+    && JSON.stringify(current.dataView) === JSON.stringify(expected.dataView)
+    && JSON.stringify(current.timeRange) === JSON.stringify(expected.timeRange);
 }
 
 export function closeWorkspaceTab(state: WorkspaceState, id: string): WorkspaceState {

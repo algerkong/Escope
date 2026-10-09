@@ -1,4 +1,4 @@
-import { Bookmark, Braces, Database, FileCheck2, FileDown, History, Layers, LoaderCircle, Play, Plus, Save, Settings, ShieldCheck, Star, TriangleAlert, Undo2, Variable } from 'lucide-react';
+import { Bookmark, Braces, Clock3, Database, FileCheck2, FileDown, History, Layers, LoaderCircle, Play, Plus, Save, Settings, ShieldCheck, Star, TriangleAlert, Undo2, Variable } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ConnectionProfile } from '../../domain/connection';
@@ -24,6 +24,8 @@ import { AiChatPanel } from '../ai/AiChatPanel';
 import { QueryLibraryDialog, SaveDraftDialog, useQueryLibrary, type SaveDraftResult } from './QueryLibrary';
 import { QueryParametersDialog } from './QueryParametersDialog';
 import { RuntimeFieldsDialog } from './RuntimeFieldsDialog';
+import { QueryTimeRangeDialog, TimeRangeSummary } from './QueryTimeRangeDialog';
+import { copyQueryTimeRange, validTimeRangeZone } from '../../domain/query-time-range';
 import type { FieldCatalog } from '../../domain/resource';
 import { QueryExchangeDialog } from './QueryExchangeDialog';
 import { createQueryExchangeService, type QueryExchangeService } from '../../services/query-exchange';
@@ -117,6 +119,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const [saveDraftOpen, setSaveDraftOpen] = useState(false);
   const [parameterSource, setParameterSource] = useState<QueryDocument | null>(null);
   const [runtimeSource, setRuntimeSource] = useState<{ query: QueryDocument; endpoint: string; catalog?: FieldCatalog } | null>(null);
+  const [timeSource, setTimeSource] = useState<{ query: QueryDocument; endpoint: string; catalog?: FieldCatalog; initialTimeZone: string } | null>(null);
   const [savedEntryIds, setSavedEntryIds] = useState<Record<string, string>>({});
   const [exportSource, setExportSource] = useState<SnapshotExportSource | null>(null);
   const [exportVisible, setExportVisible] = useState(false);
@@ -304,7 +307,8 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const rejectionText = (code: SnapshotRejection['code']) => code.startsWith('dsl') ? t(`query:${code}`)
     : code === 'noConnection' ? t('queryLive:runNeedsConnection')
       : code === 'invalidIndex' ? t('queryLive:runNeedsIndex')
-        : code === 'invalidDataView' ? t('dataViews:invalidSelection') : t('errors:unexpected');
+        : code === 'invalidDataView' ? t('dataViews:invalidSelection')
+          : code === 'invalidTimeRange' ? t('timeRange:invalidBinding') : t('errors:unexpected');
 
   // The palette entry stays owned by the App; only its action and state come from here.
   const runRef = useRef<() => void>(() => {});
@@ -423,6 +427,16 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
             onClick={() => setSaveDraftOpen(true)} />
           <IconButton icon={Variable} label={t('queryParameters:open')} disabled={saveBlockedByVisual || restoring}
             onClick={() => setParameterSource(query)} />
+          <IconButton icon={Clock3} label={t('timeRange:open')} disabled={saveBlockedByVisual || restoring || !target || !active || !query.index.trim()}
+            onClick={() => {
+              if (!target || !active || restoring || saveBlockedByVisual) return;
+              const zone = preferences.timeZone === 'system' ? Intl.DateTimeFormat().resolvedOptions().timeZone : preferences.timeZone;
+              setTimeSource({ query: { ...query,
+                ...(query.timeRange === undefined ? {} : { timeRange: copyQueryTimeRange(query.timeRange) }),
+                ...(query.dataView === undefined ? {} : { dataView: selectDataView(query.dataView.definition) }) },
+              endpoint: target.endpoint, initialTimeZone: validTimeRangeZone(zone) ? zone : 'UTC',
+              catalog: queryFields.status === 'ready' && !queryFields.refreshing && !queryFields.refreshError ? queryFields.data : undefined });
+            }} />
           {linkedEntry ? <IconButton className={`qlib-star${linkedEntry.favorite ? ' active' : ''}`} icon={Star}
             aria-pressed={linkedEntry.favorite} label={t(linkedEntry.favorite ? 'queryLibrary:favoriteRemove' : 'queryLibrary:favoriteAdd')}
             onClick={() => library.setFavorite(linkedEntry.id, !linkedEntry.favorite)} /> : null}
@@ -448,6 +462,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
             if (definition && (definition.connectionId !== query.connectionId || !target)) return;
             updateQuery(query.id, definition ? { index: definition.index, dataView: selectDataView(definition) } : { dataView: null }, query);
           }} />
+        {query.timeRange ? <TimeRangeSummary time={query.timeRange} managed /> : null}
         <div hidden={editorMode !== 'visual'}>
           {editorMode === 'visual' || editorModes[query.id] !== undefined ? <VisualQueryEditor key={query.id} rawDsl={query.dsl}
             fields={queryFields.status === 'ready' ? queryFields.data.fields : []}
@@ -478,6 +493,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
           {currentCheck && !currentCheck.error ? <span role="status">{t('query:dslValid')}</span> : null}
           <span className="status-spacer" /><span>JSON</span><span>UTF-8</span></div>
       </section> : null}
+      {'snapshot' in execution && execution.snapshot.timeRange ? <TimeRangeSummary time={execution.snapshot.timeRange} /> : null}
       <QueryResults kind={showingQuery ? 'query' : 'preview'} query={query} entry={entry}
         available={available} stale={stale} endpointChanged={endpointChanged} documentIds={documentIds} active={active} wrapJson={preferences.wrapJson}
         canRun={canRun} grouping={preferences.grouping} exportService={libraryService}
@@ -536,6 +552,18 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
         if (!active || restoring || !profiles.some((profile) => profile.id === source.connectionId && profile.endpoint === runtimeSource.endpoint)
           || !matchesQueryDraft(state.tabs.find((item) => item.kind === 'query' && item.document.id === source.id)?.document, source)) return false;
         if (updateQuery(source.id, { dsl }, source) === false) return false;
+        if (recovery) recovery.setEditorMode(source.id, 'dsl');
+        else setEditorModes((current) => ({ ...current, [source.id]: 'dsl' }));
+        return true;
+      }} /> : null}
+    {timeSource && active ? <QueryTimeRangeDialog source={timeSource.query}
+      current={state.tabs.find((item) => item.kind === 'query' && item.document.id === timeSource.query.id)?.document}
+      catalog={timeSource.catalog} initialTimeZone={timeSource.initialTimeZone}
+      targetCurrent={!restoring && profiles.some((profile) => profile.id === timeSource.query.connectionId && profile.endpoint === timeSource.endpoint)}
+      onClose={() => setTimeSource(null)} onCommit={(source, patch) => {
+        if (!active || restoring || !profiles.some((profile) => profile.id === source.connectionId && profile.endpoint === timeSource.endpoint)
+          || !matchesQueryDraft(state.tabs.find((item) => item.kind === 'query' && item.document.id === source.id)?.document, source)) return false;
+        if (updateQuery(source.id, patch, source) === false) return false;
         if (recovery) recovery.setEditorMode(source.id, 'dsl');
         else setEditorModes((current) => ({ ...current, [source.id]: 'dsl' }));
         return true;

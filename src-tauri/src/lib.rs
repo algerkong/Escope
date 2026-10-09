@@ -17,6 +17,7 @@ mod query;
 mod query_exchange;
 mod query_export;
 mod query_parameters;
+mod query_time_range;
 mod read_only;
 mod resources;
 mod runtime_fields;

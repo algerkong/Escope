@@ -2,6 +2,7 @@ import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { createQuery } from '../../src/domain/query';
 import { selectDataView } from '../../src/domain/data-views';
+import { previewTimeRange, type TimeRangeDefinition } from '../../src/domain/query-time-range';
 import { DATA_PREVIEW_DSL, supportsSnapshotPaging } from '../../src/domain/query-pagination';
 import { useQueryExecutions } from '../../src/features/query/useQueryExecutions';
 import type { ExecutionHistoryEntry } from '../../src/domain/workspace-recovery';
@@ -52,6 +53,78 @@ describe('snapshot paging eligibility', () => {
 });
 
 describe('execution history events', () => {
+  it('freezes time before PIT open, reuses it for all pages, and resolves again only on a new explicit run', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const definition: TimeRangeDefinition = { field: '@timestamp', fieldType: 'date', timeZone: 'Asia/Shanghai',
+        range: { kind: 'relative', amount: 15, unit: 'minutes' } };
+      const preview = previewTimeRange(query, definition, new Date('2026-10-09T11:00:00.000Z'));
+      if (!preview.ok) throw new Error(preview.code);
+      const draft = { ...query, dsl: preview.dsl, timeRange: preview.timeRange };
+      const api = backend();
+      const opening = deferred<PitOpenResponse>();
+      api.openPit.mockReturnValueOnce(opening.promise);
+      const history = vi.fn<(entry: ExecutionHistoryEntry) => void>();
+      const { result } = renderHook(() => useQueryExecutions(api, history));
+      vi.setSystemTime(new Date('2026-10-09T12:00:00.123Z'));
+      let task!: ReturnType<typeof result.current.run>;
+      act(() => { task = result.current.run(draft, endpoint); });
+      expect(api.execute).not.toHaveBeenCalled();
+      expect(history.mock.calls[0]![0].snapshot.timeRange?.bounds.to).toBe('2026-10-09T12:00:00.123000000Z');
+      vi.setSystemTime(new Date('2026-10-09T14:00:00.456Z'));
+      await act(async () => {
+        opening.resolve({ ...api.openPit.mock.calls[0]![0], endpoint, pitId: 'time-pit' });
+        await task;
+      });
+      const executedDsl = api.execute.mock.calls[0]![0].rawDsl;
+      expect(executedDsl).toContain('2026-10-09T11:45:00.123000000Z');
+      expect(executedDsl).not.toContain('2026-10-09T14:00:00');
+      expect(executedDsl).toContain('9007199254740993');
+      api.execute.mockImplementationOnce(async (request) => response(request, 'second', 2));
+      await act(async () => { await result.current.loadMore({ ...draft, dsl: '{}', timeRange: undefined }); });
+      expect(api.execute.mock.calls[1]![0].rawDsl).toBe(executedDsl);
+      const continuation = history.mock.calls[3]![0];
+      expect(continuation.snapshot.startedAt).toBe('2026-10-09T14:00:00.456Z');
+      expect(continuation.snapshot.timeRange?.bounds.resolvedAt).toBe('2026-10-09T12:00:00.123Z');
+      expect(continuation.snapshot.timeRange).not.toBe(history.mock.calls[0]![0].snapshot.timeRange);
+      vi.setSystemTime(new Date('2026-10-10T12:00:00.789Z'));
+      await act(async () => { await result.current.run(draft, endpoint); });
+      expect(api.execute.mock.calls[2]![0].rawDsl).toContain('2026-10-10T11:45:00.789000000Z');
+      expect(api.openPit).toHaveBeenCalledTimes(2);
+      expect(api.closePit).toHaveBeenCalledWith(expect.objectContaining({ pitId: 'time-pit' }));
+      expect(draft.dsl).toBe(preview.dsl);
+      expect(JSON.stringify([...api.execute.mock.calls, ...api.openPit.mock.calls])).not.toMatch(/timeRange|timeZone|binding|resolvedAt/);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('refuses mismatched managed ranges and locked index metadata before requesting a PIT or recording history', async () => {
+    const preview = previewTimeRange(query, { field: '@timestamp', fieldType: 'date', timeZone: 'UTC',
+      range: { kind: 'relative', amount: 1, unit: 'hours' } }, new Date());
+    if (!preview.ok) throw new Error(preview.code);
+    const draft = { ...query, dsl: preview.dsl, timeRange: preview.timeRange };
+    const api = backend();
+    const history = vi.fn<(entry: ExecutionHistoryEntry) => void>();
+    const { result } = renderHook(() => useQueryExecutions(api, history));
+    await act(async () => {
+      expect(await result.current.run(draft, endpoint, 'index')).toEqual({ code: 'invalidTimeRange' });
+      expect(await result.current.run({ ...draft, index: 'other' }, endpoint)).toEqual({ code: 'invalidTimeRange' });
+      expect(await result.current.run({ ...draft, dsl: query.dsl }, endpoint)).toEqual({ code: 'invalidTimeRange' });
+    });
+    expect(api.execute).not.toHaveBeenCalled();
+    expect(api.openPit).not.toHaveBeenCalled();
+    expect(history).not.toHaveBeenCalled();
+  });
+
+  it('keeps hand-written date math verbatim when no time range was explicitly applied', async () => {
+    const api = backend();
+    const { result } = renderHook(() => useQueryExecutions(api));
+    const draft = { ...query, dsl: '{"query":{"range":{"@timestamp":{"gte":"now-15m","lt":"now"}}},"size":1}' };
+    await act(async () => { await result.current.run(draft, endpoint); });
+    expect(api.execute.mock.calls[0]![0].rawDsl).toBe(draft.dsl);
+    const state = result.current.entries[query.id]!.state;
+    expect('snapshot' in state && state.snapshot.timeRange).toBeUndefined();
+  });
+
   it('uses executed runtime mappings for result columns, continuation and history, never current unapplied definitions', async () => {
     const api = backend();
     const history = vi.fn<(entry: ExecutionHistoryEntry) => void>();

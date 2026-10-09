@@ -146,6 +146,7 @@ export function useQueryExecutions(backend: QueryBackend, onHistory?: (entry: Ex
     kind: 'query' | 'index' = 'query'): Promise<SnapshotRejection | null> => {
     if (inFlight.current.has(query.id) || !alive.current) return null;
     if (kind === 'index' && query.dataView !== undefined) return { code: 'invalidDataView' };
+    if (kind === 'index' && query.timeRange !== undefined) return { code: 'invalidTimeRange' };
     const validated = createValidatedSnapshot(query, crypto.randomUUID(), new Date());
     if (!validated.ok) return validated.error;
     const snapshot = validated.snapshot;

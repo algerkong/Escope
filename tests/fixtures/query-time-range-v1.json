@@ -1,0 +1,50 @@
+{
+  "draft": {
+    "id": "time-query",
+    "connectionId": "3f2f2c9a-5b1e-4c6d-9a70-1b2c3d4e5f60",
+    "name": "Time fixture",
+    "index": "orders",
+    "dsl": "{\"query\":{\"bool\":{\"must\":[{\"term\":{\"sequence\":9007199254740993}}],\"filter\":[{\"range\":{\"@timestamp\":{\"gte\":\"2026-10-09T11:45:00.123000000Z\",\"lt\":\"2026-10-09T12:00:00.123000000Z\",\"format\":\"strict_date_optional_time_nanos\"}}}]}},\"size\":25}",
+    "revision": 1,
+    "resultView": "table",
+    "timeRange": {
+      "version": 1,
+      "definition": {
+        "field": "@timestamp",
+        "fieldType": "date",
+        "timeZone": "Asia/Shanghai",
+        "range": { "kind": "relative", "amount": 15, "unit": "minutes" }
+      },
+      "bounds": {
+        "resolvedAt": "2026-10-09T12:00:00.123Z",
+        "from": "2026-10-09T11:45:00.123000000Z",
+        "to": "2026-10-09T12:00:00.123000000Z"
+      },
+      "binding": { "connectionId": "3f2f2c9a-5b1e-4c6d-9a70-1b2c3d4e5f60", "index": "orders" },
+      "hadQuery": true
+    }
+  },
+  "snapshot": {
+    "requestId": "time-request",
+    "queryId": "time-query",
+    "connectionId": "3f2f2c9a-5b1e-4c6d-9a70-1b2c3d4e5f60",
+    "index": "orders",
+    "rawDsl": "{\"query\":{\"bool\":{\"must\":[{\"term\":{\"sequence\":9007199254740993}}],\"filter\":[{\"range\":{\"@timestamp\":{\"gte\":\"2026-10-09T12:15:00.456000000Z\",\"lt\":\"2026-10-09T12:30:00.456000000Z\",\"format\":\"strict_date_optional_time_nanos\"}}}]}},\"size\":25}",
+    "revision": 1,
+    "startedAt": "2026-10-09T12:30:00.456Z",
+    "timeRange": {
+      "version": 1,
+      "definition": {
+        "field": "@timestamp",
+        "fieldType": "date",
+        "timeZone": "Asia/Shanghai",
+        "range": { "kind": "relative", "amount": 15, "unit": "minutes" }
+      },
+      "bounds": {
+        "resolvedAt": "2026-10-09T12:30:00.456Z",
+        "from": "2026-10-09T12:15:00.456000000Z",
+        "to": "2026-10-09T12:30:00.456000000Z"
+      }
+    }
+  }
+}

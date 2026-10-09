@@ -35,6 +35,7 @@ export function QueryExchangeDialog({ mode, library, profiles, service, onClose 
   const preview = useMemo(() => bundle === null ? '' : JSON.stringify(bundle, null, 2), [bundle]);
   const [mappings, setMappings] = useState<ConnectionMapping[]>([]);
   const [reviewed, setReviewed] = useState(false);
+  const [timeReviewed, setTimeReviewed] = useState(false);
   const [outcome, setOutcome] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -43,6 +44,7 @@ export function QueryExchangeDialog({ mode, library, profiles, service, onClose 
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const importing = mode === 'import';
+  const dropsManagedTime = !importing && base.entries.some((entry) => selected.includes(entry.id) && entry.timeRange !== undefined);
   const finished = outcome === 'imported' || outcome === 'sessionImported';
   let mappingError: string | null = null;
   if (importing && bundle) {
@@ -50,7 +52,7 @@ export function QueryExchangeDialog({ mode, library, profiles, service, onClose 
   }
   const targetChanged = mappingError === 'exchangeTargetChanged';
   const setSelection = (ids: string[]) => {
-    setSelected(ids); setBundle(null); setReviewed(false); setOutcome(null); setError(null);
+    setSelected(ids); setBundle(null); setReviewed(false); setTimeReviewed(false); setOutcome(null); setError(null);
   };
   const reportError = (failure: unknown) => {
     const code = errorCode(failure);
@@ -89,7 +91,7 @@ export function QueryExchangeDialog({ mode, library, profiles, service, onClose 
         <button type="button" className="secondary compact-button" disabled={busy || selected.length === 0} onClick={() => {
           try {
             // Only ID/displayName are read by the builder. Endpoint/auth objects never enter the bundle.
-            setBundle(buildQueryExchange(base, selected, sourceProfiles)); setError(null); setReviewed(false); setOutcome(null);
+            setBundle(buildQueryExchange(base, selected, sourceProfiles)); setError(null); setReviewed(false); setTimeReviewed(false); setOutcome(null);
           } catch (failure) { setBundle(null); reportError(failure); }
         }}><Eye size={14} aria-hidden="true" />{t('queryExchange:preview')}</button>
       </> : <div className="qexchange-file">
@@ -135,6 +137,8 @@ export function QueryExchangeDialog({ mode, library, profiles, service, onClose 
         <label className="qexchange-label" htmlFor="qexchange-preview">{t('queryExchange:review')}</label>
         <textarea className="qexchange-preview" id="qexchange-preview" readOnly spellCheck={false} value={preview} />
         <span className="muted small">{t('queryExchange:scope')}</span>
+        {dropsManagedTime ? <label className="qexchange-check"><input type="checkbox" checked={timeReviewed} disabled={busy}
+          onChange={(event) => setTimeReviewed(event.target.checked)} />{t('queryExchange:timeReviewed')}</label> : null}
         <label className="qexchange-check"><input type="checkbox" checked={reviewed} disabled={busy || finished}
           onChange={(event) => setReviewed(event.target.checked)} />{t(importing ? 'queryExchange:mapped' : 'queryExchange:reviewed')}</label>
       </> : null}
@@ -144,9 +148,9 @@ export function QueryExchangeDialog({ mode, library, profiles, service, onClose 
       {busy ? <span className="qexchange-busy" role="status"><LoaderCircle size={14} className="spin" aria-hidden="true" />{t('queryExchange:busy')}</span> : null}
       <div className="dialog-actions">
         <button type="button" className="secondary" disabled={busy} onClick={close}>{t('close')}</button>
-        <button type="button" className="primary" disabled={busy || !bundle || !reviewed || finished || (importing && mappingError !== null)}
+        <button type="button" className="primary" disabled={busy || !bundle || !reviewed || dropsManagedTime && !timeReviewed || finished || (importing && mappingError !== null)}
           onClick={() => {
-            if (!bundle || !reviewed) return;
+            if (!bundle || !reviewed || dropsManagedTime && !timeReviewed) return;
             const reviewedBundle = bundle;
             void perform(async () => {
               if (importing) {

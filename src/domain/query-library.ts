@@ -2,6 +2,7 @@ import { createScanner } from 'jsonc-parser';
 import type { QueryDocument } from './query';
 import { parseDataViewSelection, selectDataView, type DataViewSelection } from './data-views';
 import { parametersPayload, parseQueryParameters, type QueryParameters } from './query-parameters';
+import { copyQueryTimeRange, parseQueryTimeRange, type QueryTimeRange } from './query-time-range';
 import { items, parseRawJson, property, rawTextOf, type ResultColumn, type ResultHit } from './query-result';
 
 /**
@@ -46,6 +47,7 @@ export interface SavedQueryEntry {
   readonly updatedAt: string;
   readonly parameters?: QueryParameters;
   readonly dataView?: DataViewSelection;
+  readonly timeRange?: QueryTimeRange;
 }
 
 export interface SavedQueryLibrary {
@@ -55,7 +57,7 @@ export interface SavedQueryLibrary {
 
 export type EntryLimitCode =
   | 'tooManyEntries' | 'invalidEntryId' | 'nameTooLong' | 'indexTooLarge'
-  | 'dslTooLarge' | 'invalidTimestamp' | 'connectionIdTooLong' | 'invalidParameters' | 'invalidDataView';
+  | 'dslTooLarge' | 'invalidTimestamp' | 'connectionIdTooLong' | 'invalidParameters' | 'invalidDataView' | 'invalidTimeRange';
 
 const ENTRY_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 const UPDATED_AT_PATTERN = /^[0-9A-Za-z:.+-]+$/;
@@ -91,6 +93,7 @@ export function entryFromDocument(document: QueryDocument, options: {
     updatedAt: options.now.toISOString(),
     ...(document.parameters === undefined ? {} : { parameters: parametersPayload(document.parameters) }),
     ...(document.dataView === undefined ? {} : { dataView: selectDataView(document.dataView.definition) }),
+    ...(document.timeRange === undefined ? {} : { timeRange: copyQueryTimeRange(document.timeRange) }),
   };
 }
 
@@ -110,6 +113,7 @@ export function documentFromEntry(entry: SavedQueryEntry, id: string = crypto.ra
     resultView: entry.resultView,
     ...(entry.parameters === undefined ? {} : { parameters: parametersPayload(entry.parameters) }),
     ...(entry.dataView === undefined ? {} : { dataView: selectDataView(entry.dataView.definition) }),
+    ...(entry.timeRange === undefined ? {} : { timeRange: copyQueryTimeRange(entry.timeRange) }),
   };
 }
 
@@ -149,6 +153,7 @@ export function entryLimitViolation(library: SavedQueryLibrary, entry: SavedQuer
   if (entry.updatedAt.length > MAX_UPDATED_AT_CHARS || !UPDATED_AT_PATTERN.test(entry.updatedAt)) return 'invalidTimestamp';
   if (entry.parameters !== undefined && parseQueryParameters(entry.parameters) === null) return 'invalidParameters';
   if (entry.dataView !== undefined && parseDataViewSelection(entry.dataView, entry.connectionId, entry.index) === null) return 'invalidDataView';
+  if (entry.timeRange !== undefined && parseQueryTimeRange(entry.timeRange, entry.connectionId, entry.index, entry.dsl) === null) return 'invalidTimeRange';
   return null;
 }
 
@@ -177,6 +182,7 @@ export function libraryPayload(library: SavedQueryLibrary): {
       dsl: entry.dsl, resultView: entry.resultView, favorite: entry.favorite, updatedAt: entry.updatedAt,
       ...(entry.parameters === undefined ? {} : { parameters: parametersPayload(entry.parameters) }),
       ...(entry.dataView === undefined ? {} : { dataView: selectDataView(entry.dataView.definition) }),
+      ...(entry.timeRange === undefined ? {} : { timeRange: copyQueryTimeRange(entry.timeRange) }),
     })),
   };
 }
@@ -200,7 +206,7 @@ function parseEntry(value: unknown): SavedQueryEntry | null {
   if (!isPlainObject(value)) return null;
   const keys = Object.keys(value);
   if (!ENTRY_KEYS.every((key) => keys.includes(key))
-    || keys.some((key) => key !== 'parameters' && key !== 'dataView' && !ENTRY_KEYS.includes(key as typeof ENTRY_KEYS[number]))) return null;
+    || keys.some((key) => key !== 'parameters' && key !== 'dataView' && key !== 'timeRange' && !ENTRY_KEYS.includes(key as typeof ENTRY_KEYS[number]))) return null;
   const { id, name, connectionId, index, dsl, resultView, favorite, updatedAt } = value;
   if (typeof id !== 'string' || typeof name !== 'string' || typeof index !== 'string'
     || typeof dsl !== 'string' || typeof updatedAt !== 'string') return null;
@@ -211,8 +217,10 @@ function parseEntry(value: unknown): SavedQueryEntry | null {
   if (parameters === null) return null;
   const dataView = Object.hasOwn(value, 'dataView') ? parseDataViewSelection(value.dataView, connectionId, index) : undefined;
   if (dataView === null) return null;
+  const timeRange = Object.hasOwn(value, 'timeRange') ? parseQueryTimeRange(value.timeRange, connectionId, index, dsl) : undefined;
+  if (timeRange === null) return null;
   return { id, name, connectionId, index, dsl, resultView, favorite, updatedAt,
-    ...(parameters ? { parameters } : {}), ...(dataView ? { dataView } : {}) };
+    ...(parameters ? { parameters } : {}), ...(dataView ? { dataView } : {}), ...(timeRange ? { timeRange } : {}) };
 }
 
 /**

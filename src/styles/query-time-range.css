@@ -1,0 +1,26 @@
+.qtime-review { display: flex; flex-direction: column; gap: 8px; min-width: 0; font-size: .82rem; }
+.qtime-target, .qtime-warning { overflow-wrap: anywhere; }
+.qtime-warning { color: var(--warning); }
+.qtime-fields, .qtime-relative, .qtime-absolute { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; min-width: 0; }
+.qtime-fields > label, .qtime-relative > label, .qtime-absolute > label { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1 1 130px; }
+.qtime-fields > .qtime-field { flex-basis: 180px; }
+.qtime-fields > .qtime-zone { flex-basis: 180px; }
+.qtime-fields input, .qtime-relative input, .qtime-absolute input { width: 100%; min-width: 0; }
+.qtime-absolute > label { flex-basis: 240px; }
+.qtime-absolute input { font-family: var(--code-font); font-size: var(--code-size); }
+.qtime-mode { align-self: start; }
+.qtime-relative > label { flex: 0 1 160px; }
+.qtime-actions { display: flex; justify-content: space-between; gap: 8px; }
+.qtime-checkbox { display: flex; align-items: start; gap: 6px; overflow-wrap: anywhere; }
+.qtime-checkbox input[type="checkbox"] { flex: 0 0 auto; padding: 0; }
+.qtime-preview-bounds { display: grid; grid-template-columns: minmax(90px, auto) minmax(0, 1fr); gap: 4px 8px; margin: 0; }
+.qtime-preview-bounds dt { color: var(--muted); }
+.qtime-preview-bounds dd { margin: 0; overflow-wrap: anywhere; font-family: var(--code-font); }
+.qtime-code { display: block; width: 100%; min-width: 0; min-height: 150px; max-height: 32vh; resize: vertical; padding: 8px; font-family: var(--code-font); font-size: var(--code-size); line-height: 1.5; }
+.qtime-current { margin: 8px 0 0; max-height: 160px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--code-font); font-size: var(--code-size); }
+.qtime-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 6px 0; min-width: 0; font-size: .75rem; color: var(--muted); }
+.qtime-summary > * { min-width: 0; overflow-wrap: anywhere; }
+.qtime-summary > svg { flex: 0 0 13px; }
+.qtime-summary strong { font-weight: 500; }
+.qtime-summary .qtime-boundary { font-family: var(--code-font); }
+.qtime-review .dialog-actions { flex-wrap: wrap; }

@@ -393,6 +393,7 @@ pub(crate) fn import_bundle(
             updated_at: updated_at.clone(),
             parameters: query.parameters,
             data_view: None,
+            time_range: None,
         });
     }
     if serde_json::to_vec(&library).map_err(|_| invalid())?.len()

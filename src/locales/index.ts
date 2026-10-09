@@ -16,6 +16,7 @@ import { enQueryExchange, zhQueryExchange } from './query-exchange';
 import { enQueryExport, zhQueryExport } from './query-export';
 import { enDataViews, zhDataViews } from './data-views';
 import { enRuntimeFields, zhRuntimeFields } from './runtime-fields';
+import { enTimeRange, zhTimeRange } from './query-time-range';
 import { enQueryHistory, enWorkspaceRecovery, zhQueryHistory, zhWorkspaceRecovery } from './workspace-recovery';
 
 export const i18n = i18next.createInstance();
@@ -23,10 +24,10 @@ void i18n.use(initReactI18next).init({
   resources: {
     'zh-CN': { ...zh, queryLive: zhLive, cluster: zhCluster, models: zhModels, aiChat: zhAiChat, visualQuery: zhVisualQuery, resultGrid: zhResultGrid,
       connectionSettings: zhConnectionSettings, connectionAccess: zhConnectionAccess, queryLibrary: zhQueryLibrary, queryParameters: zhQueryParameters, queryExchange: zhQueryExchange,
-      workspaceRecovery: zhWorkspaceRecovery, queryHistory: zhQueryHistory, queryExport: zhQueryExport, dataViews: zhDataViews, runtimeFields: zhRuntimeFields },
+      workspaceRecovery: zhWorkspaceRecovery, queryHistory: zhQueryHistory, queryExport: zhQueryExport, dataViews: zhDataViews, runtimeFields: zhRuntimeFields, timeRange: zhTimeRange },
     'en-US': { ...en, queryLive: enLive, cluster: enCluster, models: enModels, aiChat: enAiChat, visualQuery: enVisualQuery, resultGrid: enResultGrid,
       connectionSettings: enConnectionSettings, connectionAccess: enConnectionAccess, queryLibrary: enQueryLibrary, queryParameters: enQueryParameters, queryExchange: enQueryExchange,
-      workspaceRecovery: enWorkspaceRecovery, queryHistory: enQueryHistory, queryExport: enQueryExport, dataViews: enDataViews, runtimeFields: enRuntimeFields },
+      workspaceRecovery: enWorkspaceRecovery, queryHistory: enQueryHistory, queryExport: enQueryExport, dataViews: enDataViews, runtimeFields: enRuntimeFields, timeRange: enTimeRange },
   },
   lng: navigator.language.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US',
   fallbackLng: 'en-US',

@@ -6,6 +6,7 @@ pub mod connection_credentials;
 mod connection_settings;
 mod connection_tls;
 pub mod credentials;
+mod data_views;
 mod error;
 mod model_api_key;
 pub mod model_credentials;
@@ -376,6 +377,8 @@ pub fn run() {
             query_export::query_export_cancel,
             workspace_recovery::workspace_recovery_load,
             workspace_recovery::workspace_recovery_save,
+            data_views::data_views_load,
+            data_views::data_views_save,
             ai::ai_chat,
             ai::ai_chat_cancel,
             models::models_load,

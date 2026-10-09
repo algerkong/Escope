@@ -227,6 +227,7 @@ const LIMIT_MESSAGE_KEYS: Record<string, string> = {
   connectionIdTooLong: 'limitConnectionIdTooLong',
   libraryUnavailable: 'libraryUnavailable',
   invalidParameters: 'limitInvalidParameters',
+  invalidDataView: 'limitInvalidDataView',
 };
 
 function limitMessage(t: TFunction, code: string): string {

@@ -3,6 +3,7 @@ import { INITIAL_RESULT_GRID_STATE, MAX_COLUMN_WIDTH, MIN_COLUMN_WIDTH, ROW_COLU
 import { utf8ByteLength, MAX_ENTRY_DSL_BYTES, MAX_ENTRY_INDEX_BYTES } from './query-library';
 import type { VisualForm, VisualBuildProblem } from './visual-query';
 import { parametersPayload, parseQueryParameters } from './query-parameters';
+import { parseDataViewSelection, selectDataView } from './data-views';
 
 export const WORKSPACE_RECOVERY_VERSION = 1;
 export const MAX_WORKSPACE_TABS = 50;
@@ -74,7 +75,8 @@ export function recoveryWorkspace(state: WorkspaceState, previous?: RecoveryWork
       const { id, connectionId, name, index, dsl, revision, resultView } = tab.document;
       return {
         kind: tab.kind, document: { id, connectionId, name, index, dsl, revision, resultView,
-          ...(tab.document.parameters === undefined ? {} : { parameters: parametersPayload(tab.document.parameters) }) },
+          ...(tab.document.parameters === undefined ? {} : { parameters: parametersPayload(tab.document.parameters) }),
+          ...(tab.document.dataView === undefined ? {} : { dataView: selectDataView(tab.document.dataView.definition) }) },
         grid: saved?.grid ?? gridLayout(INITIAL_RESULT_GRID_STATE),
         editorMode: saved?.editorMode ?? 'dsl',
         visualDraft: saved?.visualDraft?.source === dsl ? saved.visualDraft : null,
@@ -206,10 +208,11 @@ function visualDraft(value: unknown, dsl: string): boolean {
       && member(problem.code, PROBLEMS) && (problem.conditionId === undefined || id(problem.conditionId)));
 }
 function validDocument(value: unknown): value is unknown & QueryDocument {
-  return shape(value, ['id', 'connectionId', 'name', 'index', 'dsl', 'revision', 'resultView'], ['parameters'])
+  return shape(value, ['id', 'connectionId', 'name', 'index', 'dsl', 'revision', 'resultView'], ['parameters', 'dataView'])
     && id(value.id) && nullableId(value.connectionId) && name(value.name) && text(value.index, MAX_ENTRY_INDEX_BYTES)
     && text(value.dsl, MAX_ENTRY_DSL_BYTES) && integer(value.revision) && member(value.resultView, ['table', 'json'])
-    && (!Object.hasOwn(value, 'parameters') || parseQueryParameters(value.parameters) !== null);
+    && (!Object.hasOwn(value, 'parameters') || parseQueryParameters(value.parameters) !== null)
+    && (!Object.hasOwn(value, 'dataView') || parseDataViewSelection(value.dataView, value.connectionId, value.index) !== null);
 }
 function validWorkspace(value: unknown): boolean {
   if (value === null) return true;
@@ -226,7 +229,8 @@ function validWorkspace(value: unknown): boolean {
     if (tab.kind === 'index') {
       const target = JSON.stringify([tab.document.connectionId, tab.document.index]);
       if (tab.document.connectionId === null || tab.document.index.trim() === '' || tab.document.index !== tab.document.index.trim()
-        || tab.editorMode !== 'dsl' || tab.visualDraft !== null || tab.document.parameters !== undefined || targets.has(target)) return false;
+        || tab.editorMode !== 'dsl' || tab.visualDraft !== null || tab.document.parameters !== undefined
+        || tab.document.dataView !== undefined || targets.has(target)) return false;
       targets.add(target);
     }
   }

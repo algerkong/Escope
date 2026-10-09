@@ -1,6 +1,7 @@
 import { validateQueryDsl, type QueryDslErrorCode } from './query-dsl';
 import { DATA_PREVIEW_DSL } from './query-pagination';
 import type { QueryParameters } from './query-parameters';
+import { parseDataViewSelection, type DataViewSelection } from './data-views';
 
 export interface QueryDocument {
   readonly id: string;
@@ -11,6 +12,7 @@ export interface QueryDocument {
   revision: number;
   resultView: 'table' | 'json';
   parameters?: QueryParameters;
+  dataView?: DataViewSelection;
 }
 
 export interface ExecutionSnapshot {
@@ -180,24 +182,36 @@ export function updateWorkspaceDocument(
     tabs: state.tabs.map((tab) => {
       if (tab.document.id !== id) return tab;
       // An index tab cannot be rebound by a generic editor update.
-      const allowed = tab.kind === 'index' ? (patch.resultView ? { resultView: patch.resultView } : {}) : patch;
-      const changed = Object.entries(allowed).some(([key, value]) => tab.document[key as keyof QueryDocument] !== value);
+      const allowed: QueryDocumentPatch = tab.kind === 'index' ? (patch.resultView ? { resultView: patch.resultView } : {}) : patch;
+      const { dataView, ...fields } = allowed;
+      const next = { ...tab.document, ...fields };
+      if (dataView === null || (dataView === undefined && next.index !== tab.document.index)) delete next.dataView;
+      else if (dataView !== undefined) {
+        const selected = parseDataViewSelection(dataView, next.connectionId, next.index);
+        if (!selected) return tab;
+        next.dataView = selected;
+      }
+      const viewChanged = JSON.stringify(next.dataView) !== JSON.stringify(tab.document.dataView);
+      const changed = viewChanged || Object.entries(fields).some(([key, value]) => tab.document[key as keyof QueryDocument] !== value);
       if (!changed) return tab;
       const revised = (allowed.dsl !== undefined && allowed.dsl !== tab.document.dsl)
         || (allowed.index !== undefined && allowed.index !== tab.document.index)
         || (allowed.name !== undefined && allowed.name !== tab.document.name)
-        || (allowed.parameters !== undefined && JSON.stringify(allowed.parameters) !== JSON.stringify(tab.document.parameters));
-      return { ...tab, document: { ...tab.document, ...allowed, revision: tab.document.revision + (revised ? 1 : 0) } };
+        || (allowed.parameters !== undefined && JSON.stringify(allowed.parameters) !== JSON.stringify(tab.document.parameters))
+        || viewChanged;
+      return { ...tab, document: { ...next, revision: tab.document.revision + (revised ? 1 : 0) } };
     }),
   };
 }
 
-export type QueryDocumentPatch = Partial<Pick<QueryDocument, 'name' | 'index' | 'dsl' | 'resultView' | 'parameters'>>;
+export type QueryDocumentPatch = Partial<Pick<QueryDocument, 'name' | 'index' | 'dsl' | 'resultView' | 'parameters'>>
+  & { dataView?: DataViewSelection | null };
 
 export function matchesQueryDraft(current: QueryDocument | undefined, expected: QueryDocument): boolean {
   return current !== undefined && current.id === expected.id && current.revision === expected.revision
     && current.connectionId === expected.connectionId && current.index === expected.index && current.dsl === expected.dsl
-    && JSON.stringify(current.parameters) === JSON.stringify(expected.parameters);
+    && JSON.stringify(current.parameters) === JSON.stringify(expected.parameters)
+    && JSON.stringify(current.dataView) === JSON.stringify(expected.dataView);
 }
 
 export function closeWorkspaceTab(state: WorkspaceState, id: string): WorkspaceState {

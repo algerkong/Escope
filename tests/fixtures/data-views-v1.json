@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "view-orders",
+      "name": "Order events",
+      "connectionId": "11111111-1111-4111-8111-111111111111",
+      "index": "orders-*,archive-orders",
+      "defaultTimeField": "@timestamp"
+    },
+    {
+      "id": "view-audit",
+      "name": "Audit",
+      "connectionId": "22222222-2222-4222-8222-222222222222",
+      "index": "audit",
+      "defaultTimeField": null
+    }
+  ]
+}

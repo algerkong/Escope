@@ -135,7 +135,8 @@ export function parseFieldCaps(raw: string): ResourceParse<FieldCatalog> {
       if (typeName === undefined) return [];
       return [{
         type: textOf(property(body, 'type')) ?? typeName,
-        searchable: boolOf(property(body, 'searchable')) ?? false,
+        searchable: boolOf(property(body, 'searchable')) === true
+          && stringList(property(body, 'non_searchable_indices')).length === 0,
         aggregatable: boolOf(property(body, 'aggregatable')) ?? false,
         metadata: boolOf(property(body, 'metadata_field')) ?? false,
       }];

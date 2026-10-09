@@ -1,5 +1,6 @@
 use crate::connection_tls::CaCertificate;
 use crate::credentials::CredentialRef;
+use crate::data_views::{DataViewLibrary, DataViewRecord};
 use crate::error::AppError;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -10,7 +11,7 @@ use uuid::Uuid;
 
 /// Highest schema version this build understands. A file above it fails closed instead of being
 /// opened with an unknown layout.
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 
 /// Hard upper bound for one credential cleanup batch, so no caller can request unbounded work.
 pub const MAX_CLEANUP_BATCH: usize = 64;
@@ -645,6 +646,7 @@ impl Database {
                 4 => tx.execute_batch(include_str!("../migrations/004_model_credentials.sql"))?,
                 5 => tx.execute_batch(include_str!("../migrations/005_connection_settings.sql"))?,
                 6 => tx.execute_batch(include_str!("../migrations/006_workspace_recovery.sql"))?,
+                7 => tx.execute_batch(include_str!("../migrations/007_data_views.sql"))?,
                 _ => return Err(AppError::new("unsupported")),
             }
             tx.commit()?;
@@ -873,6 +875,60 @@ impl Database {
                 Ok(1)
             }
         }
+    }
+
+    pub(crate) fn data_views(&self) -> Result<DataViewRecord, AppError> {
+        read_data_views(&self.0)
+    }
+
+    /// Validate the stored document and immutable connection ownership under the same CAS lock.
+    /// New definitions require an existing ID; old definitions survive deletion without rebinding.
+    pub(crate) fn save_data_views(
+        &mut self,
+        expected_revision: u64,
+        library: &DataViewLibrary,
+    ) -> Result<u64, AppError> {
+        library.validate()?;
+        if expected_revision >= crate::data_views::MAX_REVISION {
+            return Err(AppError::new("invalidInput"));
+        }
+        let json = serde_json::to_string(library).map_err(|_| AppError::new("invalidInput"))?;
+        let tx = self
+            .0
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let current = read_data_views(&tx)?;
+        if expected_revision != current.revision {
+            return Err(AppError::new("dataViewConflict"));
+        }
+        for entry in &library.entries {
+            if let Some(previous) = current
+                .library
+                .entries
+                .iter()
+                .find(|previous| previous.id == entry.id)
+            {
+                if entry.connection_id != previous.connection_id {
+                    return Err(AppError::new("invalidInput"));
+                }
+            } else {
+                let exists: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM connections WHERE id=?1)",
+                    [&entry.connection_id],
+                    |row| row.get(0),
+                )?;
+                if !exists {
+                    return Err(AppError::new("dataViewConnectionMissing"));
+                }
+            }
+        }
+        let revision = expected_revision + 1;
+        tx.execute(
+            "INSERT INTO data_view_library(singleton,revision,json) VALUES (1,?1,?2)
+             ON CONFLICT(singleton) DO UPDATE SET revision=excluded.revision,json=excluded.json",
+            params![revision, json],
+        )?;
+        tx.commit()?;
+        Ok(revision)
     }
 
     pub fn save_preferences(&self, preferences: Preferences) -> Result<(), AppError> {
@@ -1892,6 +1948,39 @@ fn now() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs() as i64)
         .unwrap_or(0)
+}
+
+fn read_data_views(connection: &Connection) -> Result<DataViewRecord, AppError> {
+    let row = connection
+        .query_row(
+            "SELECT revision,
+           CASE WHEN length(CAST(json AS BLOB)) <= ?1 THEN json ELSE NULL END
+         FROM data_view_library WHERE singleton=1",
+            [crate::data_views::MAX_BYTES as i64],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|error| match error {
+            rusqlite::Error::InvalidColumnType(..)
+            | rusqlite::Error::IntegralValueOutOfRange(..)
+            | rusqlite::Error::FromSqlConversionFailure(..) => AppError::new("invalidResponse"),
+            _ => AppError::new("storageUnavailable"),
+        })?;
+    match row {
+        None => Ok(DataViewRecord {
+            revision: 0,
+            library: DataViewLibrary::empty(),
+        }),
+        Some((revision, json)) => {
+            if revision <= 0 || revision as u64 > crate::data_views::MAX_REVISION {
+                return Err(AppError::new("invalidResponse"));
+            }
+            Ok(DataViewRecord {
+                revision: revision as u64,
+                library: crate::data_views::decode_stored(&json)?,
+            })
+        }
+    }
 }
 
 #[cfg(test)]
@@ -3465,7 +3554,7 @@ mod tests {
         assert_eq!(
             db.0.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            6
+            SCHEMA_VERSION
         );
         assert_eq!(
             db.saved_queries_json().unwrap().as_deref(),
@@ -3527,6 +3616,122 @@ mod tests {
             )
             .unwrap(),
             SAVED_QUERY_DOCUMENT
+        );
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM credential_cleanup", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+
+    fn v6_database(path: &Path) -> (Connection, String, String) {
+        let (conn, connection_id, _, model_id) = v5_database(path);
+        conn.execute_batch(include_str!("../migrations/006_workspace_recovery.sql"))
+            .unwrap();
+        conn.execute(
+            "INSERT INTO workspace_recovery(singleton,revision,json) VALUES(1,7,?1)",
+            [r#"{"version":1,"workspace":null,"history":[]}"#],
+        )
+        .unwrap();
+        (conn, connection_id, model_id)
+    }
+
+    #[test]
+    fn data_views_migration_preserves_v6_rows_and_reopens_without_inserting_views() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("v6-views.sqlite");
+        let (conn, connection_id, model_id) = v6_database(&path);
+        drop(conn);
+        for _ in 0..2 {
+            let database = Database::open(&path).unwrap();
+            assert_eq!(
+                database
+                    .0
+                    .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                    .unwrap(),
+                7
+            );
+            assert_eq!(database.data_views().unwrap().revision, 0);
+            assert_eq!(
+                database
+                    .0
+                    .query_row("SELECT count(*) FROM data_view_library", [], |row| row
+                        .get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+            assert_eq!(
+                database.workspace_recovery_row().unwrap().unwrap().revision,
+                7
+            );
+            assert_eq!(
+                database.saved_queries_json().unwrap().as_deref(),
+                Some(SAVED_QUERY_DOCUMENT)
+            );
+            assert_eq!(
+                database.connection_summaries().unwrap()[0].profile.id,
+                connection_id
+            );
+            assert_eq!(database.models().unwrap().profiles[0].id, model_id);
+            assert_eq!(database.preferences().unwrap().mode, "dark");
+            assert_eq!(database.pending_credential_cleanup_count().unwrap(), 1);
+        }
+    }
+
+    #[test]
+    fn failed_data_views_migration_preserves_version_six_and_all_existing_documents() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("v6-conflict.sqlite");
+        let (conn, connection_id, model_id) = v6_database(&path);
+        conn.execute_batch("CREATE TABLE data_view_library(bogus TEXT)")
+            .unwrap();
+        drop(conn);
+        assert!(Database::open(&path).is_err());
+        let conn = Connection::open(&path).unwrap();
+        assert_eq!(
+            conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            6
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT name FROM pragma_table_info('data_view_library')",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+            "bogus"
+        );
+        assert_eq!(
+            conn.query_row("SELECT revision FROM workspace_recovery", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            7
+        );
+        assert_eq!(
+            conn.query_row("SELECT json FROM saved_query_library", [], |row| row
+                .get::<_, String>(0))
+                .unwrap(),
+            SAVED_QUERY_DOCUMENT
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM connections WHERE id=?1",
+                [&connection_id],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM model_profiles WHERE id=?1",
+                [&model_id],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
         );
         assert_eq!(
             conn.query_row("SELECT count(*) FROM credential_cleanup", [], |row| row

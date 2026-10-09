@@ -29,6 +29,7 @@
 //! frontend for exotic token spellings (`1.0` or `1e3` for a counter): the frontend never emits
 //! them, and refusing them here keeps the stored bytes canonical.
 
+use crate::data_views::{optional_selection, DataViewSelection};
 use crate::error::AppError;
 use crate::query_parameters::{optional_parameters, QueryParameters};
 use crate::storage::Database;
@@ -334,6 +335,12 @@ pub struct TabDocument {
         skip_serializing_if = "Option::is_none"
     )]
     pub parameters: Option<QueryParameters>,
+    #[serde(
+        default,
+        deserialize_with = "optional_selection",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub data_view: Option<DataViewSelection>,
 }
 
 /// Debug output must never leak a draft body: the DSL is shown as its byte length only.
@@ -695,7 +702,9 @@ impl RecoveryWorkspace {
 impl RecoveryTab {
     fn validate(&self) -> Result<(), AppError> {
         self.document.validate()?;
-        if self.kind == TabKind::Index && self.document.parameters.is_some() {
+        if self.kind == TabKind::Index
+            && (self.document.parameters.is_some() || self.document.data_view.is_some())
+        {
             return Err(invalid());
         }
         self.grid.validate()?;
@@ -721,6 +730,9 @@ impl TabDocument {
         }
         if let Some(parameters) = &self.parameters {
             parameters.validate()?;
+        }
+        if let Some(data_view) = &self.data_view {
+            data_view.validate(self.connection_id.0.as_deref(), &self.index)?;
         }
         Ok(())
     }
@@ -1153,6 +1165,7 @@ mod tests {
             revision: 3,
             result_view: ResultView::Table,
             parameters: None,
+            data_view: None,
         }
     }
 
@@ -2279,5 +2292,39 @@ mod tests {
         let mut invalid = encoded(&document);
         invalid["workspace"]["tabs"][0]["document"]["parameters"]["version"] = serde_json::json!(2);
         refused(&invalid, "unknown parameter version");
+    }
+
+    #[test]
+    fn data_view_copies_recover_without_resolving_library_or_rebinding_targets() {
+        let directory = tempdir().unwrap();
+        let mut database = Database::open(&directory.path().join("views.sqlite")).unwrap();
+        let mut tab = query_tab("view-query", "{ unfinished");
+        let selection = serde_json::json!({
+            "version":1,
+            "definition": {
+                "id":"removed-view", "name":"Saved view",
+                "connectionId":tab.document.connection_id.0,
+                "index":tab.document.index, "defaultTimeField":"@timestamp"
+            }
+        });
+        tab.document.data_view = Some(serde_json::from_value(selection).unwrap());
+        let document = base_document(vec![tab], Vec::new());
+        save(&mut database, 0, document.clone()).unwrap();
+        assert_eq!(load(&database).unwrap().document, document);
+        assert!(database.data_views().unwrap().library.entries.is_empty());
+        for (key, value) in [
+            ("connectionId", serde_json::json!("different")),
+            ("index", serde_json::json!("other")),
+        ] {
+            let mut invalid = encoded(&document);
+            invalid["workspace"]["tabs"][0]["document"]["dataView"]["definition"][key] = value;
+            refused(&invalid, "mismatched view target");
+        }
+        let mut invalid = encoded(&document);
+        invalid["workspace"]["tabs"][0]["document"]["dataView"] = serde_json::Value::Null;
+        refused(&invalid, "null data view");
+        let mut invalid = encoded(&document);
+        invalid["workspace"]["tabs"][0]["kind"] = serde_json::json!("index");
+        refused(&invalid, "data view on index tab");
     }
 }

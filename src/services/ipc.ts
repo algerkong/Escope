@@ -3,7 +3,7 @@ import { isValidPitId } from '../domain/query-result';
 
 export type ErrorCode = 'invalidInput' | 'invalidName' | 'invalidEndpoint' | 'invalidEnvironment'
   | 'invalidIndex' | 'invalidQuery' | 'duplicateRequest' | 'diagnosticsStale'
-  | 'storageUnavailable' | 'workspaceConflict' | 'libraryConflict'
+  | 'storageUnavailable' | 'workspaceConflict' | 'libraryConflict' | 'dataViewConflict' | 'dataViewConnectionMissing'
   | 'exchangeInvalid' | 'exchangeVersion' | 'exchangeTooLarge' | 'exchangeSensitive'
   | 'exchangeMappingRequired' | 'exchangeTargetChanged' | 'importFailed'
   | 'notFound' | 'unsupported' | 'permissionDenied' | 'serverForbidden' | 'cancelled'

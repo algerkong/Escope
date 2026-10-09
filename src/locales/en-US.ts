@@ -105,6 +105,8 @@ export const en = {
     exportFailed: 'The export could not be written. No completed export was confirmed.',
     workspaceConflict: 'The saved workspace changed. Reload it explicitly before saving again.',
     libraryConflict: 'The saved query library changed. Reload it explicitly before saving again.',
+    dataViewConflict: 'The saved data views changed. Reload and review them before saving again.',
+    dataViewConnectionMissing: 'The selected connection was removed. The data view was not saved.',
     exchangeInvalid: 'Invalid query-definition file.', exchangeVersion: 'Unsupported exchange format version.',
     exchangeTooLarge: 'The definition exchange exceeds its local limit.', exchangeSensitive: 'Credential-like content is not allowed in definition exchange.',
     exchangeMappingRequired: 'Map every source connection explicitly.', exchangeTargetChanged: 'A mapped local connection changed.',

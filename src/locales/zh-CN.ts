@@ -107,6 +107,8 @@ export const zh: { [N in keyof typeof en]: Record<keyof typeof en[N], string> } 
     exportFailed: '导出文件未能写入，未确认完整导出。',
     workspaceConflict: '已保存工作区已发生变化，请明确重新载入后再保存。',
     libraryConflict: '已保存的查询库已发生变化，请明确重新加载后再保存。',
+    dataViewConflict: '已保存的数据视图已发生变化，请重新加载并核对后再保存。',
+    dataViewConnectionMissing: '所选连接已被删除，数据视图未保存。',
     exchangeInvalid: '查询定义文件无效。', exchangeVersion: '不支持此交换格式版本。',
     exchangeTooLarge: '定义交换超出本地限额。', exchangeSensitive: '定义交换不允许包含疑似凭据内容。',
     exchangeMappingRequired: '请明确映射每个来源连接。', exchangeTargetChanged: '映射的本地连接已变化。',

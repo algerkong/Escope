@@ -4,7 +4,8 @@ import { useTranslation } from 'react-i18next';
 import type { ConnectionProfile } from '../../domain/connection';
 import type { AiChatBackend } from '../../domain/ai-chat';
 import type { Preferences } from '../../domain/preferences';
-import { matchesQueryDraft, type ExecutionState, type QueryDocument, type QueryDocumentPatch, type SnapshotRejection, type WorkspaceState } from '../../domain/query';
+import { createQuery, matchesQueryDraft, type ExecutionState, type QueryDocument, type QueryDocumentPatch, type SnapshotRejection, type WorkspaceState } from '../../domain/query';
+import { selectDataView } from '../../domain/data-views';
 import { IconButton, Modal } from '../../components/controls';
 import { PanelResizeHandle } from '../../components/PanelResizeHandle';
 import { PANEL_DEFAULTS } from '../../domain/workspace-panels';
@@ -35,6 +36,9 @@ import { useWorkspacePanels } from './useWorkspacePanels';
 import { WorkspaceTabs, workspaceTabId } from './WorkspaceTabs';
 import { ExecutionHistoryDialog, WorkspaceRecoveryStatus } from './WorkspaceRecovery';
 import type { WorkspaceRecoveryController } from './useWorkspaceRecovery';
+import { createDataViewService, type DataViewService } from '../../services/data-views';
+import { useDataViews } from './useDataViews';
+import { DataViewsDialog, DataViewTarget } from './DataViews';
 import '../../styles/query-live.css';
 
 const IDLE: ExecutionState = { status: 'idle' };
@@ -76,9 +80,10 @@ interface Props {
   /** Restore a saved query as a new tab; the App owns tab creation and never auto-executes it. */
   restoreQuery?: (document: QueryDocument) => void;
   recovery?: WorkspaceRecoveryController;
+  dataViewService?: DataViewService;
 }
 
-export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResults, toggleAI, onSettings, updateQuery, selectTab, openIndex, addQuery, closeTab, backend = desktopQueryBackend, modelService = desktopModelService, aiBackend, canQuery, active = true, onCommandReady, libraryService = defaultQueryLibraryService, snapshotExportService = desktopSnapshotExportService, exchangeService: suppliedExchangeService, restoreQuery, recovery }: Props) {
+export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResults, toggleAI, onSettings, updateQuery, selectTab, openIndex, addQuery, closeTab, backend = desktopQueryBackend, modelService = desktopModelService, aiBackend, canQuery, active = true, onCommandReady, libraryService = defaultQueryLibraryService, snapshotExportService = desktopSnapshotExportService, exchangeService: suppliedExchangeService, restoreQuery, recovery, dataViewService: suppliedDataViewService }: Props) {
   const { t } = useTranslation();
   const [closing, setClosing] = useState<QueryDocument | null>(null);
   const [checked, setChecked] = useState<Record<string, { source: string; error: QueryDslError | null }>>({});
@@ -100,6 +105,9 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const { entries, run, cancel, release, reconcile, loadMore } = useQueryExecutions(backend, recovery?.onHistory);
   const panels = useWorkspacePanels(aiOpen, active);
   const library = useQueryLibrary(libraryService);
+  const dataViewService = useMemo(() => suppliedDataViewService ?? createDataViewService(), [suppliedDataViewService]);
+  const dataViews = useDataViews(dataViewService);
+  const [dataViewsOpen, setDataViewsOpen] = useState(false);
   const exchangeService = useMemo(() => suppliedExchangeService ?? createQueryExchangeService(libraryService), [suppliedExchangeService, libraryService]);
   const [exchangeMode, setExchangeMode] = useState<'import' | 'export' | null>(null);
   const [libraryOpen, setLibraryOpen] = useState(false);
@@ -363,6 +371,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
             title={`${exportSource.index}: ${t(exportTaskState === 'saved' ? 'queryExport:saved'
               : exportTaskState === 'error' || exportTaskState === 'incomplete' ? 'queryExport:incompleteTask' : 'queryExport:task')}`}
             onClick={() => setExportVisible(true)} /> : null}
+          <IconButton icon={Layers} label={t('dataViews:manage')} onClick={() => setDataViewsOpen(true)} />
           <IconButton icon={Bookmark} label={t('queryLibrary:open')} onClick={() => setLibraryOpen(true)} />
           {recovery ? <IconButton icon={History} label={t('queryHistory:open')} onClick={() => setHistoryOpen(true)} /> : null}
         </div>
@@ -422,6 +431,13 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
           </span> : null}
           <button className="primary run-button" disabled={!canRun} title={runTitle} onClick={() => void runQuery()}><Play size={14} />{t('query:run')}</button>
         </div>
+        <DataViewTarget query={query} library={dataViews} fields={queryFields} disabled={restoring}
+          canInspect={available && target !== undefined && query.index.trim() !== ''}
+          onInspect={() => loadFields(true)} onSelect={(definition) => {
+            if (restoring || !active) return;
+            if (definition && (definition.connectionId !== query.connectionId || !target)) return;
+            updateQuery(query.id, definition ? { index: definition.index, dataView: selectDataView(definition) } : { dataView: null }, query);
+          }} />
         <div hidden={editorMode !== 'visual'}>
           {editorMode === 'visual' || editorModes[query.id] !== undefined ? <VisualQueryEditor key={query.id} rawDsl={query.dsl}
             fields={queryFields.status === 'ready' ? queryFields.data.fields : []}
@@ -509,6 +525,14 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
       onClose={() => { setExportSource(null); setExportVisible(false); }} /> : null}
     {recovery ? <ExecutionHistoryDialog open={historyOpen} recovery={recovery} profiles={profiles}
       onClose={() => setHistoryOpen(false)} onRestore={restoreQuery} /> : null}
+    {dataViewsOpen ? <DataViewsDialog library={dataViews} kind={dataViewService.kind} profiles={profiles}
+      initialConnectionId={state.activeConnectionId} available={available && active}
+      fieldsFor={fieldsFor} inspectFields={refreshFields} onClose={() => setDataViewsOpen(false)}
+      onOpenQuery={!restoring && restoreQuery ? (definition) => {
+        if (!active || !profiles.some((profile) => profile.id === definition.connectionId)) return;
+        restoreQuery({ ...createQuery(definition.connectionId, preferences.startView), name: definition.name,
+          index: definition.index, dataView: selectDataView(definition) });
+      } : undefined} /> : null}
     <Modal open={closing !== null} onClose={() => setClosing(null)} title={t('query:closeTitle')}
       description={t('query:closeDetail', { name: closing?.name || t('query:title') })}>
       <div className="dialog-actions"><button className="secondary" onClick={() => setClosing(null)}>{t('cancel')}</button>

@@ -392,6 +392,7 @@ pub(crate) fn import_bundle(
             favorite: query.favorite,
             updated_at: updated_at.clone(),
             parameters: query.parameters,
+            data_view: None,
         });
     }
     if serde_json::to_vec(&library).map_err(|_| invalid())?.len()

@@ -21,6 +21,7 @@
 //! carry the stable connection ID they were saved under; nothing here rebinds, executes or
 //! resolves a connection.
 
+use crate::data_views::{optional_selection, DataViewSelection};
 use crate::error::AppError;
 use crate::query_parameters::{optional_parameters, QueryParameters};
 use crate::storage::Database;
@@ -79,6 +80,12 @@ pub struct SavedQueryEntry {
         skip_serializing_if = "Option::is_none"
     )]
     pub parameters: Option<QueryParameters>,
+    #[serde(
+        default,
+        deserialize_with = "optional_selection",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub data_view: Option<DataViewSelection>,
 }
 
 /// Debug output must never leak a draft body: the DSL is shown as its byte length only.
@@ -152,6 +159,9 @@ impl SavedQueryEntry {
         }
         if let Some(parameters) = &self.parameters {
             parameters.validate()?;
+        }
+        if let Some(data_view) = &self.data_view {
+            data_view.validate(self.connection_id.as_deref(), &self.index)?;
         }
         if self.updated_at.is_empty()
             || self.updated_at.len() > MAX_UPDATED_AT_CHARS
@@ -467,6 +477,7 @@ mod tests {
             favorite: false,
             updated_at: "2026-10-09T12:00:00.000Z".to_owned(),
             parameters: None,
+            data_view: None,
         }
     }
 

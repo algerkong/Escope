@@ -1,5 +1,6 @@
 import { createScanner } from 'jsonc-parser';
 import type { QueryDocument } from './query';
+import { parseDataViewSelection, selectDataView, type DataViewSelection } from './data-views';
 import { parametersPayload, parseQueryParameters, type QueryParameters } from './query-parameters';
 import { items, parseRawJson, property, rawTextOf, type ResultColumn, type ResultHit } from './query-result';
 
@@ -44,6 +45,7 @@ export interface SavedQueryEntry {
   readonly favorite: boolean;
   readonly updatedAt: string;
   readonly parameters?: QueryParameters;
+  readonly dataView?: DataViewSelection;
 }
 
 export interface SavedQueryLibrary {
@@ -53,7 +55,7 @@ export interface SavedQueryLibrary {
 
 export type EntryLimitCode =
   | 'tooManyEntries' | 'invalidEntryId' | 'nameTooLong' | 'indexTooLarge'
-  | 'dslTooLarge' | 'invalidTimestamp' | 'connectionIdTooLong' | 'invalidParameters';
+  | 'dslTooLarge' | 'invalidTimestamp' | 'connectionIdTooLong' | 'invalidParameters' | 'invalidDataView';
 
 const ENTRY_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 const UPDATED_AT_PATTERN = /^[0-9A-Za-z:.+-]+$/;
@@ -88,6 +90,7 @@ export function entryFromDocument(document: QueryDocument, options: {
     favorite: options.favorite,
     updatedAt: options.now.toISOString(),
     ...(document.parameters === undefined ? {} : { parameters: parametersPayload(document.parameters) }),
+    ...(document.dataView === undefined ? {} : { dataView: selectDataView(document.dataView.definition) }),
   };
 }
 
@@ -106,6 +109,7 @@ export function documentFromEntry(entry: SavedQueryEntry, id: string = crypto.ra
     revision: 0,
     resultView: entry.resultView,
     ...(entry.parameters === undefined ? {} : { parameters: parametersPayload(entry.parameters) }),
+    ...(entry.dataView === undefined ? {} : { dataView: selectDataView(entry.dataView.definition) }),
   };
 }
 
@@ -144,6 +148,7 @@ export function entryLimitViolation(library: SavedQueryLibrary, entry: SavedQuer
   if (utf8ByteLength(entry.dsl) > MAX_ENTRY_DSL_BYTES) return 'dslTooLarge';
   if (entry.updatedAt.length > MAX_UPDATED_AT_CHARS || !UPDATED_AT_PATTERN.test(entry.updatedAt)) return 'invalidTimestamp';
   if (entry.parameters !== undefined && parseQueryParameters(entry.parameters) === null) return 'invalidParameters';
+  if (entry.dataView !== undefined && parseDataViewSelection(entry.dataView, entry.connectionId, entry.index) === null) return 'invalidDataView';
   return null;
 }
 
@@ -171,6 +176,7 @@ export function libraryPayload(library: SavedQueryLibrary): {
       id: entry.id, name: entry.name, connectionId: entry.connectionId, index: entry.index,
       dsl: entry.dsl, resultView: entry.resultView, favorite: entry.favorite, updatedAt: entry.updatedAt,
       ...(entry.parameters === undefined ? {} : { parameters: parametersPayload(entry.parameters) }),
+      ...(entry.dataView === undefined ? {} : { dataView: selectDataView(entry.dataView.definition) }),
     })),
   };
 }
@@ -194,7 +200,7 @@ function parseEntry(value: unknown): SavedQueryEntry | null {
   if (!isPlainObject(value)) return null;
   const keys = Object.keys(value);
   if (!ENTRY_KEYS.every((key) => keys.includes(key))
-    || keys.some((key) => key !== 'parameters' && !ENTRY_KEYS.includes(key as typeof ENTRY_KEYS[number]))) return null;
+    || keys.some((key) => key !== 'parameters' && key !== 'dataView' && !ENTRY_KEYS.includes(key as typeof ENTRY_KEYS[number]))) return null;
   const { id, name, connectionId, index, dsl, resultView, favorite, updatedAt } = value;
   if (typeof id !== 'string' || typeof name !== 'string' || typeof index !== 'string'
     || typeof dsl !== 'string' || typeof updatedAt !== 'string') return null;
@@ -203,7 +209,10 @@ function parseEntry(value: unknown): SavedQueryEntry | null {
   if (resultView !== 'table' && resultView !== 'json') return null;
   const parameters = Object.hasOwn(value, 'parameters') ? parseQueryParameters(value.parameters) : undefined;
   if (parameters === null) return null;
-  return { id, name, connectionId, index, dsl, resultView, favorite, updatedAt, ...(parameters ? { parameters } : {}) };
+  const dataView = Object.hasOwn(value, 'dataView') ? parseDataViewSelection(value.dataView, connectionId, index) : undefined;
+  if (dataView === null) return null;
+  return { id, name, connectionId, index, dsl, resultView, favorite, updatedAt,
+    ...(parameters ? { parameters } : {}), ...(dataView ? { dataView } : {}) };
 }
 
 /**

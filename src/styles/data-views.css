@@ -1,0 +1,26 @@
+.data-views-panel, .data-view-form { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.data-views-actions, .data-view-field-row, .data-view-status { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.data-views-actions { flex-wrap: wrap; }
+.data-views-actions > input, .data-view-field-row > input { flex: 1; min-width: 100px; width: 0; }
+.data-view-form > input, .data-view-form .select-control { width: 100%; min-width: 0; }
+.data-view-form label { color: var(--muted); font-size: .82rem; }
+.data-view-form input, .data-views-actions input { padding: 5px 8px; font-size: .85rem; }
+.data-view-form .muted, .data-view-status { font-size: .78rem; }
+.data-view-identity { color: var(--muted); font-size: .74rem; overflow-wrap: anywhere; user-select: text; }
+.data-view-warning { color: var(--warning); font-size: .78rem; overflow-wrap: anywhere; }
+.data-views-list { list-style: none; padding: 0; margin: 0; max-height: min(46vh, 420px); overflow-y: auto; }
+.data-views-list:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.data-views-list > li { display: flex; align-items: center; gap: 4px; border-bottom: 1px solid var(--border); padding: 7px 0; }
+.data-view-entry { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; overflow-wrap: anywhere; user-select: text; }
+.data-view-entry strong { font-size: .85rem; }
+.data-view-entry span { font-size: .75rem; color: var(--muted); }
+.data-view-entry span:last-child { display: flex; align-items: center; gap: 4px; }
+.data-view-entry svg { flex-shrink: 0; }
+.data-view-delete { overflow-wrap: anywhere; }
+.data-view-target { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; padding: 5px 0 8px; min-width: 0; font-size: .78rem; }
+.data-view-target > label, .data-view-time { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.data-view-target .select-control { min-width: min(120px, 100%); max-width: min(260px, 100%); }
+.data-view-target .select-control-input { text-overflow: ellipsis; }
+.data-view-time { flex-wrap: wrap; overflow-wrap: anywhere; }
+.data-view-time > svg, .data-view-target > label > svg { flex-shrink: 0; color: var(--muted); }
+.data-views-panel .notice { flex-wrap: wrap; }

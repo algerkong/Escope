@@ -75,6 +75,21 @@ describe('field capabilities', () => {
   it('rejects a body without fields', () => {
     expect(parseFieldCaps('{}')).toEqual({ ok: false, code: 'invalidResponse' });
   });
+
+  it.each([
+    { exclusions: undefined, expected: true },
+    { exclusions: [], expected: true },
+    { exclusions: ['logs-2025'], expected: false },
+    { exclusions: [null], expected: false },
+    { exclusions: 'logs-2025', expected: false },
+    { exclusions: null, expected: false },
+  ])('does not hide per-index aggregation restrictions ($exclusions)', ({ exclusions, expected }) => {
+    const parsed = parseFieldCaps(JSON.stringify({ fields: { value: { long: {
+      type: 'long', searchable: false, aggregatable: true,
+      ...(exclusions === undefined ? {} : { non_aggregatable_indices: exclusions }),
+    } } } }));
+    expect(parsed.ok && parsed.value.fields[0]?.types[0]).toMatchObject({ searchable: false, aggregatable: expected });
+  });
 });
 
 describe('mapping flattening', () => {

@@ -1,4 +1,4 @@
-import { Bookmark, Braces, Clock3, Database, FileCheck2, FileDown, History, Layers, LoaderCircle, Play, Plus, Save, Settings, ShieldCheck, Star, TriangleAlert, Undo2, Variable } from 'lucide-react';
+import { Bookmark, Braces, Clock3, Database, FileCheck2, FileDown, History, Layers, ListOrdered, LoaderCircle, Play, Plus, Save, Settings, ShieldCheck, Star, TriangleAlert, Undo2, Variable } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ConnectionProfile } from '../../domain/connection';
@@ -26,6 +26,7 @@ import { QueryParametersDialog } from './QueryParametersDialog';
 import { RuntimeFieldsDialog } from './RuntimeFieldsDialog';
 import { QueryTimeRangeDialog, TimeRangeSummary } from './QueryTimeRangeDialog';
 import { QueryFilterDraftBar, QueryFiltersDialog } from './QueryFiltersDialog';
+import { QuerySortDialog } from './QuerySortDialog';
 import type { CellFilterSelection, QueryFilterDraft } from '../../domain/query-filters';
 import { copyQueryTimeRange, validTimeRangeZone } from '../../domain/query-time-range';
 import type { FieldCatalog } from '../../domain/resource';
@@ -122,6 +123,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const [parameterSource, setParameterSource] = useState<QueryDocument | null>(null);
   const [runtimeSource, setRuntimeSource] = useState<{ query: QueryDocument; endpoint: string; catalog?: FieldCatalog } | null>(null);
   const [timeSource, setTimeSource] = useState<{ query: QueryDocument; endpoint: string; catalog?: FieldCatalog; initialTimeZone: string } | null>(null);
+  const [sortSource, setSortSource] = useState<{ query: QueryDocument; endpoint: string } | null>(null);
   const [filterDrafts, setFilterDrafts] = useState<Record<string, QueryFilterDraft>>({});
   const [filterDialog, setFilterDialog] = useState<{ queryId: string; instanceId: string; selection?: CellFilterSelection } | null>(null);
   const [savedEntryIds, setSavedEntryIds] = useState<Record<string, string>>({});
@@ -137,6 +139,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const query = tab?.document ?? home;
   const queryId = query.id;
   const hasPendingFilters = (filterDrafts[queryId]?.filters.length ?? 0) > 0;
+  const reviewingSort = sortSource?.query.id === queryId;
   const showingQuery = tab?.kind === 'query';
   const recoveryTab = recovery?.workspace.tabs.find((item) => item.document.id === queryId);
   const editorMode = recoveryTab?.editorMode ?? editorModes[queryId] ?? 'dsl';
@@ -159,7 +162,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   // then would silently persist the old text, so the draft actions are disabled until it is fixed
   // or the editor is switched back to JSON, where the textarea is the source of truth.
   const saveBlockedByVisual = showingQuery && editorMode === 'visual' && (!visualValid || dirtyVisualIds.has(queryId));
-  const canSaveDraft = showingQuery && !saveBlockedByVisual && !hasPendingFilters;
+  const canSaveDraft = showingQuery && !saveBlockedByVisual && !hasPendingFilters && !reviewingSort;
   const target = profiles.find((profile) => profile.id === query.connectionId);
   const resourceTarget = profiles.find((profile) => profile.id === state.activeConnectionId);
   const available = backend.available && (canQuery ?? true);
@@ -177,13 +180,14 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const dslValid = useMemo(() => validateQueryDsl(dsl).ok, [dsl]);
   const endpoints = useMemo(() => new Map(profiles.map((profile) => [profile.id, profile.endpoint])), [profiles]);
   const canRun = !restoring && tab !== undefined && available && target !== undefined && indexValue.trim() !== '' && dslValid && visualValid
-    && execution.status !== 'running' && !entry?.continuing && !hasPendingFilters;
+    && execution.status !== 'running' && !entry?.continuing && !hasPendingFilters && !reviewingSort;
   const runTitle = restoring ? t('workspaceRecovery:loading') : !available ? t('queryLive:runUnavailable')
     : target === undefined ? t('queryLive:runNeedsConnection')
       : indexValue.trim() === '' ? t('queryLive:runNeedsIndex')
         : !dslValid ? t('queryLive:runInvalidDsl')
           : !visualValid ? t('queryLive:runInvalidVisual')
           : hasPendingFilters ? t('queryFilters:pendingAction')
+          : reviewingSort ? t('querySort:reviewOpen')
           : execution.status === 'running' || entry?.continuing ? t('queryLive:runBusy') : t('query:run');
   const stale = showingQuery && entry !== undefined && 'snapshot' in execution
     && (execution.snapshot.revision !== query.revision || execution.snapshot.index !== query.index);
@@ -217,6 +221,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
       return kept.length === Object.keys(current).length ? current : Object.fromEntries(kept);
     });
     setFilterDialog((current) => current && !documentIds.includes(current.queryId) ? null : current);
+    setSortSource((current) => current && !documentIds.includes(current.query.id) ? null : current);
   }, [documentIds, release]);
 
   const patchQuery = useCallback((patch: QueryDocumentPatch) => {
@@ -340,6 +345,10 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   }, [onCommandReady, command]);
 
   const queryFields = fieldsFor(query.connectionId, endpoint, query.index.trim());
+  const sortTab = sortSource ? state.tabs.find((item) => item.kind === 'query' && item.document.id === sortSource.query.id) : undefined;
+  const sortTargetCurrent = sortSource !== null && !restoring && active && !saveBlockedByVisual && !hasPendingFilters
+    && state.activeTabId === sortSource.query.id
+    && profiles.some((profile) => profile.id === sortSource.query.connectionId && profile.endpoint === sortSource.endpoint);
   const pendingFilters = filterDrafts[query.id];
   const reviewedFilters = filterDialog ? filterDrafts[filterDialog.queryId] : undefined;
   const filterTab = reviewedFilters ? state.tabs.find((item) => item.document.id === reviewedFilters.source.id) : undefined;
@@ -460,7 +469,8 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
             editor.current?.focus();
           }} />
           <IconButton icon={Save} label={t('queryLibrary:saveDraft')} disabled={!canSaveDraft}
-            title={saveBlockedByVisual ? t('queryLibrary:saveBlockedVisual') : hasPendingFilters ? t('queryFilters:pendingAction') : t('queryLibrary:saveDraft')}
+            title={saveBlockedByVisual ? t('queryLibrary:saveBlockedVisual') : hasPendingFilters ? t('queryFilters:pendingAction')
+              : reviewingSort ? t('querySort:reviewOpen') : t('queryLibrary:saveDraft')}
             onClick={() => setSaveDraftOpen(true)} />
           <IconButton icon={Variable} label={t('queryParameters:open')} disabled={saveBlockedByVisual || restoring}
             onClick={() => setParameterSource(query)} />
@@ -473,6 +483,12 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
                 ...(query.dataView === undefined ? {} : { dataView: selectDataView(query.dataView.definition) }) },
               endpoint: target.endpoint, initialTimeZone: validTimeRangeZone(zone) ? zone : 'UTC',
               catalog: queryFields.status === 'ready' && !queryFields.refreshing && !queryFields.refreshError ? queryFields.data : undefined });
+            }} />
+          <IconButton icon={ListOrdered} label={t('querySort:open')}
+            disabled={saveBlockedByVisual || hasPendingFilters || restoring || !target || !active || !query.index.trim()}
+            title={hasPendingFilters ? t('queryFilters:pendingAction') : t('querySort:open')} onClick={() => {
+              if (!target || !active || restoring || saveBlockedByVisual || hasPendingFilters || !query.index.trim()) return;
+              setSortSource({ query: structuredClone(query), endpoint: target.endpoint });
             }} />
           {linkedEntry ? <IconButton className={`qlib-star${linkedEntry.favorite ? ' active' : ''}`} icon={Star}
             aria-pressed={linkedEntry.favorite} label={t(linkedEntry.favorite ? 'queryLibrary:favoriteRemove' : 'queryLibrary:favoriteAdd')}
@@ -605,6 +621,22 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
       onClose={() => setTimeSource(null)} onCommit={(source, patch) => {
         if (!active || restoring || !profiles.some((profile) => profile.id === source.connectionId && profile.endpoint === timeSource.endpoint)
           || !matchesQueryDraft(state.tabs.find((item) => item.kind === 'query' && item.document.id === source.id)?.document, source)) return false;
+        if (updateQuery(source.id, patch, source) === false) return false;
+        if (recovery) recovery.setEditorMode(source.id, 'dsl');
+        else setEditorModes((current) => ({ ...current, [source.id]: 'dsl' }));
+        return true;
+      }} /> : null}
+    {sortSource && active && state.activeTabId === sortSource.query.id ? <QuerySortDialog source={sortSource.query}
+      endpoint={sortSource.endpoint} current={sortTab?.document}
+      fields={fieldsFor(sortSource.query.connectionId, sortSource.endpoint, sortSource.query.index.trim())}
+      targetCurrent={sortTargetCurrent} canInspect={available && sortTargetCurrent}
+      onInspect={() => {
+        if (available && sortTargetCurrent && sortSource.query.connectionId) {
+          refreshFields(sortSource.query.connectionId, sortSource.endpoint, sortSource.query.index.trim());
+        }
+      }}
+      onClose={() => setSortSource(null)} onCommit={(source, patch) => {
+        if (!sortTargetCurrent || !matchesQueryDraft(sortTab?.document, source) || patch.dsl === undefined) return false;
         if (updateQuery(source.id, patch, source) === false) return false;
         if (recovery) recovery.setEditorMode(source.id, 'dsl');
         else setEditorModes((current) => ({ ...current, [source.id]: 'dsl' }));

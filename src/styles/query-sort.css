@@ -1,0 +1,26 @@
+.qsort-review { display: flex; flex-direction: column; gap: 8px; min-width: 0; font-size: .82rem; }
+.qsort-origin, .qsort-actions, .qsort-evidence { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; min-width: 0; }
+.qsort-origin, .qsort-evidence { color: var(--muted); font-size: .75rem; }
+.qsort-origin > *, .qsort-evidence > * { min-width: 0; overflow-wrap: anywhere; }
+.qsort-actions { justify-content: space-between; }
+.qsort-list { display: flex; flex-direction: column; gap: 8px; padding: 0; margin: 0; list-style: none; max-height: 300px; overflow: auto; }
+.qsort-list > li { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 6px 0 8px; border-bottom: 1px solid var(--border); }
+.qsort-row-heading { display: grid; grid-template-columns: 20px minmax(0, 1fr) 88px; align-items: end; gap: 6px; min-width: 0; }
+.qsort-rank { align-self: center; text-align: center; color: var(--muted); font-variant-numeric: tabular-nums; }
+.qsort-row-actions { display: flex; gap: 2px; }
+.qsort-review label { display: flex; flex-direction: column; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.qsort-field input { width: 100%; min-width: 0; font-family: var(--code-font); }
+.qsort-options { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1fr) minmax(0, 1.5fr); gap: 6px; }
+.qsort-options .select-control { width: 100%; min-width: 0; }
+.qsort-options select { max-width: 100%; text-overflow: ellipsis; }
+.qsort-evidence { align-items: baseline; min-height: 18px; }
+.qsort-warning { color: var(--warning); overflow-wrap: anywhere; }
+.qsort-preview { align-self: flex-start; }
+.qsort-code { display: block; width: 100%; min-width: 0; padding: 8px; resize: vertical; font-family: var(--code-font); font-size: var(--code-size); line-height: 1.5; height: 180px; min-height: 100px; max-height: 30vh; }
+.qsort-current { margin: 6px 0 0; max-height: 140px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--code-font); }
+.qsort-review .dialog-actions { flex-wrap: wrap; }
+.qsort-review .icon-button { flex: 0 0 28px; width: 28px; height: 28px; }
+@media (max-width: 520px) {
+  .qsort-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .qsort-options > label:last-child { grid-column: 1 / -1; }
+}

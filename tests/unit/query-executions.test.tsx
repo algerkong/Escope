@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createQuery } from '../../src/domain/query';
 import { selectDataView } from '../../src/domain/data-views';
 import { previewTimeRange, type TimeRangeDefinition } from '../../src/domain/query-time-range';
+import { previewQuerySort, type QuerySortClause } from '../../src/domain/query-sort';
 import { DATA_PREVIEW_DSL, supportsSnapshotPaging } from '../../src/domain/query-pagination';
 import { useQueryExecutions } from '../../src/features/query/useQueryExecutions';
 import type { ExecutionHistoryEntry } from '../../src/domain/workspace-recovery';
@@ -53,6 +54,57 @@ describe('snapshot paging eligibility', () => {
 });
 
 describe('execution history events', () => {
+  it('freezes reviewed multi-field sort before PIT open and keeps later edits out of continuation', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const original = { ...query, dsl: '{"query":{"term":{"n":9007199254740993}},"size":1,"sort":["_doc"],'
+        + '"runtime_mappings":{"n":{"type":"long","script":{"source":"emit(9007199254740993L);"}}},"fields":["n"]}' };
+      const time = previewTimeRange(original, { field: '@timestamp', fieldType: 'date', timeZone: 'UTC',
+        range: { kind: 'relative', amount: 15, unit: 'minutes' } }, new Date('2026-10-10T00:00:00.000Z'));
+      if (!time.ok) throw new Error(time.code);
+      const draft = { ...original, dsl: time.dsl, timeRange: time.timeRange };
+      const clauses: QuerySortClause[] = [
+        { field: 'n', direction: 'desc', missing: '_last', unmappedType: null },
+        { field: '_score', direction: 'desc', missing: 'default', unmappedType: null },
+      ];
+      const reviewed = previewQuerySort(draft, clauses);
+      if (!reviewed.ok) throw new Error(reviewed.code);
+      const sorted = { ...draft, dsl: reviewed.dsl };
+      const api = backend();
+      const opening = deferred<PitOpenResponse>();
+      api.openPit.mockReturnValueOnce(opening.promise);
+      const history = vi.fn<(entry: ExecutionHistoryEntry) => void>();
+      const { result } = renderHook(() => useQueryExecutions(api, history));
+      vi.setSystemTime(new Date('2026-10-10T01:00:00.123Z'));
+      let running!: ReturnType<typeof result.current.run>;
+      act(() => { running = result.current.run(sorted, endpoint); });
+      const changed = previewQuerySort(sorted, [clauses[1]!, { ...clauses[0]!, direction: 'asc' }]);
+      if (!changed.ok) throw new Error(changed.code);
+      const edited = { ...sorted, dsl: changed.dsl, revision: sorted.revision + 1 };
+      expect(api.execute).not.toHaveBeenCalled();
+      vi.setSystemTime(new Date('2026-10-10T02:00:00.456Z'));
+      await act(async () => {
+        opening.resolve({ ...api.openPit.mock.calls[0]![0], endpoint, pitId: 'sorted-pit' });
+        await running;
+      });
+      const frozen = api.execute.mock.calls[0]![0].rawDsl;
+      expect(JSON.parse(frozen).sort).toEqual([{ n: { order: 'desc', missing: '_last' } }, { _score: { order: 'desc' } }]);
+      expect(frozen).toContain('2026-10-10T01:00:00.123000000Z');
+      expect(frozen).toContain('9007199254740993');
+      await act(async () => { await result.current.loadMore(edited); });
+      expect(api.execute.mock.calls[1]![0].rawDsl).toBe(frozen);
+      expect(api.openPit).toHaveBeenCalledTimes(1);
+      expect(history.mock.calls[3]![0].snapshot.rawDsl).toBe(frozen);
+      await act(async () => { await result.current.run(edited, endpoint); });
+      const rerun = api.execute.mock.calls[2]![0].rawDsl;
+      expect(JSON.parse(rerun).sort).toEqual(JSON.parse(changed.dsl).sort);
+      expect(rerun).toContain('2026-10-10T02:00:00.456000000Z');
+      expect(api.openPit).toHaveBeenCalledTimes(2);
+      expect(api.closePit).toHaveBeenCalledWith(expect.objectContaining({ pitId: 'sorted-pit' }));
+      expect(JSON.stringify(api.execute.mock.calls)).not.toMatch(/unmappedType|reportedUnmapped|timeRange|fieldType/);
+    } finally { vi.useRealTimers(); }
+  });
+
   it('freezes time before PIT open, reuses it for all pages, and resolves again only on a new explicit run', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     try {

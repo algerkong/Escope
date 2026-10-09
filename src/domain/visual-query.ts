@@ -134,7 +134,7 @@ const SIZE_GRAMMAR = /^(0|[1-9]\d*)$/;
 const BUILT_IN_SORT_FIELDS = new Set(['_score', '_doc', '_shard_doc']);
 
 /** Missing explicit order follows the ES default: `_score` desc, everything else asc. */
-function defaultSortDirection(field: string): 'asc' | 'desc' {
+export function defaultSortDirection(field: string): 'asc' | 'desc' {
   return field === '_score' ? 'desc' : 'asc';
 }
 

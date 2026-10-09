@@ -133,11 +133,13 @@ export function parseFieldCaps(raw: string): ResourceParse<FieldCatalog> {
       const typeName = textOf(cap.children?.[0]);
       const body = cap.children?.[1];
       if (typeName === undefined) return [];
+      const nonAggregatable = property(body, 'non_aggregatable_indices');
       return [{
         type: textOf(property(body, 'type')) ?? typeName,
         searchable: boolOf(property(body, 'searchable')) === true
           && stringList(property(body, 'non_searchable_indices')).length === 0,
-        aggregatable: boolOf(property(body, 'aggregatable')) ?? false,
+        aggregatable: boolOf(property(body, 'aggregatable')) === true
+          && (nonAggregatable === undefined || nonAggregatable.type === 'array' && (nonAggregatable.children?.length ?? 0) === 0),
         metadata: boolOf(property(body, 'metadata_field')) ?? false,
       }];
     });

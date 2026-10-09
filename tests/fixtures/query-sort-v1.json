@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "sourceDsl": "{\"query\":{\"bool\":{\"must\":[{\"term\":{\"n\":9007199254740993}}],\"filter\":[{\"range\":{\"date\":{\"gte\":\"2026-10-10T00:00:00.000000000Z\",\"lt\":\"2026-10-10T01:00:00.000000000Z\"}}}]}},\"sort\":[\"_score\"],\"size\":25,\"min_score\":0.100000000000000001,\"runtime_mappings\":{\"n\":{\"type\":\"long\",\"script\":{\"source\":\"emit(9007199254740993L);\"}}},\"fields\":[\"n\"]}",
+  "clauses": [
+    { "field": "n", "direction": "desc", "missing": "_last", "unmappedType": "long" },
+    { "field": "date", "direction": "desc", "missing": "default", "unmappedType": null }
+  ],
+  "sortedDsl": "{\"query\":{\"bool\":{\"must\":[{\"term\":{\"n\":9007199254740993}}],\"filter\":[{\"range\":{\"date\":{\"gte\":\"2026-10-10T00:00:00.000000000Z\",\"lt\":\"2026-10-10T01:00:00.000000000Z\"}}}]}},\"sort\":[{\"n\":{\"order\":\"desc\",\"missing\":\"_last\",\"unmapped_type\":\"long\"}},{\"date\":{\"order\":\"desc\"}}],\"size\":25,\"min_score\":0.100000000000000001,\"runtime_mappings\":{\"n\":{\"type\":\"long\",\"script\":{\"source\":\"emit(9007199254740993L);\"}}},\"fields\":[\"n\"]}",
+  "searchAfter": "[9007199254740993,\"2026-10-10T00:30:00.123456789Z\",9007199254740995]"
+}

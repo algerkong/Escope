@@ -8,6 +8,7 @@ import {
   type QueryResultParse, type QuerySummary,
 } from '../../domain/query-result';
 import { supportsSnapshotPaging } from '../../domain/query-pagination';
+import { runtimeFieldNamesFromDsl } from '../../domain/runtime-fields-dsl';
 import { finishHistory, historyEntry, type ExecutionHistoryEntry } from '../../domain/workspace-recovery';
 import { errorCode, type QueryBackend, type QueryResponse } from '../../services/ipc';
 
@@ -211,7 +212,7 @@ export function useQueryExecutions(backend: QueryBackend, onHistory?: (entry: Ex
         fail('invalidResponse', null);
         return null;
       }
-      const parsed = parseQueryResult(response.rawResponse);
+      const parsed = parseQueryResult(response.rawResponse, runtimeFieldNamesFromDsl(snapshot.rawDsl));
       if (!parsed.ok || (response.pitId !== null && parsed.summary.pitId !== null && response.pitId !== parsed.summary.pitId)) {
         fail('invalidResponse', response.rawResponse);
         return null;
@@ -306,7 +307,7 @@ export function useQueryExecutions(backend: QueryBackend, onHistory?: (entry: Ex
         settleError('invalidResponse');
         return;
       }
-      const parsed = parseQueryResult(response.rawResponse);
+      const parsed = parseQueryResult(response.rawResponse, runtimeFieldNamesFromDsl(snapshot.rawDsl));
       if (!parsed.ok || (response.pitId !== null && parsed.summary.pitId !== null && response.pitId !== parsed.summary.pitId)) {
         settleError('invalidResponse');
         return;

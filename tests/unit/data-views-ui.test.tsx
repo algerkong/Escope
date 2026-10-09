@@ -47,6 +47,82 @@ function fill() {
 }
 
 describe('Data View definition editor', () => {
+  it('saves and edits source-backed and inline runtime fields locally without evaluating scripts or querying', async () => {
+    const service = createSessionDataViewService();
+    const backend = api();
+    render(<Harness service={service} backend={backend} />);
+    await clickNew();
+    fill();
+    fireEvent.click(screen.getByRole('button', { name: 'Add query-time field' }));
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Runtime field 1'), { target: { value: 'sequence' } });
+    fireEvent.change(screen.getByLabelText('Runtime type'), { target: { value: 'long' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Inline Painless for field 1' }));
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Painless source 1'), { target: { value: 'emit(9007199254740993L);' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add query-time field' }));
+    fireEvent.change(screen.getByLabelText('Runtime field 2'), { target: { value: 'label' } });
+    await act(async () => { await i18n.changeLanguage('zh-CN'); });
+    expect(screen.getByLabelText('Painless 源码 1')).toHaveValue('emit(9007199254740993L);');
+    await act(async () => { await i18n.changeLanguage('en-US'); });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await screen.findByRole('dialog', { name: 'Data Views' });
+    expect((await service.load()).library.entries[0]!.runtimeFields).toEqual({ version: 1, entries: [
+      { field: 'sequence', type: 'long', script: { lang: 'painless', source: 'emit(9007199254740993L);' } },
+      { field: 'label', type: 'keyword' },
+    ] });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit data view' }));
+    expect(screen.getByLabelText('Painless source 1')).toHaveValue('emit(9007199254740993L);');
+    fireEvent.click(screen.getByRole('button', { name: 'Remove query-time field 1' }));
+    expect(screen.getByLabelText('Runtime field 1')).toHaveValue('label');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await screen.findByRole('dialog', { name: 'Data Views' });
+    expect((await service.load()).library.entries[0]!.runtimeFields!.entries).toHaveLength(1);
+    expect(backend.readResource).not.toHaveBeenCalled();
+    expect(backend.execute).not.toHaveBeenCalled();
+    expect(backend.openPit).not.toHaveBeenCalled();
+  });
+
+  it('rejects runtime duplicates, reserved names and oversized scripts without hiding invalid edits', async () => {
+    const service = createSessionDataViewService();
+    render(<Harness service={service} backend={api()} />);
+    await clickNew();
+    fill();
+    fireEvent.click(screen.getByRole('button', { name: 'Add query-time field' }));
+    fireEvent.change(screen.getByLabelText('Runtime field 1'), { target: { value: 'n' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add query-time field' }));
+    for (const value of ['n', '_source', 'n*', 'n'.repeat(1025)]) {
+      fireEvent.change(screen.getByLabelText('Runtime field 2'), { target: { value } });
+      expect(screen.getByLabelText('Runtime field 2')).toHaveAttribute('aria-invalid', 'true');
+      expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    }
+    fireEvent.change(screen.getByLabelText('Runtime field 2'), { target: { value: 'm' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Inline Painless for field 2' }));
+    fireEvent.change(screen.getByLabelText('Painless source 2'), { target: { value: 'x'.repeat(4097) } });
+    expect(screen.getByLabelText('Painless source 2')).toHaveValue('x'.repeat(4097));
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    expect((await service.load()).library.entries).toEqual([]);
+  });
+
+  it('caps runtime rows and reports catalog type conflicts as local evidence without a write request', async () => {
+    const service = createSessionDataViewService();
+    const entries = Array.from({ length: 32 }, (_, index) => ({ field: `n${index}`, type: 'long' as const }));
+    await service.save(0, { version: 1, entries: [{ ...definition, defaultTimeField: null, runtimeFields: { version: 1, entries } }] });
+    const backend = api();
+    backend.readResource.mockImplementation(async (request) => ({ ...request, endpoint: profiles[0]!.endpoint,
+      rawResponse: '{"fields":{"n0":{"keyword":{}},"n1":{"long":{},"keyword":{}}}}' }));
+    render(<Harness service={service} backend={backend} />);
+    await screen.findByText('Events');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit data view' }));
+    expect(screen.getByRole('button', { name: 'Add query-time field' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh data view fields' }));
+    await screen.findByText('Shadows a field with a different type for this query');
+    expect(screen.getByText('Same-named field has conflicting catalog types')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+    expect(backend.readResource.mock.calls.map(([request]) => request.resource)).toEqual(['fieldCaps']);
+    expect(backend.execute).not.toHaveBeenCalled();
+  });
+
   it('creates and edits bounded format options without reading fields or running a query', async () => {
     const service = createSessionDataViewService();
     const backend = api();

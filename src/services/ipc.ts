@@ -2,7 +2,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { isValidPitId } from '../domain/query-result';
 
 export type ErrorCode = 'invalidInput' | 'invalidName' | 'invalidEndpoint' | 'invalidEnvironment'
-  | 'invalidIndex' | 'invalidQuery' | 'duplicateRequest' | 'diagnosticsStale'
+  | 'invalidIndex' | 'invalidQuery' | 'invalidRuntimeFields' | 'duplicateRequest' | 'diagnosticsStale'
   | 'storageUnavailable' | 'workspaceConflict' | 'libraryConflict' | 'dataViewConflict' | 'dataViewConnectionMissing'
   | 'exchangeInvalid' | 'exchangeVersion' | 'exchangeTooLarge' | 'exchangeSensitive'
   | 'exchangeMappingRequired' | 'exchangeTargetChanged' | 'importFailed'

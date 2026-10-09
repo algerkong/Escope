@@ -11,6 +11,22 @@ const library: DataViewLibrary = { version: 1, entries: [
 ] };
 
 describe('Data View IPC', () => {
+  it('validates runtime scripts before IPC and rejects unknown returned nested options without repairing them', async () => {
+    const valid = { version: 1, entries: [{ ...library.entries[0]!, runtimeFields: {
+      version: 1, entries: [{ field: 'n', type: 'long' as const, script: { lang: 'painless' as const, source: 'emit(1);' } }],
+    } }] };
+    vi.mocked(invoke).mockResolvedValue({ revision: 1 });
+    await expect(desktop.save(0, valid)).resolves.toBe(1);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('data_views_save', { expectedRevision: 0, library: valid });
+    const invalid = structuredClone(valid);
+    Object.assign(invalid.entries[0]!.runtimeFields.entries[0]!.script, { id: 'stored-script' });
+    vi.mocked(invoke).mockClear();
+    await expect(desktop.save(1, invalid)).rejects.toMatchObject({ code: 'invalidInput' });
+    expect(invoke).not.toHaveBeenCalled();
+    vi.mocked(invoke).mockResolvedValue({ revision: 1, library: invalid });
+    await expect(desktop.load()).rejects.toMatchObject({ code: 'invalidResponse' });
+  });
+
   it('refuses unsupported nested format options on reads and before writes without stripping them silently', async () => {
     const invalid = structuredClone(library);
     Object.assign(invalid.entries[0]!.fieldFormats!.entries[0]!.format, { html: '<b>fixture</b>' });

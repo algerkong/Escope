@@ -1,8 +1,8 @@
 //! `query_execute` IPC: one strictly validated `_search` execution.
 //!
 //! The endpoint is fixed at `{index}/_search`, so nothing in the request body can select another
-//! API: the body is passed through verbatim (ES owns query semantics) and only the envelope is
-//! validated here. The response is never re-serialized, so number literals keep their exact text.
+//! API: envelope, JSON bounds and the runtime-field whitelist are checked before sending the
+//! verbatim body. ES owns authorization and script compilation. Responses keep exact number text.
 
 use crate::connection::decode_response;
 use crate::error::AppError;
@@ -399,6 +399,7 @@ fn validate_hits(value: Option<&Value>) -> Result<(), AppError> {
 /// re-serializes the draft, so number literals and key order survive exactly.
 pub fn validate_search_body(raw: &str) -> Result<Vec<u8>, AppError> {
     validate_json_body(raw, false)?;
+    crate::runtime_fields::validate_body(raw)?;
     Ok(raw.as_bytes().to_vec())
 }
 
@@ -557,6 +558,46 @@ mod tests {
             assert_eq!(validate_search_body(raw).unwrap_err().code, "invalidQuery");
             assert!(validate_json_body(raw, true).is_ok());
             assert!(request("orders", raw).prepare().is_err());
+        }
+    }
+
+    #[test]
+    fn runtime_contract_is_enforced_on_initial_and_pit_requests_without_new_endpoints() {
+        let raw = r#"{"runtime_mappings":{"n":{"type":"long","script":{"source":"emit(9007199254740993L);"}}},"fields":["n"],"query":{"term":{"id":9007199254740993}},"sort":["_shard_doc"]}"#;
+        let prepared = request("logs-*", raw).prepare().unwrap();
+        let built = search_plan(&profile(), &prepared.index, prepared.body)
+            .unwrap()
+            .build(&reqwest::Client::new())
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(built.method(), reqwest::Method::POST);
+        assert_eq!(
+            built.url().as_str(),
+            "https://example.test/proxy/es/logs-*/_search"
+        );
+        assert_eq!(built.body().unwrap().as_bytes().unwrap(), raw.as_bytes());
+        let mut next = request("logs-*", raw);
+        next.pit_id = Some("runtime-pit".into());
+        next.search_after = Some("[9007199254740993]".into());
+        let body = next.prepare().unwrap().body;
+        let values: BTreeMap<String, Box<RawValue>> = serde_json::from_slice(&body).unwrap();
+        let original: BTreeMap<String, Box<RawValue>> = serde_json::from_str(raw).unwrap();
+        assert_eq!(
+            values["runtime_mappings"].get(),
+            original["runtime_mappings"].get()
+        );
+        assert_eq!(values["query"].get(), original["query"].get());
+        assert_eq!(values["search_after"].get(), "[9007199254740993]");
+        for raw in [
+            r#"{"runtime_mappings":{"n":{"type":"lookup","target_index":"other"}}}"#,
+            r#"{"runtime_mappings":{"n":{"type":"long","script":{"id":"stored"}}}}"#,
+            r#"{"runtime_mappings":{"n":{"type":"long","script":{"source":"emit(1);","lang":"js"}}}}"#,
+        ] {
+            let mut invalid = request("logs-*", raw);
+            assert_eq!(invalid.prepare().unwrap_err().code, "invalidRuntimeFields");
+            invalid.pit_id = Some("runtime-pit".into());
+            assert_eq!(invalid.prepare().unwrap_err().code, "invalidRuntimeFields");
         }
     }
 

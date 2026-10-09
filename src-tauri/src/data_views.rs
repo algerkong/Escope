@@ -3,6 +3,7 @@
 
 use crate::error::AppError;
 use crate::operation::IndexTarget;
+use crate::runtime_fields::{self, RuntimeFields};
 use crate::storage::Database;
 use crate::workspace_recovery::Nullable;
 use crate::{with_database, StorageState};
@@ -32,6 +33,12 @@ pub struct DataViewDefinition {
         deserialize_with = "field_formats::optional_formats"
     )]
     pub field_formats: Option<FieldFormats>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "runtime_fields::optional_fields"
+    )]
+    pub runtime_fields: Option<RuntimeFields>,
 }
 
 fn valid_id(value: &str) -> bool {
@@ -67,6 +74,9 @@ impl DataViewDefinition {
         }
         if let Some(formats) = &self.field_formats {
             formats.validate()?;
+        }
+        if let Some(runtime) = &self.runtime_fields {
+            runtime.validate()?;
         }
         Ok(())
     }

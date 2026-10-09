@@ -23,6 +23,8 @@ import { detectWindowPlatform } from '../../services/window';
 import { AiChatPanel } from '../ai/AiChatPanel';
 import { QueryLibraryDialog, SaveDraftDialog, useQueryLibrary, type SaveDraftResult } from './QueryLibrary';
 import { QueryParametersDialog } from './QueryParametersDialog';
+import { RuntimeFieldsDialog } from './RuntimeFieldsDialog';
+import type { FieldCatalog } from '../../domain/resource';
 import { QueryExchangeDialog } from './QueryExchangeDialog';
 import { createQueryExchangeService, type QueryExchangeService } from '../../services/query-exchange';
 import { QueryResults } from './QueryResults';
@@ -114,6 +116,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const [historyOpen, setHistoryOpen] = useState(false);
   const [saveDraftOpen, setSaveDraftOpen] = useState(false);
   const [parameterSource, setParameterSource] = useState<QueryDocument | null>(null);
+  const [runtimeSource, setRuntimeSource] = useState<{ query: QueryDocument; endpoint: string; catalog?: FieldCatalog } | null>(null);
   const [savedEntryIds, setSavedEntryIds] = useState<Record<string, string>>({});
   const [exportSource, setExportSource] = useState<SnapshotExportSource | null>(null);
   const [exportVisible, setExportVisible] = useState(false);
@@ -433,6 +436,12 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
           <button className="primary run-button" disabled={!canRun} title={runTitle} onClick={() => void runQuery()}><Play size={14} />{t('query:run')}</button>
         </div>
         <DataViewTarget query={query} library={dataViews} fields={queryFields} disabled={restoring}
+          runtimeDisabled={!target || !active || saveBlockedByVisual}
+          onReviewRuntime={() => {
+            if (!target || !active || restoring || saveBlockedByVisual || !query.dataView) return;
+            setRuntimeSource({ query: { ...query, dataView: selectDataView(query.dataView.definition) }, endpoint: target.endpoint,
+              catalog: queryFields.status === 'ready' && !queryFields.refreshing && !queryFields.refreshError ? queryFields.data : undefined });
+          }}
           canInspect={available && target !== undefined && query.index.trim() !== ''}
           onInspect={() => loadFields(true)} onSelect={(definition) => {
             if (restoring || !active) return;
@@ -517,6 +526,18 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
           if (recovery) recovery.setEditorMode(source.id, 'dsl');
           else setEditorModes((current) => ({ ...current, [source.id]: 'dsl' }));
         }
+        return true;
+      }} /> : null}
+    {runtimeSource && active ? <RuntimeFieldsDialog source={runtimeSource.query}
+      current={state.tabs.find((item) => item.kind === 'query' && item.document.id === runtimeSource.query.id)?.document}
+      catalog={runtimeSource.catalog}
+      targetCurrent={!restoring && profiles.some((profile) => profile.id === runtimeSource.query.connectionId && profile.endpoint === runtimeSource.endpoint)}
+      onClose={() => setRuntimeSource(null)} onCommit={(source, dsl) => {
+        if (!active || restoring || !profiles.some((profile) => profile.id === source.connectionId && profile.endpoint === runtimeSource.endpoint)
+          || !matchesQueryDraft(state.tabs.find((item) => item.kind === 'query' && item.document.id === source.id)?.document, source)) return false;
+        if (updateQuery(source.id, { dsl }, source) === false) return false;
+        if (recovery) recovery.setEditorMode(source.id, 'dsl');
+        else setEditorModes((current) => ({ ...current, [source.id]: 'dsl' }));
         return true;
       }} /> : null}
     {exportSource ? <SnapshotExportDialog open={exportVisible && active} source={exportSource} service={snapshotExportService}

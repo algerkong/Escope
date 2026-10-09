@@ -1,4 +1,5 @@
-import { applyEdits, format, parseTree, type FormattingOptions, type Node, type ParseError } from 'jsonc-parser';
+import { applyEdits, format, getNodeValue, parseTree, type FormattingOptions, type Node, type ParseError } from 'jsonc-parser';
+import { parseRuntimeMappings } from './runtime-fields';
 
 /**
  * Local failure codes for `_search` request-body DSL text.
@@ -10,6 +11,7 @@ export type QueryDslErrorCode =
   | 'dslNotObject'
   | 'dslDuplicateKey'
   | 'dslUnresolvedParameters'
+  | 'dslRuntimeFieldsUnsupported'
   | 'dslParseFailed';
 
 /**
@@ -94,8 +96,8 @@ type DslStructure = { readonly ok: true } | { readonly ok: false; readonly error
 /**
  * Structural check: strict JSON, object root, no repeated key anywhere.
  * Unknown or unsupported ES DSL is *not* a syntax error: anything that parses as an
- * object is accepted, because ES authorization and query validity are decided by the
- * backend, not here.
+ * object is accepted except for the bounded runtime-field contract. ES authorization
+ * and script compilation are still decided by the backend/server, not here.
  */
 function checkStructure(source: string): DslStructure {
   if (source.trim() === '') return { ok: false, error: { code: 'dslEmpty' } };
@@ -123,6 +125,15 @@ function checkStructure(source: string): DslStructure {
       return { ok: false, error: { code: 'dslUnresolvedParameters', ...locate(source, node.offset) } };
     }
     for (const child of node.children ?? []) pending.push(child);
+  }
+  const runtime = root.children?.find((entry) => entry.children?.[0]?.value === 'runtime_mappings')?.children?.[1];
+  if (runtime) {
+    try {
+      if (parseRuntimeMappings(getNodeValue(runtime)) !== null) return { ok: true };
+    } catch {
+      // Unsupported nested payloads must not escape the local execution gate as parser errors.
+    }
+    return { ok: false, error: { code: 'dslRuntimeFieldsUnsupported', ...locate(source, runtime.offset) } };
   }
   return { ok: true };
 }

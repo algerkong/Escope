@@ -14,6 +14,13 @@ fn formatted_fixture() -> DataViewLibrary {
     .unwrap()
 }
 
+fn runtime_fixture() -> DataViewLibrary {
+    serde_json::from_str(include_str!(
+        "../../../tests/fixtures/data-view-runtime-fields-v1.json"
+    ))
+    .unwrap()
+}
+
 fn populated(database: &mut Database) -> DataViewLibrary {
     let profile = database
         .save_connection(
@@ -520,4 +527,79 @@ fn saved_query_copies_validate_format_options_and_preserve_exact_dsl() {
     let mut invalid = base.clone();
     invalid["entries"][0]["dataView"]["definition"]["fieldFormats"]["version"] = json!(2);
     assert!(crate::saved_queries::decode_library(&invalid.to_string()).is_err());
+}
+
+#[test]
+fn runtime_definitions_survive_cas_reopen_and_invalid_stored_scripts_are_not_repaired() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("runtime.sqlite");
+    let mut database = Database::open(&path).unwrap();
+    let mut library = populated(&mut database);
+    library.entries[0].runtime_fields = runtime_fixture().entries[0].runtime_fields.clone();
+    library.validate().unwrap();
+    database.save_data_views(0, &library).unwrap();
+    drop(database);
+    let mut database = Database::open(&path).unwrap();
+    assert_eq!(database.data_views().unwrap().library, library);
+    assert_eq!(
+        database.save_data_views(0, &library).unwrap_err().code,
+        "dataViewConflict"
+    );
+    let raw = Connection::open(&path).unwrap();
+    let mut invalid = serde_json::to_value(&library).unwrap();
+    invalid["entries"][0]["runtimeFields"]["entries"][0]["script"]["id"] = json!("stored-script");
+    let invalid = invalid.to_string();
+    raw.execute("UPDATE data_view_library SET json=?1", [&invalid])
+        .unwrap();
+    assert_eq!(database.data_views().unwrap_err().code, "invalidResponse");
+    assert_eq!(
+        database.save_data_views(1, &library).unwrap_err().code,
+        "invalidResponse"
+    );
+    assert_eq!(
+        raw.query_row("SELECT json FROM data_view_library", [], |row| row
+            .get::<_, String>(0))
+            .unwrap(),
+        invalid
+    );
+}
+
+#[test]
+fn saved_queries_keep_runtime_copies_and_refuse_null_unknown_or_cross_target_definitions() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut database = Database::open(&directory.path().join("saved-runtime.sqlite")).unwrap();
+    let definition = runtime_fixture().entries[0].clone();
+    let base = json!({
+        "version": 1, "entries": [{
+            "id": "query", "name": "Runtime", "connectionId": definition.connection_id,
+            "index": definition.index, "dsl": "{\"runtime_mappings\":{\"n\":{\"type\":\"long\"}},\"query\":{\"term\":{\"id\":9007199254740993}}}",
+            "resultView": "table", "favorite": false, "updatedAt": "2026-10-10T00:00:00.000Z",
+            "dataView": {"version": 1, "definition": definition}
+        }]
+    });
+    let library = crate::saved_queries::decode_library(&base.to_string()).unwrap();
+    crate::saved_queries::save_checked(
+        &mut database,
+        library.clone(),
+        crate::saved_queries::SavedQueryLibrary::empty(),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(
+        crate::saved_queries::load_library(&mut database).unwrap(),
+        library
+    );
+    for runtime in [
+        json!(null),
+        json!({"version":2,"entries":[]}),
+        json!({"version":1,"entries":[{"field":"n","type":"long","script":{"source":"emit(1);","lang":"js"}}]}),
+    ] {
+        let mut invalid = base.clone();
+        invalid["entries"][0]["dataView"]["definition"]["runtimeFields"] = runtime;
+        assert!(crate::saved_queries::decode_library(&invalid.to_string()).is_err());
+    }
+    let mut invalid = base.clone();
+    invalid["entries"][0]["dataView"]["definition"]["connectionId"] = json!("other");
+    assert!(crate::saved_queries::decode_library(&invalid.to_string()).is_err());
+    assert!(fixture().entries[0].runtime_fields.is_none());
 }

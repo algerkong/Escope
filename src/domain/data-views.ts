@@ -1,5 +1,6 @@
 import type { FieldCapability, FieldCatalog } from './resource';
 import { fieldFormatsPayload, parseFieldFormats, type DataViewFieldFormats } from './field-formats';
+import { parseRuntimeFields, runtimeFieldsPayload, type DataViewRuntimeFields } from './runtime-fields';
 
 export const DATA_VIEWS_VERSION = 1;
 export const MAX_DATA_VIEWS = 100;
@@ -15,6 +16,7 @@ export interface DataViewDefinition {
   readonly index: string;
   readonly defaultTimeField: string | null;
   readonly fieldFormats?: DataViewFieldFormats;
+  readonly runtimeFields?: DataViewRuntimeFields;
 }
 
 export interface DataViewLibrary {
@@ -64,16 +66,17 @@ export function validDataViewTimeField(value: unknown): value is string | null {
 }
 
 export function parseDataViewDefinition(value: unknown): DataViewDefinition | null {
-  if (!shape(value, ['id', 'name', 'connectionId', 'index', 'defaultTimeField'], ['fieldFormats'])
+  if (!shape(value, ['id', 'name', 'connectionId', 'index', 'defaultTimeField'], ['fieldFormats', 'runtimeFields'])
     || !id(value.id) || !id(value.connectionId) || typeof value.name !== 'string'
     || value.name.trim() !== value.name || value.name === '' || [...value.name].length > MAX_DATA_VIEW_NAME_CHARS
     || !noControls(value.name) || typeof value.index !== 'string' || !validDataViewIndex(value.index)) return null;
   const field = value.defaultTimeField;
   if (!validDataViewTimeField(field)) return null;
   const fieldFormats = Object.hasOwn(value, 'fieldFormats') ? parseFieldFormats(value.fieldFormats) : undefined;
-  if (fieldFormats === null) return null;
+  const runtimeFields = Object.hasOwn(value, 'runtimeFields') ? parseRuntimeFields(value.runtimeFields) : undefined;
+  if (fieldFormats === null || runtimeFields === null) return null;
   return { id: value.id, name: value.name, connectionId: value.connectionId, index: value.index, defaultTimeField: field,
-    ...(fieldFormats === undefined ? {} : { fieldFormats }) };
+    ...(fieldFormats === undefined ? {} : { fieldFormats }), ...(runtimeFields === undefined ? {} : { runtimeFields }) };
 }
 
 export function emptyDataViews(): DataViewLibrary {
@@ -106,7 +109,8 @@ export function parseDataViewRecord(value: unknown): DataViewRecord | null {
 export function selectDataView(definition: DataViewDefinition): DataViewSelection {
   const { id, name, connectionId, index, defaultTimeField } = definition;
   return { version: DATA_VIEWS_VERSION, definition: { id, name, connectionId, index, defaultTimeField,
-    ...(definition.fieldFormats === undefined ? {} : { fieldFormats: fieldFormatsPayload(definition.fieldFormats) }) } };
+    ...(definition.fieldFormats === undefined ? {} : { fieldFormats: fieldFormatsPayload(definition.fieldFormats) }),
+    ...(definition.runtimeFields === undefined ? {} : { runtimeFields: runtimeFieldsPayload(definition.runtimeFields) }) } };
 }
 
 export function freezeDataViewSelection(selection: DataViewSelection): DataViewSelection {
@@ -116,6 +120,12 @@ export function freezeDataViewSelection(selection: DataViewSelection): DataViewS
     for (const entry of formats.entries) { Object.freeze(entry.format); Object.freeze(entry); }
     Object.freeze(formats.entries);
     Object.freeze(formats);
+  }
+  const runtime = copy.definition.runtimeFields;
+  if (runtime) {
+    for (const entry of runtime.entries) { if (entry.script) Object.freeze(entry.script); Object.freeze(entry); }
+    Object.freeze(runtime.entries);
+    Object.freeze(runtime);
   }
   Object.freeze(copy.definition);
   return Object.freeze(copy);
@@ -131,7 +141,9 @@ export function parseDataViewSelection(value: unknown, connectionId: string | nu
 export function sameDataView(left: DataViewDefinition, right: DataViewDefinition): boolean {
   return left.id === right.id && left.connectionId === right.connectionId && left.name === right.name
     && left.index === right.index && left.defaultTimeField === right.defaultTimeField
-    && JSON.stringify(left.fieldFormats) === JSON.stringify(right.fieldFormats);
+    && JSON.stringify(left.fieldFormats) === JSON.stringify(right.fieldFormats)
+    && JSON.stringify(left.runtimeFields === undefined ? undefined : runtimeFieldsPayload(left.runtimeFields))
+      === JSON.stringify(right.runtimeFields === undefined ? undefined : runtimeFieldsPayload(right.runtimeFields));
 }
 
 export type TimeFieldStatus = 'none' | 'unchecked' | 'missing' | 'conflict' | 'notDate' | 'notSearchable' | 'valid';

@@ -78,6 +78,7 @@ export const zh: { [N in keyof typeof en]: Record<keyof typeof en[N], string> } 
     dslSyntaxError: 'JSON 语法无效。', dslNotObject: '查询体必须是 JSON 对象。',
     dslDuplicateKey: 'JSON 属性重复。', dslParseFailed: '无法处理该 JSON。',
     dslUnresolvedParameters: '此模板有未替换参数，请先预览并应用参数值。',
+    dslRuntimeFieldsUnsupported: '查询期字段超出支持范围：最多 32 个标量字段 / 64 KiB，仅可选内联 Painless 脚本（每段 4 KiB）。',
     dslPosition: '第 {{line}} 行，第 {{column}} 列。',
   },
   window: {

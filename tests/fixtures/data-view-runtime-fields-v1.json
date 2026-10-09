@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "runtime-view",
+      "name": "Query-time events",
+      "connectionId": "connection-a",
+      "index": "events-*",
+      "defaultTimeField": null,
+      "fieldFormats": {
+        "version": 1,
+        "entries": [
+          { "field": "sequence", "format": { "kind": "number", "grouping": true } }
+        ]
+      },
+      "runtimeFields": {
+        "version": 1,
+        "entries": [
+          { "field": "sequence", "type": "long", "script": { "lang": "painless", "source": "emit(9007199254740993L);" } },
+          { "field": "label", "type": "keyword" },
+          { "field": "ratio", "type": "double", "script": { "source": "emit(0.125);" } },
+          { "field": "enabled", "type": "boolean" },
+          { "field": "event_time", "type": "date" },
+          { "field": "address", "type": "ip" },
+          { "field": "location", "type": "geo_point" }
+        ]
+      }
+    }
+  ]
+}

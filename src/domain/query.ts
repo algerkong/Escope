@@ -50,7 +50,7 @@ export interface SnapshotRejection {
 }
 
 /** Contract version of the DSL validation/format rules a validated snapshot was built with. */
-export const QUERY_DSL_CONTRACT_VERSION = 2;
+export const QUERY_DSL_CONTRACT_VERSION = 3;
 
 export interface ValidatedExecutionSnapshot extends ExecutionSnapshot {
   readonly dslContractVersion: number;

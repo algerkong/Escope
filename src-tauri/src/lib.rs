@@ -19,6 +19,7 @@ mod query_export;
 mod query_parameters;
 mod read_only;
 mod resources;
+mod runtime_fields;
 mod saved_queries;
 mod storage;
 mod workspace_recovery;

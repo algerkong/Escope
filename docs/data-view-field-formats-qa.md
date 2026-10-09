@@ -4,6 +4,8 @@
 状态：开发、临时 SQLite 与 JSDOM 组件自动化通过；真实 ES、原生交互与重启待验。
 主代理独占，无 OMP、新依赖、schema 迁移、worktree、原型修改或额外持久服务。
 首批视图库/绑定/选择与默认时间字段证据保留在 [Data Views QA](data-views-qa.md)。
+同日后续第三批查询期字段已增量，见 [runtime fields QA](data-view-runtime-fields-qa.md)；
+本文保留第二批的范围与当次证据，不将后续实现或真实/原生待验项算入本批通过结果。
 
 ## 交付范围
 

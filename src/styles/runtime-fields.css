@@ -1,0 +1,23 @@
+.runtime-editor { min-width: 0; border-top: 1px solid var(--border); padding-top: 8px; }
+.runtime-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.runtime-heading h3 { margin: 0; font-size: .85rem; font-weight: 500; }
+.runtime-heading h3:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.runtime-editor-list, .runtime-evidence { margin: 0; padding: 0; list-style: none; max-height: 280px; overflow-y: auto; }
+.runtime-editor-list > li { display: flex; flex-direction: column; gap: 5px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.runtime-row { display: flex; align-items: end; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.runtime-name, .runtime-type, .runtime-script { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.runtime-name { flex: 1 1 160px; }
+.runtime-type { flex: 1 1 100px; }
+.runtime-name input { width: 100%; min-width: 0; }
+.runtime-row .icon-button { flex: 0 0 28px; width: 28px; height: 28px; }
+.runtime-checkbox { display: flex; align-items: start; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+.runtime-checkbox input[type="checkbox"] { flex: 0 0 auto; padding: 0; }
+.runtime-code { display: block; width: 100%; min-width: 0; resize: vertical; padding: 8px; font-family: var(--code-font); font-size: var(--code-size); line-height: 1.5; }
+.runtime-script .runtime-code { min-height: 96px; max-height: 220px; }
+.runtime-review { display: flex; flex-direction: column; gap: 8px; min-width: 0; font-size: .82rem; }
+.runtime-target { display: flex; flex-direction: column; gap: 4px; overflow-wrap: anywhere; }
+.runtime-evidence > li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; padding: 6px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.runtime-evidence .muted { grid-column: 1 / -1; font-size: .78rem; }
+.runtime-final { min-height: 160px; max-height: 36vh; }
+.runtime-current { margin: 8px 0 0; max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--code-font); font-size: var(--code-size); }
+.runtime-review .dialog-actions { flex-wrap: wrap; }

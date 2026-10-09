@@ -1,4 +1,4 @@
-import { ALargeSmall, Clock3, Database, FilePlus2, LoaderCircle, Pencil, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
+import { ALargeSmall, Clock3, Database, FileCode2, FilePlus2, LoaderCircle, Pencil, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
 import { useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { IconButton, Modal, SelectControl } from '../../components/controls';
@@ -13,15 +13,17 @@ import type { DataViewsController } from './useDataViews';
 import type { Loadable } from './useQueryResources';
 import { resourceErrorKey } from './error-message';
 import { EMPTY_FIELD_FORMATS, FieldFormatsEditor } from './FieldFormatsEditor';
+import { EMPTY_RUNTIME_FIELDS, RuntimeFieldsEditor } from './RuntimeFieldsEditor';
 import '../../styles/data-views.css';
 
 function currentCatalog(fields: Loadable<FieldCatalog>): FieldCatalog | undefined {
   return fields.status === 'ready' && !fields.refreshing && !fields.refreshError ? fields.data : undefined;
 }
 
-export function DataViewTarget({ query, library, fields, disabled, onSelect, onInspect, canInspect }:
+export function DataViewTarget({ query, library, fields, disabled, onSelect, onInspect, canInspect, onReviewRuntime, runtimeDisabled }:
   { query: QueryDocument; library: DataViewsController; fields: Loadable<FieldCatalog>; disabled: boolean;
-    onSelect: (definition: DataViewDefinition | null) => void; onInspect: () => void; canInspect: boolean }) {
+    onSelect: (definition: DataViewDefinition | null) => void; onInspect: () => void; canInspect: boolean;
+    onReviewRuntime: () => void; runtimeDisabled: boolean }) {
   const { t } = useTranslation();
   const selectId = useId();
   const selected = query.dataView?.definition;
@@ -53,6 +55,10 @@ export function DataViewTarget({ query, library, fields, disabled, onSelect, onI
         onClick={onInspect} />
       {selected.fieldFormats?.entries.length ? <span className="data-view-time">
         <ALargeSmall size={14} aria-hidden="true" />{t('dataViews:formatCount', { count: selected.fieldFormats.entries.length })}
+      </span> : null}
+      {selected.runtimeFields?.entries.length ? <span className="data-view-time">
+        <IconButton icon={FileCode2} label={t('runtimeFields:open')} disabled={disabled || runtimeDisabled} onClick={onReviewRuntime} />
+        {t('runtimeFields:count', { count: selected.runtimeFields.entries.length })}
       </span> : null}
       {changed && ready ? <span className="data-view-warning" role="status">
         {t(stored ? 'dataViews:definitionChanged' : 'dataViews:definitionRemoved')}</span> : null}
@@ -124,6 +130,7 @@ export function DataViewsDialog({ library, kind, profiles, initialConnectionId, 
                 <span>{connection?.displayName ?? t('removedConnection')}: {entry.index}</span>
                 <span><Clock3 size={12} aria-hidden="true" />{entry.defaultTimeField ?? t('dataViews:noTimeField')}</span>
                 {entry.fieldFormats?.entries.length ? <span>{t('dataViews:formatCount', { count: entry.fieldFormats.entries.length })}</span> : null}
+                {entry.runtimeFields?.entries.length ? <span>{t('runtimeFields:count', { count: entry.runtimeFields.entries.length })}</span> : null}
               </div>
               <IconButton icon={FilePlus2} label={t('dataViews:openQuery')} disabled={!canEdit || !connection || !onOpenQuery}
                 onClick={() => { onOpenQuery?.(entry); onClose(); }} />
@@ -210,6 +217,8 @@ function DataViewEditor({ source, profiles, initialConnectionId, available, disa
       : t('dataViews:fieldCount', { count: catalog.fields.length })}</span> : null}
     <FieldFormatsEditor value={draft.fieldFormats ?? EMPTY_FIELD_FORMATS} catalog={catalog} disabled={disabled}
       onChange={(fieldFormats) => setDraft({ ...draft, fieldFormats })} />
+    <RuntimeFieldsEditor value={draft.runtimeFields ?? EMPTY_RUNTIME_FIELDS} catalog={catalog} disabled={disabled}
+      onChange={(runtimeFields) => setDraft({ ...draft, runtimeFields })} />
     <div className="dialog-actions">
       <button type="button" className="secondary" onClick={onCancel}>{t('cancel')}</button>
       <button type="submit" className="primary" disabled={saveDisabled}><Save size={14} />{t('save')}</button>

@@ -76,6 +76,7 @@ export const en = {
     dslSyntaxError: 'Invalid JSON syntax.', dslNotObject: 'The query body must be a JSON object.',
     dslDuplicateKey: 'Duplicate JSON property.', dslParseFailed: 'The JSON could not be processed.',
     dslUnresolvedParameters: 'Apply parameter values before executing this template.',
+    dslRuntimeFieldsUnsupported: 'Unsupported runtime fields. Use at most 32 scalar fields / 64 KiB, with optional inline Painless scripts (4 KiB each).',
     dslPosition: 'Line {{line}}, column {{column}}.',
   },
   window: {

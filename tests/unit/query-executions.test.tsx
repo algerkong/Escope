@@ -52,6 +52,58 @@ describe('snapshot paging eligibility', () => {
 });
 
 describe('execution history events', () => {
+  it('uses executed runtime mappings for result columns, continuation and history, never current unapplied definitions', async () => {
+    const api = backend();
+    const history = vi.fn<(entry: ExecutionHistoryEntry) => void>();
+    const dataView = selectDataView({ id: 'runtime', name: 'Runtime', connectionId: 'c1', index: 'orders', defaultTimeField: null,
+      runtimeFields: { version: 1, entries: [{ field: 'n', type: 'long', script: { source: 'emit(9007199254740993L);' } }] } });
+    const draft = { ...query, dataView,
+      dsl: '{"runtime_mappings":{"n":{"type":"long","script":{"source":"emit(9007199254740993L);"}}},"fields":["n"],"sort":["_doc"],"size":1}' };
+    api.execute.mockImplementation(async (request) => ({
+      ...response(request),
+      rawResponse: response(request).rawResponse.replace('"_source":{"n":1}', '"_source":{"n":1},"fields":{"n":[9007199254740993]}'),
+    }));
+    const { result } = renderHook(() => useQueryExecutions(api, history));
+    await act(async () => { await result.current.run(draft, endpoint); });
+    const first = result.current.entries[query.id]!;
+    expect(first.pages[0]!.summary.hits[0]!.columns[0]).toMatchObject({ name: 'n', runtime: true, value: { text: '[9007199254740993]' } });
+    Object.assign(dataView.definition.runtimeFields!.entries[0]!.script!, { source: 'emit(0);' });
+    api.execute.mockImplementationOnce(async (request) => response(request, 'second', 2));
+    await act(async () => { await result.current.loadMore({ ...draft, dsl: '{}', dataView: undefined }); });
+    expect(api.execute.mock.calls[1]![0].rawDsl).toBe(draft.dsl);
+    expect(result.current.entries[query.id]!.pages[1]!.summary.hits[0]!.columns).toEqual([]);
+    expect(history.mock.calls[3]![0].snapshot.dataView!.definition.runtimeFields!.entries[0]!.script!.source).toBe('emit(9007199254740993L);');
+    expect(JSON.stringify([...api.execute.mock.calls, ...api.openPit.mock.calls])).not.toContain('runtimeFields');
+    expect(api.openPit.mock.calls[0]![0]).not.toHaveProperty('rawDsl');
+  });
+
+  it.each(['serverForbidden', 'invalidQuery', 'invalidRuntimeFields'])('preserves a runtime failure as %s without retrying or removing its script', async (code) => {
+    const api = backend();
+    const history = vi.fn<(entry: ExecutionHistoryEntry) => void>();
+    api.execute.mockRejectedValueOnce({ code });
+    const draft = { ...query, dsl: '{"runtime_mappings":{"n":{"type":"long","script":{"source":"emit(1);"}}},"size":1}' };
+    const { result } = renderHook(() => useQueryExecutions(api, history));
+    await act(async () => { await result.current.run(draft, endpoint); });
+    expect(result.current.entries[query.id]!.state).toMatchObject({ status: 'failed', code });
+    expect(api.execute).toHaveBeenCalledOnce();
+    expect(api.execute.mock.calls[0]![0].rawDsl).toBe(draft.dsl);
+    expect(api.readResource).not.toHaveBeenCalled();
+    expect(history.mock.calls[1]![0]).toMatchObject({ status: 'failed', errorCode: code, snapshot: { rawDsl: draft.dsl } });
+  });
+
+  it('refuses unsupported runtime options before opening a PIT or recording execution history', async () => {
+    const api = backend();
+    const history = vi.fn<(entry: ExecutionHistoryEntry) => void>();
+    const { result } = renderHook(() => useQueryExecutions(api, history));
+    await act(async () => {
+      expect(await result.current.run({ ...query, dsl: '{"runtime_mappings":{"n":{"type":"lookup"}},"sort":["_doc"]}' }, endpoint))
+        .toMatchObject({ code: 'dslRuntimeFieldsUnsupported' });
+    });
+    expect(api.openPit).not.toHaveBeenCalled();
+    expect(api.execute).not.toHaveBeenCalled();
+    expect(history).not.toHaveBeenCalled();
+  });
+
   it('uses the original format copy for continuation and never sends presentation options to search or PIT IPC', async () => {
     const api = backend();
     const history = vi.fn<(entry: ExecutionHistoryEntry) => void>();

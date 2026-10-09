@@ -147,6 +147,7 @@ function previewOf(raw: string, node: Node): { preview: string; nested: boolean 
 
 export interface ResultColumn {
   readonly name: string;
+  readonly runtime?: true;
   /** Display text; never a re-serialized number. */
   readonly preview: string;
   readonly nested: boolean;
@@ -167,7 +168,7 @@ export interface ResultHit {
   readonly fields: RawRange | null;
   /** Raw `sort` array of this hit: the continuation cursor when the request defined a sort. */
   readonly sort: RawRange | null;
-  /** Top-level columns from `_source`, or from `fields` when no source was returned. */
+  /** Top-level source columns; executed runtime names read only from returned `fields`. */
   readonly columns: readonly ResultColumn[];
   readonly hasSource: boolean;
 }
@@ -212,25 +213,29 @@ export type QueryResultParse =
 
 const INVALID: QueryResultParse = { ok: false, code: 'invalidResponse' };
 
-function hitColumns(raw: string, source: Node | undefined, fields: Node | undefined): ResultColumn[] {
+function hitColumns(raw: string, source: Node | undefined, fields: Node | undefined, runtime: ReadonlySet<string>): ResultColumn[] {
   const container = source?.type === 'object' ? source : fields?.type === 'object' ? fields : undefined;
   if (!container) return [];
   const columns: ResultColumn[] = [];
-  for (const entry of container.children ?? []) {
+  const entries = container === source && runtime.size > 0
+    ? [...(source.children ?? []).filter((entry) => !runtime.has(textOf(entry.children?.[0]) ?? '')),
+      ...(fields?.children ?? []).filter((entry) => runtime.has(textOf(entry.children?.[0]) ?? ''))]
+    : container.children ?? [];
+  for (const entry of entries) {
     if (entry.type !== 'property') continue;
     const name = textOf(entry.children?.[0]);
     const value = entry.children?.[1];
     if (name === undefined || value === undefined) continue;
     const kind = value.type === 'property' ? 'null' : value.type;
     columns.push({
-      name, ...previewOf(raw, value),
+      name, ...(runtime.has(name) ? { runtime: true as const } : {}), ...previewOf(raw, value),
       value: { kind, text: kind === 'string' ? String(value.value) : raw.slice(value.offset, value.offset + value.length) },
     });
   }
   return columns;
 }
 
-function parseHit(raw: string, node: Node, position: number): ResultHit {
+function parseHit(raw: string, node: Node, position: number, runtime: ReadonlySet<string>): ResultHit {
   const sourceNode = property(node, '_source');
   const source = sourceNode?.type === 'object' || sourceNode?.type === 'array' ? sourceNode : undefined;
   const fieldsNode = property(node, 'fields');
@@ -246,7 +251,7 @@ function parseHit(raw: string, node: Node, position: number): ResultHit {
     source: rangeOf(source),
     fields: rangeOf(fields),
     sort: rangeOf(sort),
-    columns: hitColumns(raw, source, fields),
+    columns: hitColumns(raw, source, fields, runtime),
     hasSource: source !== undefined,
   };
 }
@@ -312,7 +317,8 @@ function parsePitId(node: Node | undefined): { ok: true; pitId: string | null } 
  * Wrongly typed `hits`, `hits.hits`, `timed_out`, `_shards` or totals reject the body
  * instead of being read as a completed search.
  */
-export function parseQueryResult(raw: string): QueryResultParse {
+export function parseQueryResult(raw: string, runtimeFields: readonly string[] = []): QueryResultParse {
+  const runtime = new Set(runtimeFields);
   const root = parseRawJson(raw);
   if (!root || root.type !== 'object') return INVALID;
   const hitsNode = property(root, 'hits');
@@ -343,7 +349,7 @@ export function parseQueryResult(raw: string): QueryResultParse {
       maxScore: rawTextOf(raw, property(hitsNode, 'max_score')),
       pitId: pit.pitId,
       shards,
-      hits: items(hitNodes).map((hit, position) => parseHit(raw, hit, position)),
+      hits: items(hitNodes).map((hit, position) => parseHit(raw, hit, position, runtime)),
     },
   };
 }

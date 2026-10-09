@@ -446,7 +446,8 @@ export function QueryResultGrid({ active = true, scrollPosition, onScrollPositio
     const original = cellTitle(column);
     const title = display?.status === 'formatted' ? t('dataViews:formattedValue', { value: original })
       : display?.status === 'raw' ? t('dataViews:rawFormatValue', { value: original, reason: t(`dataViews:rawReason_${display.reason}`) }) : original;
-    return <span className="rg-cell" data-field-format={display?.status} title={title}>
+    return <span className="rg-cell" data-field-format={display?.status} data-runtime-field={column?.runtime}
+      title={column?.runtime ? t('runtimeFields:returnedValue', { value: title ?? '' }) : title}>
       {text?.replace(/\r/g, '\\r').replace(/\n/g, '\\n').replace(/\t/g, '\\t') ?? '—'}
     </span>;
   };

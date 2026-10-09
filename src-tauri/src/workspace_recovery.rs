@@ -2413,4 +2413,86 @@ mod tests {
             ["format"]["html"] = serde_json::json!("<b>fixture</b>");
         refused(&invalid, "unknown format option in history");
     }
+
+    #[test]
+    fn runtime_scripts_are_independent_in_history_drafts_and_strict_recovery() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("runtime-recovery.sqlite");
+        let mut database = Database::open(&path).unwrap();
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/data-view-runtime-fields-v1.json"
+        ))
+        .unwrap();
+        let raw = r#"{"runtime_mappings":{"sequence":{"type":"long","script":{"source":"emit(9007199254740993L);"}}}}"#;
+        let mut history = entry("runtime-request", raw);
+        history.snapshot.data_view = Some(
+            serde_json::from_value(serde_json::json!({
+                "version":1,
+                "definition":{
+                    "id":"runtime-view","name":"Original runtime","connectionId":CONNECTION,
+                    "index":"orders","defaultTimeField":null,
+                    "runtimeFields":fixture["entries"][0]["runtimeFields"]
+                }
+            }))
+            .unwrap(),
+        );
+        let mut tab = query_tab("runtime-query", "{ unfinished").with_index("orders");
+        tab.document.data_view = history.snapshot.data_view.clone();
+        tab.document
+            .data_view
+            .as_mut()
+            .unwrap()
+            .definition
+            .runtime_fields
+            .as_mut()
+            .unwrap()
+            .entries[0]
+            .script
+            .as_mut()
+            .unwrap()
+            .source = "emit(0);".into();
+        let document = base_document(vec![tab], vec![history]);
+        save(&mut database, 0, document.clone()).unwrap();
+        drop(database);
+        let database = Database::open(&path).unwrap();
+        let restored = load(&database).unwrap().document;
+        assert_eq!(restored, document);
+        assert_eq!(restored.history[0].snapshot.raw_dsl, raw);
+        assert_eq!(
+            restored.history[0]
+                .snapshot
+                .data_view
+                .as_ref()
+                .unwrap()
+                .definition
+                .runtime_fields
+                .as_ref()
+                .unwrap()
+                .entries[0]
+                .script
+                .as_ref()
+                .unwrap()
+                .source,
+            "emit(9007199254740993L);"
+        );
+        assert!(database.data_views().unwrap().library.entries.is_empty());
+        for runtime in [
+            serde_json::json!(null),
+            serde_json::json!({"version":2,"entries":[]}),
+            serde_json::json!({"version":1,"entries":[{"field":"n","type":"lookup"}]}),
+            serde_json::json!({"version":1,"entries":[{"field":"n","type":"long","script":{"id":"stored"}}]}),
+        ] {
+            let mut invalid = encoded(&document);
+            invalid["history"][0]["snapshot"]["dataView"]["definition"]["runtimeFields"] =
+                runtime.clone();
+            refused(&invalid, "invalid history runtime copy");
+            let mut invalid = encoded(&document);
+            invalid["workspace"]["tabs"][0]["document"]["dataView"]["definition"]
+                ["runtimeFields"] = runtime;
+            refused(&invalid, "invalid draft runtime copy");
+        }
+        let mut invalid = encoded(&document);
+        invalid["history"][0]["kind"] = serde_json::json!("index");
+        refused(&invalid, "runtime definition on locked index execution");
+    }
 }

@@ -13,13 +13,16 @@ import { createSessionQueryLibraryService } from '../../src/services/query-libra
 import { createSessionStorage } from '../../src/services/storage';
 import { createSessionWorkspaceRecoveryService } from '../../src/services/workspace-recovery';
 
-async function fixture(selected = false, removed = false) {
+async function fixture(selected = false, removed = false, withRuntime = false) {
   const storage = createSessionStorage();
   const a = await storage.saveConnection({ displayName: 'Alpha', endpoint: 'https://a.test', environment: 'development' });
   const b = await storage.saveConnection({ displayName: 'Beta', endpoint: 'https://b.test', environment: 'development' });
   await storage.selectConnection(a.id);
   const definition: DataViewDefinition = { id: 'view-a', connectionId: a.id, name: 'Events', index: 'events-*', defaultTimeField: '@timestamp',
-    fieldFormats: { version: 1, entries: [{ field: 'n', format: { kind: 'number', grouping: true } }] } };
+    fieldFormats: { version: 1, entries: [{ field: 'n', format: { kind: 'number', grouping: true } }] },
+    ...(withRuntime ? { runtimeFields: { version: 1, entries: [
+      { field: 'n', type: 'long' as const, script: { lang: 'painless' as const, source: 'emit(9007199254740995L);' } },
+    ] } } : {}) };
   const other: DataViewDefinition = { id: 'view-b', connectionId: b.id, name: 'Audit', index: 'audit', defaultTimeField: null };
   const dataViews = createSessionDataViewService();
   await dataViews.save(0, { version: 1, entries: [definition, other] });
@@ -47,7 +50,8 @@ async function fixture(selected = false, removed = false) {
     execute: vi.fn(async (request: QueryRequest) => ({
       ...request, endpoint: endpoint(request.connectionId), pitId: request.pitId ?? null, partial: false,
       rawResponse: '{"took":1,"timed_out":false,"_shards":{"total":1,"successful":1,"failed":0},"hits":{"total":{"value":1,"relation":"eq"},'
-        + '"hits":[{"_index":"events-1","_id":"result-id","_source":{"marker":"original-result","n":9007199254740993},"sort":[1]}]}}',
+        + '"hits":[{"_index":"events-1","_id":"result-id","_source":{"marker":"original-result","n":9007199254740993},'
+        + (withRuntime ? '"fields":{"n":[9007199254740995]},' : '') + '"sort":[1]}]}}',
     })),
     cancel: vi.fn(async () => true),
     openPit: vi.fn(async (request: PitOpenRequest) => ({ ...request, endpoint: endpoint(request.connectionId), pitId: 'fixture-pit' })),
@@ -60,6 +64,42 @@ async function fixture(selected = false, removed = false) {
 }
 
 describe('Data Views in the query workspace', () => {
+  it('reviews and applies runtime DSL without executing, preserves prior results, and restores both definition and exact applied text', async () => {
+    const f = await fixture(true, false, true);
+    const first = f.mount();
+    await f.saved();
+    expect(f.backend.execute).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Run query' }));
+    await screen.findByText('9,007,199,254,740,993');
+    expect(f.backend.execute.mock.calls[0]![0].rawDsl).not.toContain('runtime_mappings');
+    fireEvent.click(screen.getByRole('button', { name: 'Review query-time fields' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Preview final DSL' }));
+    expect(screen.getByRole('button', { name: 'Apply to draft' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('checkbox', { name: /Allow field shadowing/ }));
+    const final = (screen.getByLabelText('Final query DSL') as HTMLTextAreaElement).value;
+    fireEvent.click(screen.getByRole('button', { name: 'Apply to draft' }));
+    expect(screen.getByLabelText('Query DSL')).toHaveValue(final);
+    expect(screen.getByText('9,007,199,254,740,993')).toBeVisible();
+    expect(f.backend.execute).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Run query' }));
+    const returned = await screen.findByText('["9,007,199,254,740,995"]');
+    expect(returned).toHaveAttribute('data-runtime-field', 'true');
+    expect(returned).toHaveAttribute('title', 'Query-time value from fields; Formatted value; original: [9007199254740995]');
+    expect(f.backend.execute.mock.calls[1]![0].rawDsl).toBe(final);
+    expect(f.backend.execute.mock.calls[1]![0]).not.toHaveProperty('runtimeFields');
+    await f.saved();
+    const stored = (await f.recovery.load()).document;
+    expect(stored.history[0]!.snapshot.dataView!.definition.runtimeFields).toEqual(f.definition.runtimeFields);
+    expect(stored.history[0]!.snapshot.rawDsl).toBe(final);
+    first.unmount();
+    f.mount();
+    await f.saved();
+    expect(screen.getByLabelText('Query DSL')).toHaveValue(final);
+    expect(screen.getByRole('button', { name: 'Review query-time fields' })).toBeEnabled();
+    expect(f.backend.execute).toHaveBeenCalledTimes(2);
+    expect(f.backend.openPit).not.toHaveBeenCalled();
+  });
+
   it('freezes field formats for results/history until a new explicit execution, including raw view and clipboard', async () => {
     const f = await fixture(true);
     f.mount();

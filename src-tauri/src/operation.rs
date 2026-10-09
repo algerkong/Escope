@@ -23,6 +23,12 @@ pub enum ReadOnlyOperation {
     Authenticate,
     /// `POST {base}/_security/user/_has_privileges` - check fixed read permissions for this caller.
     Privileges,
+    /// `GET {base}/_license?local=true` - license metadata, never license installation.
+    License,
+    /// The 7.6-7.x form avoids reporting Enterprise licenses as Platinum.
+    LicenseLegacy,
+    /// `GET {base}/_xpack?categories=features&human=false` - reported feature flags only.
+    FeatureInfo,
     /// `GET {base}/_cluster/health` — cluster health. Cluster-wide, never carries a target.
     ClusterHealth,
     /// `GET {base}/_resolve/index/{target}` — authorized index and alias discovery.
@@ -79,6 +85,9 @@ impl ReadOnlyOperation {
             Self::PitClose => Method::DELETE,
             Self::ClusterIdentity
             | Self::Authenticate
+            | Self::License
+            | Self::LicenseLegacy
+            | Self::FeatureInfo
             | Self::ClusterHealth
             | Self::IndexDiscovery
             | Self::IndexSettings
@@ -378,6 +387,11 @@ fn relative(
         ReadOnlyOperation::ClusterIdentity => Ok(String::new()),
         ReadOnlyOperation::Authenticate => Ok("_security/_authenticate".to_owned()),
         ReadOnlyOperation::Privileges => Ok("_security/user/_has_privileges".to_owned()),
+        ReadOnlyOperation::License => Ok("_license?local=true".to_owned()),
+        ReadOnlyOperation::LicenseLegacy => {
+            Ok("_license?local=true&accept_enterprise=true".to_owned())
+        }
+        ReadOnlyOperation::FeatureInfo => Ok("_xpack?categories=features&human=false".to_owned()),
         ReadOnlyOperation::ClusterHealth => Ok("_cluster/health".to_owned()),
         ReadOnlyOperation::IndexDiscovery => Ok(format!("_resolve/index/{}", target()?)),
         ReadOnlyOperation::IndexSettings => Ok(format!("{}/_settings", target()?)),
@@ -518,6 +532,10 @@ mod tests {
             "query.executePage",
             "pit.open",
             "resource.pitCloseAll",
+            "connection.license",
+            "connection.featureInfo",
+            "license.install",
+            "_xpack/usage",
         ] {
             assert_eq!(authorize(operation).unwrap_err().code, "permissionDenied");
         }
@@ -548,6 +566,9 @@ mod tests {
         let target = IndexTarget::parse("logs-*").unwrap();
         for operation in [
             ReadOnlyOperation::ClusterIdentity,
+            ReadOnlyOperation::License,
+            ReadOnlyOperation::LicenseLegacy,
+            ReadOnlyOperation::FeatureInfo,
             ReadOnlyOperation::ClusterHealth,
             ReadOnlyOperation::NodesStats,
             ReadOnlyOperation::Shards,
@@ -588,6 +609,18 @@ mod tests {
     fn the_new_cluster_paths_are_fixed_and_keep_the_base_prefix() {
         let profile = profile("https://example.test/proxy/es");
         for (operation, expected) in [
+            (
+                ReadOnlyOperation::License,
+                "https://example.test/proxy/es/_license?local=true",
+            ),
+            (
+                ReadOnlyOperation::LicenseLegacy,
+                "https://example.test/proxy/es/_license?local=true&accept_enterprise=true",
+            ),
+            (
+                ReadOnlyOperation::FeatureInfo,
+                "https://example.test/proxy/es/_xpack?categories=features&human=false",
+            ),
             (
                 ReadOnlyOperation::ClusterHealth,
                 "https://example.test/proxy/es/_cluster/health",

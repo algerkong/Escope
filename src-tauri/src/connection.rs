@@ -1113,6 +1113,17 @@ mod tests {
             response("200 OK", r#"{"logs-000001":{"settings":{}}}"#, product),
             response("200 OK", r#"{"nodes":{}}"#, product),
             response("200 OK", "[]", product),
+            response(
+                "200 OK",
+                r#"{"license":{"type":"basic","status":"active"}}"#,
+                product,
+            ),
+            response("200 OK", r#"{"features":{}}"#, product),
+            response(
+                "200 OK",
+                r#"{"license":{"type":"enterprise","status":"active"}}"#,
+                product,
+            ),
         ]);
         let material = EsAuthMaterial::api_key(API_KEY_ID, API_KEY_SECRET).unwrap();
         let trusted = TrustedConnection::new(format!("{endpoint}/proxy/es"), material);
@@ -1141,6 +1152,20 @@ mod tests {
                 .await
                 .unwrap();
         }
+        for operation in [
+            crate::operation::ReadOnlyOperation::License,
+            crate::operation::ReadOnlyOperation::FeatureInfo,
+            crate::operation::ReadOnlyOperation::LicenseLegacy,
+        ] {
+            let plan = crate::operation::resource_request(profile, operation, None)
+                .unwrap()
+                .authenticate(&auth)
+                .unwrap();
+            client
+                .execute(plan, &mut Cancellation::never())
+                .await
+                .unwrap();
+        }
         let mut request_lines = Vec::new();
         while let Ok(request) = received.recv_timeout(Duration::from_secs(1)) {
             assert_eq!(request.to_lowercase().matches("authorization:").count(), 1);
@@ -1159,6 +1184,9 @@ mod tests {
                 "GET /proxy/es/logs-*/_settings HTTP/1.1",
                 "GET /proxy/es/_nodes/stats/jvm,fs,os,process,thread_pool HTTP/1.1",
                 "GET /proxy/es/_cat/shards?format=json&h=index,shard,prirep,state,docs,store,ip,node,unassigned.reason HTTP/1.1",
+                "GET /proxy/es/_license?local=true HTTP/1.1",
+                "GET /proxy/es/_xpack?categories=features&human=false HTTP/1.1",
+                "GET /proxy/es/_license?local=true&accept_enterprise=true HTTP/1.1",
             ]
         );
         handle.join().unwrap();

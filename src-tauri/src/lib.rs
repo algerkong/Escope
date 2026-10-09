@@ -340,6 +340,7 @@ pub fn run() {
             app.manage(StorageState(Mutex::new(database)));
             app.manage(NetworkState(ReadOnlyClient::new()));
             app.manage(RequestState(RequestRegistry::default()));
+            app.manage(connection_access::AccessCache::default());
             app.manage(query_export::SnapshotExportState::new());
             // AI chat keeps its own client and its own cancellation registry, so an AI cancel can
             // never reach an Elasticsearch request and vice versa.

@@ -1,0 +1,47 @@
+{
+  "requestId": "f3228da9-8e0a-4ab8-9c3b-d633c60ea8d2",
+  "connectionId": "1ed43afe-c318-4fe6-8cce-aa2a82be27be",
+  "endpoint": "https://es.test",
+  "index": "orders-*",
+  "identity": { "status": "available", "code": null, "username": "reader", "roles": ["orders_reader"] },
+  "privileges": {
+    "monitor": { "status": "denied", "code": null },
+    "read": { "status": "available", "code": null },
+    "viewIndexMetadata": { "status": "available", "code": null }
+  },
+  "server": {
+    "status": "available",
+    "code": null,
+    "version": "7.17.25",
+    "versionKind": "release",
+    "buildFlavor": "default",
+    "deployment": "unknown",
+    "clusterUuid": "fixture-cluster"
+  },
+  "license": {
+    "status": "available",
+    "code": null,
+    "kind": "basic",
+    "state": "active",
+    "expiryTimeMs": null
+  },
+  "featureReport": {
+    "status": "available",
+    "code": null,
+    "sql": { "available": true, "enabled": true },
+    "eql": { "available": true, "enabled": false },
+    "esql": null,
+    "graph": { "available": false, "enabled": true }
+  },
+  "capabilities": {
+    "search": { "status": "unknown", "source": "none", "reason": "notProbed", "code": null },
+    "pit": { "status": "unknown", "source": "none", "reason": "notProbed", "code": null },
+    "sql": { "status": "reported", "source": "featureReport", "reason": "featureReported", "code": null },
+    "eql": { "status": "disabled", "source": "featureReport", "reason": "featureReported", "code": null },
+    "esql": { "status": "unknown", "source": "featureReport", "reason": "featureMissing", "code": null },
+    "graph": { "status": "unlicensed", "source": "featureReport", "reason": "featureReported", "code": null }
+  },
+  "checkedAtMs": 1700000000003,
+  "reports": { "source": "live", "checkedAtMs": 1700000000000, "ageMs": 3, "ttlMs": 60000 },
+  "operationVerification": "notRun"
+}

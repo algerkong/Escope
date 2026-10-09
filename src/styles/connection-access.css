@@ -1,3 +1,7 @@
+.dialog-content:has(.connection-access) {
+  width: 620px;
+}
+
 .connection-access .endpoint {
   overflow-wrap: anywhere;
 }
@@ -20,6 +24,7 @@
 
 .access-results dt {
   color: var(--muted);
+  overflow-wrap: anywhere;
 }
 
 .access-results dd {
@@ -27,10 +32,33 @@
   overflow-wrap: anywhere;
 }
 
-.access-results [data-access="denied"] {
+.access-results [data-access="denied"],
+.access-results [data-access="report-denied"],
+.access-results [data-license="expired"],
+.access-results [data-license="invalid"] {
   color: var(--error);
 }
 
 .access-results [data-access="available"] {
   color: var(--success);
+}
+
+.access-evidence {
+  display: block;
+  color: var(--muted);
+  font-size: .875em;
+  line-height: 1.5;
+}
+
+.access-results .access-freshness {
+  margin-top: .75rem;
+  padding-top: .5rem;
+  border-top: 1px solid var(--border);
+}
+
+.access-results [data-capability="unknown"],
+.access-results [data-capability="unsupported"],
+.access-results [data-capability="disabled"],
+.access-results [data-capability="unlicensed"] {
+  color: var(--muted);
 }

@@ -179,6 +179,7 @@ mod tests {
             resource_plan(&profile(), Resource::Indices, Some(&target))
                 .unwrap()
                 .build(&reqwest::Client::new())
+                .unwrap()
                 .build()
                 .unwrap()
                 .url()
@@ -229,7 +230,11 @@ mod tests {
             let request = request(resource, index);
             let target = request.target().unwrap();
             let plan = resource_plan(&profile(), resource, target.as_ref()).unwrap();
-            let built = plan.build(&reqwest::Client::new()).build().unwrap();
+            let built = plan
+                .build(&reqwest::Client::new())
+                .unwrap()
+                .build()
+                .unwrap();
             assert_eq!(built.method(), reqwest::Method::GET, "{resource:?}");
             assert_eq!(built.url().as_str(), expected, "{resource:?}");
             assert!(built.body().is_none(), "{resource:?}");
@@ -305,28 +310,26 @@ mod tests {
     }
 
     #[test]
-    fn an_authenticated_connection_never_builds_a_resource_plan() {
+    fn a_bound_resource_plan_cannot_be_sent_without_its_resolved_auth() {
         let mut profile = profile();
         profile.auth_state = ConnectionAuth {
             kind: AuthKind::Basic,
             credential_ref: Some(crate::credentials::CredentialRef::generate()),
         };
         let target = IndexTarget::parse("logs-*").unwrap();
-        assert_eq!(
-            resource_plan(&profile, Resource::Indices, Some(&target))
-                .err()
-                .unwrap()
-                .code,
-            "unsupported"
-        );
-        // The cluster-wide resources are refused for the same reason.
-        assert_eq!(
-            resource_plan(&profile, Resource::ClusterHealth, None)
-                .err()
-                .unwrap()
-                .code,
-            "unsupported"
-        );
+        // The plan itself is built, but it refuses to become a request: the header can only be
+        // attached by the resolver for this exact connection.
+        for (resource, target) in [
+            (Resource::Indices, Some(&target)),
+            (Resource::ClusterHealth, None),
+        ] {
+            let plan = resource_plan(&profile, resource, target).unwrap();
+            assert_eq!(
+                plan.build(&reqwest::Client::new()).err().unwrap().code,
+                "unsupported",
+                "{resource:?}"
+            );
+        }
     }
 
     #[test]
@@ -405,6 +408,15 @@ mod tests {
             ),
             format!(
                 r#"{{"requestId":"{REQUEST}","connectionId":"{CONNECTION}","resource":"indices","headers":{{"authorization":"secret"}}}}"#
+            ),
+            format!(
+                r#"{{"requestId":"{REQUEST}","connectionId":"{CONNECTION}","resource":"indices","credentialRef":"{CONNECTION}"}}"#
+            ),
+            format!(
+                r#"{{"requestId":"{REQUEST}","connectionId":"{CONNECTION}","resource":"indices","secret":"fixture"}}"#
+            ),
+            format!(
+                r#"{{"requestId":"{REQUEST}","connectionId":"{CONNECTION}","resource":"indices","authorization":"Basic fixture"}}"#
             ),
             format!(
                 r#"{{"requestId":"{REQUEST}","connectionId":"{CONNECTION}","resource":"clusterState"}}"#

@@ -2,10 +2,11 @@ import { ArrowLeft, Boxes, Cable, Database, Globe, Keyboard, Layers, Monitor, Se
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { settingsGroups, type SettingsRoute } from './routes';
-import type { ConnectionInput, ConnectionProfile } from '../domain/connection';
+import type { ConnectionInput, ConnectionProfile, ConnectionSecurityChange } from '../domain/connection';
 import type { Preferences } from '../domain/preferences';
 import type { AiChatBackend } from '../domain/ai-chat';
 import { ConnectionPanel } from '../features/connections/ConnectionPanel';
+import { ConnectionAccess } from '../features/connections/ConnectionAccess';
 import { connectionTestLabel, type ConnectionTestState } from '../features/connections/useConnectionTests';
 import { ClusterResource } from '../features/cluster/ClusterResource';
 import { ModelPanel } from '../features/models/ModelPanel';
@@ -29,8 +30,11 @@ interface Props {
   testResults: Record<string, ConnectionTestState>;
   testConnection: (id: string) => void;
   selectConnection: (id: string) => Promise<void>;
-  saveConnection: (input: ConnectionInput, id?: string) => Promise<void>;
+  saveConnection: (input: ConnectionInput, id?: string, security?: ConnectionSecurityChange) => Promise<void>;
   deleteConnection: (id: string) => Promise<void>;
+  cleanupPending?: boolean;
+  cleanupBusy?: boolean;
+  cleanupCredentials?: () => Promise<void>;
   /** Injectable read-only metadata backend; component tests pass a fake, the app uses the IPC. */
   clusterBackend?: ClusterBackend;
   /** Model profile persistence; the app passes the desktop/session service created once at startup. */
@@ -73,6 +77,8 @@ export function SettingsView(props: Props) {
         <PreferencesPanel route={route} preferences={props.preferences} update={props.updatePreferences} /> :
         route === 'connections' ? <ConnectionPanel connections={props.connections} activeId={props.activeId} busy={props.busy}
           canTest={props.canTest} testResults={props.testResults} timeZone={props.preferences.timeZone} onTest={props.testConnection}
+          cleanupPending={props.cleanupPending} cleanupBusy={props.cleanupBusy} onCleanup={props.cleanupCredentials}
+          renderAccess={(profile) => <ConnectionAccess profile={profile} available={props.canTest} />}
           onSelect={props.selectConnection} onSave={props.saveConnection} onDelete={props.deleteConnection} /> :
         route === 'models' ? <ModelPanel service={props.modelService} backend={props.aiBackend} /> :
         <ClusterResource route={route} profile={activeProfile} desktop={props.canTest}

@@ -5,12 +5,11 @@
 //! application namespace.
 //!
 //! Scope and limits: read before wiring this into connection setup:
-//! - Not integrated yet. SQLite still has no credential column and nothing in this crate
-//!   persists a reference. Storing `credentialRef` next to a connection, resolving a
-//!   reference back to its owning connection, and deleting a secret when its connection is
-//!   deleted are F08.2 work; this module is only the storage primitive for that contract.
+//! - SQLite persists a connection's credential reference (F08.2, `connection_credentials`), and
+//!   the read-only transport resolves it through `connection_auth::resolve`. This module stays
+//!   the storage primitive: it never resolves which connection owns a reference.
 //! - The namespace is an addressing constraint, nothing more. A canonical UUID proves the
-//!   reference is well formed, not that it belongs to the connection being edited, so F08.2
+//!   reference is well formed, not that it belongs to the connection being edited, so callers
 //!   must resolve ownership from the trusted database and must never accept a reference
 //!   chosen by the frontend or by any other untrusted caller.
 //!

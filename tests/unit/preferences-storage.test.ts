@@ -31,7 +31,7 @@ describe('desktop preference IPC', () => {
     const state = await createStorage().load();
     expect(state.preferences.startAI).toBe(true);
     expect(state.preferences.uiSize).toBe(18);
-    expect(invoke).toHaveBeenCalledExactlyOnceWith('load_state');
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('connections_load');
 
     const legacy: Record<string, unknown> = { ...parsePreferences(null), startAi: true };
     delete legacy.startAI;

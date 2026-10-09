@@ -5,12 +5,13 @@ import {
   addWorkspaceTab, closeWorkspaceTab, createIndexTab, createQuery, createWorkspace,
   selectWorkspaceTab, switchConnection, updateWorkspaceDocument, type QueryDocument, type WorkspaceState,
 } from '../domain/query';
-import { selectConnection, type ConnectionInput } from '../domain/connection';
+import { selectConnection, type ConnectionInput, type ConnectionSecurityChange } from '../domain/connection';
 import { parsePreferences, resolveLocale, type Preferences } from '../domain/preferences';
 import type { AiChatBackend } from '../domain/ai-chat';
 import type { StorageService, StoredState } from '../services/storage';
 import { errorCode, testConnection, type QueryBackend } from '../services/ipc';
 import { createModelService, type ModelService } from '../services/models';
+import { createQueryLibraryService, type QueryLibraryService } from '../services/query-library';
 import { connectionTestLabel, useConnectionTests } from '../features/connections/useConnectionTests';
 import { IconButton, SelectControl } from '../components/controls';
 import { WindowTitleBar } from '../components/window/WindowTitleBar';
@@ -37,9 +38,10 @@ export function applyPreferences(p: Preferences) {
   if (i18n.language !== locale) void i18n.changeLanguage(locale);
 }
 
-export function App({ service, initial, connectionProbe = testConnection, queryBackend, aiBackend, modelService: suppliedModelService }:
+export function App({ service, initial, connectionProbe = testConnection, queryBackend, aiBackend, modelService: suppliedModelService,
+  queryLibraryService: suppliedQueryLibraryService }:
   { service: StorageService; initial: StoredState; connectionProbe?: typeof testConnection; queryBackend?: QueryBackend;
-    aiBackend?: AiChatBackend; modelService?: ModelService }) {
+    aiBackend?: AiChatBackend; modelService?: ModelService; queryLibraryService?: QueryLibraryService }) {
   const { t } = useTranslation();
   const [preferences, setPreferences] = useState(initial.preferences);
   const preferencesRef = useRef(preferences);
@@ -64,6 +66,8 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
   const [palette, setPalette] = useState<'jump' | 'command' | null>(null);
   const [queryCommand, setQueryCommand] = useState<QueryCommand | null>(null);
   const [busy, setBusy] = useState(false);
+  const [cleanupPending, setCleanupPending] = useState(initial.credentialCleanupPending ?? false);
+  const [cleanupBusy, setCleanupBusy] = useState(false);
   const mutationLock = useRef(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [selectionError, setSelectionError] = useState<{ id: string; code: string } | null>(null);
@@ -74,6 +78,7 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
   // Created once: the desktop adapter uses typed IPC, the browser preview keeps an explicit
   // session store. A failed desktop call is never answered from memory.
   const [modelService] = useState(() => suppliedModelService ?? createModelService());
+  const [queryLibraryService] = useState(() => suppliedQueryLibraryService ?? createQueryLibraryService());
   const preferenceVersion = useRef(0);
 
   useEffect(() => {
@@ -147,6 +152,11 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
     setView('query');
     requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('.query-editor-section textarea')?.focus());
   }, [navigateWorkspace]);
+  const restoreQuery = useCallback((source: QueryDocument) => {
+    const document: QueryDocument = { ...source, revision: 0 };
+    navigateWorkspace((current) => addWorkspaceTab(current, { kind: 'query', document }));
+    setView('query');
+  }, [navigateWorkspace]);
   const selectTab = useCallback((id: string | null) => {
     navigateWorkspace((current) => selectWorkspaceTab(current, id));
   }, [navigateWorkspace]);
@@ -172,9 +182,14 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
     setState((current) => switchConnection(current, id));
     setSelectionError(null);
   });
-  const saveConnection = (input: ConnectionInput, id?: string) => mutate(async () => {
-    const saved = await service.saveConnection(input, id);
-    if (id && profiles.find((profile) => profile.id === id)?.endpoint !== saved.endpoint) connectionTests.invalidate(id);
+  const saveConnection = (input: ConnectionInput, id?: string, security?: ConnectionSecurityChange) => mutate(async () => {
+    if (!service.saveConnectionSecure && security
+      && (security.credential.kind !== 'keep' || security.ca.kind !== 'keep')) throw { code: 'unsupported' };
+    const outcome = service.saveConnectionSecure ? await service.saveConnectionSecure(input, id, security) : null;
+    const saved = outcome?.profile ?? await service.saveConnection(input, id);
+    if (outcome) setCleanupPending(outcome.cleanup.status !== 'complete');
+    if (id && (profiles.find((profile) => profile.id === id)?.endpoint !== saved.endpoint
+      || (security !== undefined && (security.credential.kind !== 'keep' || security.ca.kind !== 'keep')))) connectionTests.invalidate(id);
     const next = id ? profiles.map((profile) => profile.id === saved.id ? saved : profile) : [...profiles, saved];
     setProfiles(next);
     setState((current) => {
@@ -184,7 +199,10 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
   });
   const removeConnection = (id: string) => mutate(async () => {
     selectionVersion.current++;
-    await service.deleteConnection(id);
+    if (service.deleteConnectionSecure) {
+      const outcome = await service.deleteConnectionSecure(id);
+      setCleanupPending(outcome.cleanup.status !== 'complete');
+    } else await service.deleteConnection(id);
     connectionTests.invalidate(id, true);
     const next = profiles.filter((profile) => profile.id !== id);
     setProfiles(next);
@@ -192,6 +210,14 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
       const active = selectConnection(next, current.activeConnectionId);
       return active === current.activeConnectionId ? current : switchConnection(current, active);
     });
+  });
+  const cleanupCredentials = () => mutate(async () => {
+    if (!service.cleanupCredentials) throw { code: 'unsupported' };
+    setCleanupBusy(true);
+    try {
+      const result = await service.cleanupCredentials();
+      setCleanupPending(result.status !== 'complete');
+    } finally { setCleanupBusy(false); }
   });
   const updateQuery = (id: string, patch: Partial<Pick<QueryDocument, 'name' | 'index' | 'dsl' | 'resultView'>>) =>
     setState((current) => updateWorkspaceDocument(current, id, patch));
@@ -267,12 +293,14 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
       <QueryWorkspace state={state} profiles={profiles} preferences={preferences} aiOpen={aiOpen} testResults={connectionTests.results}
         backend={queryBackend} canQuery={service.kind === 'desktop'} active={view === 'query'} onCommandReady={setQueryCommand}
         modelService={modelService} aiBackend={aiBackend}
+        libraryService={queryLibraryService}
         toggleAI={() => setAI((value) => !value)} onSettings={openSettings} updateQuery={updateQuery}
-        selectTab={selectTab} openIndex={openIndex} addQuery={addQuery} closeTab={closeTab} />
+        selectTab={selectTab} openIndex={openIndex} addQuery={addQuery} restoreQuery={restoreQuery} closeTab={closeTab} />
     </div>
     {view === 'settings' ? <SettingsView route={route} navigate={openSettings} back={backToQuery} preferences={preferences}
       modelService={modelService} aiBackend={aiBackend}
       updatePreferences={updatePreferences} connections={profiles} activeId={state.activeConnectionId} busy={busy}
+      cleanupPending={cleanupPending} cleanupBusy={cleanupBusy} cleanupCredentials={cleanupCredentials}
       canTest={service.kind === 'desktop'} testResults={connectionTests.results}
       testConnection={(id) => {
         const profile = profiles.find((item) => item.id === id);

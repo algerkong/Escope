@@ -5,6 +5,8 @@ export type ErrorCode = 'invalidInput' | 'invalidName' | 'invalidEndpoint' | 'in
   | 'invalidIndex' | 'invalidQuery' | 'duplicateRequest'
   | 'storageUnavailable' | 'notFound' | 'unsupported' | 'permissionDenied' | 'serverForbidden' | 'cancelled'
   | 'busy' | 'networkError' | 'timeout' | 'authenticationFailed' | 'rateLimited'
+  | 'credentialNotFound' | 'credentialUnavailable' | 'credentialFailure'
+  | 'invalidCertificate' | 'tlsError' | 'exportFailed'
   | 'redirectBlocked' | 'httpError' | 'notElasticsearch' | 'responseTooLarge' | 'invalidResponse';
 
 export interface ConnectionProbe {

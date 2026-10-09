@@ -1,3 +1,4 @@
+use crate::connection_tls::CaCertificate;
 use crate::credentials::CredentialRef;
 use crate::error::AppError;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -9,13 +10,20 @@ use uuid::Uuid;
 
 /// Highest schema version this build understands. A file above it fails closed instead of being
 /// opened with an unknown layout.
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 /// Hard upper bound for one credential cleanup batch, so no caller can request unbounded work.
 pub const MAX_CLEANUP_BATCH: usize = 64;
 
 /// Hard upper bound for stored model profiles, so one database cannot grow without limit.
 pub const MAX_MODEL_PROFILES: usize = 128;
+
+/// Hard upper bound for the saved-query document, matching the SQLite check on
+/// `saved_query_library` and the bound the Q07 IPC layer repeats before serializing.
+pub const MAX_SAVED_QUERIES_BYTES: usize = 4 * 1024 * 1024;
+
+/// Hard upper bound for stored connections, applied to every read and write path.
+const MAX_CONNECTIONS: i64 = 1000;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -88,7 +96,7 @@ impl Preferences {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ConnectionInput {
     pub display_name: String,
@@ -97,7 +105,7 @@ pub struct ConnectionInput {
 }
 
 impl ConnectionInput {
-    fn validate(mut self) -> Result<Self, AppError> {
+    pub(crate) fn validate(mut self) -> Result<Self, AppError> {
         self.display_name = self.display_name.trim().to_owned();
         if self.display_name.is_empty() || self.display_name.chars().count() > 80 {
             return Err(AppError::new("invalidName"));
@@ -143,8 +151,8 @@ impl AuthKind {
 }
 
 /// Internal authentication metadata of one connection. Never serialized and never returned over
-/// IPC: [`ConnectionProfile::auth`] stays `"none"` until an authenticated request path exists, so
-/// a stored credential can never be mistaken for an active authenticated session.
+/// IPC: [`ConnectionProfile::auth`] stays `"none"` for the legacy metadata contract, whose reads
+/// refuse bound rows. The authenticated transport uses a separate [`TransportSnapshot`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConnectionAuth {
     pub kind: AuthKind,
@@ -217,6 +225,17 @@ pub struct ConnectionRecord {
     pub profile: ConnectionProfile,
     /// Credential detached or replaced by the write, already queued for deletion.
     pub detached: Option<CredentialRef>,
+    /// Whether the row now carries a custom CA chain. The chain itself never leaves the module.
+    pub has_custom_ca: bool,
+}
+
+/// One connection as the credential-aware settings read returns it: the validated profile plus
+/// the one CA fact the frontend needs. The credential reference and the CA chain itself never
+/// appear here.
+#[derive(Debug)]
+pub struct ConnectionSummary {
+    pub profile: ConnectionProfile,
+    pub has_custom_ca: bool,
 }
 
 /// Result of a model metadata write that may detach a credential.
@@ -250,11 +269,12 @@ struct RawConnection {
     sort_order: i64,
     auth_kind: String,
     credential_ref: Option<String>,
+    ca_pem: Option<String>,
 }
 
 impl RawConnection {
     const COLUMNS: &'static str =
-        "id, display_name, endpoint, environment, sort_order, auth_kind, credential_ref";
+        "id, display_name, endpoint, environment, sort_order, auth_kind, credential_ref, ca_pem";
 
     fn read(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
         Ok(Self {
@@ -265,12 +285,13 @@ impl RawConnection {
             sort_order: row.get(4)?,
             auth_kind: row.get(5)?,
             credential_ref: row.get(6)?,
+            ca_pem: row.get(7)?,
         })
     }
 
-    /// Validate every stored field and the credential metadata. Anything the writer could not have
-    /// produced through this module fails closed instead of reaching a caller.
-    fn into_profile(self) -> Result<ConnectionProfile, AppError> {
+    /// Validate the row and return it together with its already-validated custom CA chain. The
+    /// chain stays inside this module and the transport; it is never serialized.
+    fn into_stored(self) -> Result<StoredConnection, AppError> {
         let auth_state = parse_auth(&self.auth_kind, self.credential_ref.as_deref())?;
         ConnectionInput {
             display_name: self.display_name.clone(),
@@ -282,19 +303,35 @@ impl RawConnection {
         if Uuid::parse_str(&self.id).is_err() || !(0..=1_000_000).contains(&self.sort_order) {
             return Err(AppError::new("storageUnavailable"));
         }
-        Ok(ConnectionProfile {
-            id: self.id,
-            display_name: self.display_name,
-            endpoint: self.endpoint,
-            environment: self.environment,
-            sort_order: self.sort_order,
-            auth: "none",
-            auth_state,
+        let ca = match self.ca_pem.as_deref() {
+            // A row the writer could not have produced (foreign or tampered) fails closed here;
+            // the code names the CA so the settings page can explain the refusal.
+            Some(pem) => Some(CaCertificate::parse(pem)?),
+            None => None,
+        };
+        Ok(StoredConnection {
+            profile: ConnectionProfile {
+                id: self.id,
+                display_name: self.display_name,
+                endpoint: self.endpoint,
+                environment: self.environment,
+                sort_order: self.sort_order,
+                auth: "none",
+                auth_state,
+            },
+            ca,
         })
     }
 }
 
-#[derive(Debug, Serialize)]
+/// One validated connection row and its validated custom CA chain, if any. Used only inside this
+/// module and by the transport; the chain never reaches the metadata IPC surface.
+struct StoredConnection {
+    profile: ConnectionProfile,
+    ca: Option<CaCertificate>,
+}
+
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionProfile {
     pub id: String,
@@ -302,11 +339,66 @@ pub struct ConnectionProfile {
     pub endpoint: String,
     pub environment: String,
     pub sort_order: i64,
-    /// IPC-facing authentication label. Stays `"none"` while no authenticated request path
-    /// exists; the real state lives in `auth_state` and is never serialized.
+    /// Legacy IPC authentication label. Metadata reads refuse bound rows rather than reporting
+    /// them as `"none"`; the transport uses `auth_state`, which is never serialized.
     pub auth: &'static str,
     #[serde(skip)]
     pub(crate) auth_state: ConnectionAuth,
+}
+
+/// Immutable transport snapshot for the internal authenticated read-only path (C01.3).
+///
+/// The validated row it wraps is private to this module, so the only production way to obtain a
+/// snapshot is [`Database::transport_snapshot`]. Callers cannot fabricate or mutate the target
+/// (connection ID, normalized endpoint, auth kind, credential reference) a credential is
+/// resolved for, and the resolver accepts this snapshot instead of a caller-built profile.
+pub struct TransportSnapshot {
+    profile: ConnectionProfile,
+    /// Validated custom CA chain of this connection, read from the trusted row. Never serialized
+    /// and never shared with another connection's client.
+    ca: Option<CaCertificate>,
+}
+
+impl TransportSnapshot {
+    /// The validated profile this snapshot was read from. Read-only: mutating a copy a caller
+    /// made cannot change what the snapshot already fixed.
+    pub fn profile(&self) -> &ConnectionProfile {
+        &self.profile
+    }
+
+    /// The validated custom CA chain, if the row carries one. Transport code adds it to its own
+    /// per-request client; no other module can serialize it into a record.
+    pub(crate) fn ca(&self) -> Option<&CaCertificate> {
+        self.ca.as_ref()
+    }
+
+    /// Test-only constructor for lower-level fixtures, compiled out of production builds. The
+    /// explicit name marks it: a non-test caller can never mint a resolution from a hand-built
+    /// profile.
+    #[cfg(test)]
+    pub(crate) fn for_test(profile: ConnectionProfile) -> Self {
+        Self { profile, ca: None }
+    }
+
+    /// Test-only variant with a custom CA chain, so the per-request client path is exercised.
+    #[cfg(test)]
+    pub(crate) fn for_test_with_ca(profile: ConnectionProfile, ca: CaCertificate) -> Self {
+        Self {
+            profile,
+            ca: Some(ca),
+        }
+    }
+}
+
+impl std::fmt::Debug for TransportSnapshot {
+    /// Only the connection identity is printable; the credential state stays behind the
+    /// resolver, whose own `Debug` redacts the reference and the header.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TransportSnapshot")
+            .field("connection_id", &self.profile.id)
+            .field("endpoint", &self.profile.endpoint)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Serialize)]
@@ -477,21 +569,23 @@ pub struct Database(Connection);
 impl Database {
     /// Read one connection for the legacy IPC surface. A connection with a bound credential is
     /// refused: the legacy profile reports `auth: "none"`, which would misrepresent it. The
-    /// credential-aware caller reads through the orchestration snapshot instead.
+    /// authenticated transport reads through [`Database::transport_snapshot`] instead.
     pub fn connection(&self, id: &str) -> Result<ConnectionProfile, AppError> {
         Uuid::parse_str(id).map_err(|_| AppError::new("invalidInput"))?;
-        let profile = self
+        let stored = self
             .read_connection(id)?
             .ok_or_else(|| AppError::new("notFound"))?;
-        if !profile.auth_state.unauthenticated() {
+        if !stored.profile.auth_state.unauthenticated() {
             return Err(AppError::new("unsupported"));
         }
-        Ok(profile)
+        Ok(stored.profile)
     }
 
-    /// Read one connection including its credential metadata, without the legacy refusal. Used by
-    /// the credential orchestration, never by an IPC command.
-    fn read_connection(&self, id: &str) -> Result<Option<ConnectionProfile>, AppError> {
+    /// Read one connection row including its credential metadata and custom CA chain, without the
+    /// legacy refusal. Each caller keeps its own gate: [`Database::connection`] refuses bound rows
+    /// for the legacy IPC surface, [`Database::transport_snapshot`] seals the row for the
+    /// authenticated transport, and the credential orchestration reads it for a write.
+    fn read_connection(&self, id: &str) -> Result<Option<StoredConnection>, AppError> {
         let raw = self
             .0
             .query_row(
@@ -503,7 +597,23 @@ impl Database {
                 RawConnection::read,
             )
             .optional()?;
-        raw.map(RawConnection::into_profile).transpose()
+        raw.map(RawConnection::into_stored).transpose()
+    }
+
+    /// Trusted snapshot for the internal authenticated transport (C01.3/C04.1): the same validated
+    /// row as [`Database::connection`], without the legacy refusal, so the credential a bound
+    /// connection owns and the CA chain it trusts can be used for a request. The snapshot seals
+    /// the target — the resolver cannot be pointed at a different endpoint or reference, and the
+    /// client builder cannot mix one connection's chain into another's request — and the IPC
+    /// surface does not change: the legacy metadata commands keep refusing bound rows.
+    pub fn transport_snapshot(&self, id: &str) -> Result<TransportSnapshot, AppError> {
+        Uuid::parse_str(id).map_err(|_| AppError::new("invalidInput"))?;
+        self.read_connection(id)?
+            .map(|stored| TransportSnapshot {
+                profile: stored.profile,
+                ca: stored.ca,
+            })
+            .ok_or_else(|| AppError::new("notFound"))
     }
 
     pub fn open(path: &Path) -> Result<Self, AppError> {
@@ -524,6 +634,7 @@ impl Database {
                 2 => tx.execute_batch(include_str!("../migrations/002_credentials.sql"))?,
                 3 => tx.execute_batch(include_str!("../migrations/003_models.sql"))?,
                 4 => tx.execute_batch(include_str!("../migrations/004_model_credentials.sql"))?,
+                5 => tx.execute_batch(include_str!("../migrations/005_connection_settings.sql"))?,
                 _ => return Err(AppError::new("unsupported")),
             }
             tx.commit()?;
@@ -536,7 +647,9 @@ impl Database {
         Ok(Self(conn))
     }
 
-    pub fn load(&self) -> Result<StoredState, AppError> {
+    /// The stored preferences, validated. A missing row means defaults; a corrupt row fails
+    /// closed and is never overwritten by a read.
+    pub fn preferences(&self) -> Result<Preferences, AppError> {
         let raw: Option<String> = self
             .0
             .query_row(
@@ -553,19 +666,17 @@ impl Database {
         preferences
             .validate()
             .map_err(|_| AppError::new("storageUnavailable"))?;
-        let mut statement = self.0.prepare(&format!(
-            "SELECT {} FROM connections ORDER BY sort_order, id",
-            RawConnection::COLUMNS
-        ))?;
-        let rows = statement
-            .query_map([], RawConnection::read)?
-            .collect::<Result<Vec<_>, _>>()?;
-        if rows.len() > 1000 {
-            return Err(AppError::new("storageUnavailable"));
-        }
-        let mut connections = Vec::with_capacity(rows.len());
-        for raw in rows {
-            let profile = raw.into_profile()?;
+        Ok(preferences)
+    }
+
+    /// Legacy state read. A row with a bound credential is refused (`unsupported`), because this
+    /// record cannot describe one truthfully; the authenticated settings read is
+    /// [`Database::connection_summaries`].
+    pub fn load(&self) -> Result<StoredState, AppError> {
+        let preferences = self.preferences()?;
+        let mut connections = Vec::new();
+        for summary in self.connection_summaries()? {
+            let profile = summary.profile;
             if !profile.auth_state.unauthenticated() {
                 // The legacy state read reports every connection as `auth: "none"`. Rather than
                 // misrepresent a connection that has a credential, it refuses the whole read until
@@ -574,11 +685,7 @@ impl Database {
             }
             connections.push(profile);
         }
-        let selected: Option<String> = self.0.query_row(
-            "SELECT active_connection_id FROM workspace WHERE singleton=1",
-            [],
-            |row| row.get(0),
-        )?;
+        let selected = self.stored_active_connection_id()?;
         let active_connection_id = selected
             .filter(|id| connections.iter().any(|profile| &profile.id == id))
             .or_else(|| connections.first().map(|profile| profile.id.clone()));
@@ -587,6 +694,69 @@ impl Database {
             connections,
             active_connection_id,
         })
+    }
+
+    /// Every stored connection including its authenticated state, for the credential-aware
+    /// settings read. Each row is validated exactly like a legacy read; the credential reference
+    /// is never part of the result.
+    pub fn connection_summaries(&self) -> Result<Vec<ConnectionSummary>, AppError> {
+        let mut statement = self.0.prepare(&format!(
+            "SELECT {} FROM connections ORDER BY sort_order, id",
+            RawConnection::COLUMNS
+        ))?;
+        let rows = statement
+            .query_map([], RawConnection::read)?
+            .collect::<Result<Vec<_>, _>>()?;
+        if rows.len() as i64 > MAX_CONNECTIONS {
+            return Err(AppError::new("storageUnavailable"));
+        }
+        let mut summaries = Vec::with_capacity(rows.len());
+        for raw in rows {
+            let stored = raw.into_stored()?;
+            summaries.push(ConnectionSummary {
+                profile: stored.profile,
+                has_custom_ca: stored.ca.is_some(),
+            });
+        }
+        Ok(summaries)
+    }
+
+    /// The stored active connection selection, exactly as persisted. Callers resolve it against
+    /// the connection list they actually returned.
+    pub fn stored_active_connection_id(&self) -> Result<Option<String>, AppError> {
+        Ok(self.0.query_row(
+            "SELECT active_connection_id FROM workspace WHERE singleton=1",
+            [],
+            |row| row.get(0),
+        )?)
+    }
+
+    /// The saved-query document as stored, or `None` when nothing was saved yet. Shared storage
+    /// only: the document is opaque here, and its typed validation belongs to the Q07 module that
+    /// owns the schema of this JSON.
+    pub fn saved_queries_json(&self) -> Result<Option<String>, AppError> {
+        Ok(self
+            .0
+            .query_row(
+                "SELECT json FROM saved_query_library WHERE singleton=1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Store the saved-query document in one atomic upsert. The byte bound is enforced here as
+    /// well as by the table check, so an oversized payload is refused before it is written and the
+    /// previous document stays intact.
+    pub fn save_saved_queries_json(&self, json: &str) -> Result<(), AppError> {
+        if json.len() > MAX_SAVED_QUERIES_BYTES {
+            return Err(AppError::new("invalidInput"));
+        }
+        self.0.execute(
+            "INSERT INTO saved_query_library(singleton,json) VALUES (1,?1) ON CONFLICT(singleton) DO UPDATE SET json=excluded.json",
+            [json],
+        )?;
+        Ok(())
     }
 
     pub fn save_preferences(&self, preferences: Preferences) -> Result<(), AppError> {
@@ -630,12 +800,12 @@ impl Database {
     ) -> Result<ConnectionRecord, AppError> {
         let clean = input.validate()?;
         let tx = self.0.transaction()?;
-        let (id, sort_order, auth_state, detached) = match id {
+        let (id, sort_order, auth_state, detached, ca_state) = match id {
             Some(id) => {
                 Uuid::parse_str(&id).map_err(|_| AppError::new("invalidInput"))?;
                 let previous = tx
                     .query_row(
-                        "SELECT sort_order, endpoint, auth_kind, credential_ref FROM connections WHERE id=?1",
+                        "SELECT sort_order, endpoint, auth_kind, credential_ref, ca_pem FROM connections WHERE id=?1",
                         [&id],
                         |row| {
                             Ok((
@@ -643,6 +813,7 @@ impl Database {
                                 row.get::<_, String>(1)?,
                                 row.get::<_, String>(2)?,
                                 row.get::<_, Option<String>>(3)?,
+                                row.get::<_, Option<String>>(4)?,
                             ))
                         },
                     )
@@ -652,32 +823,37 @@ impl Database {
                 if policy == BoundCredential::Reject && !auth.unauthenticated() {
                     return Err(AppError::new("unsupported"));
                 }
-                // A credential was captured for one endpoint. Sending it to a different host
-                // would disclose the old secret to a new target, so an endpoint change detaches
-                // it in the same transaction and queues the secret for deletion. Renaming keeps
-                // the reference and the stable id.
-                let detached = if previous.1 == clean.endpoint {
-                    None
-                } else {
-                    if !auth.unauthenticated() {
-                        tx.execute(
-                            "UPDATE connections SET auth_kind='none', credential_ref=NULL WHERE id=?1",
-                            [&id],
-                        )?;
-                    }
+                // A credential (and a custom CA) was captured for one endpoint. Sending the old
+                // secret or trusting the old chain for a different host would silently reuse
+                // something granted for another target, so an endpoint change detaches the
+                // credential in the same transaction, queues the secret for deletion and drops
+                // the chain. Renaming keeps both, plus the stable id.
+                let target_changed = previous.1 != clean.endpoint;
+                let detached = if target_changed {
                     auth.credential_ref.clone()
+                } else {
+                    None
                 };
                 let auth_state = if detached.is_some() {
                     ConnectionAuth::none()
                 } else {
                     auth
                 };
-                (id, previous.0, auth_state, detached)
+                let ca_state = if target_changed {
+                    None
+                } else {
+                    previous
+                        .4
+                        .as_deref()
+                        .map(CaCertificate::parse)
+                        .transpose()?
+                };
+                (id, previous.0, auth_state, detached, ca_state)
             }
             None => {
                 let count: i64 =
                     tx.query_row("SELECT count(*) FROM connections", [], |row| row.get(0))?;
-                if count >= 1000 {
+                if count >= MAX_CONNECTIONS {
                     return Err(AppError::new("invalidInput"));
                 }
                 let order: i64 = tx.query_row(
@@ -690,29 +866,209 @@ impl Database {
                     order,
                     ConnectionAuth::none(),
                     None,
+                    None,
                 )
             }
         };
         tx.execute(
-            "INSERT INTO connections(id,display_name,endpoint,environment,sort_order) VALUES (?1,?2,?3,?4,?5)
-             ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name,endpoint=excluded.endpoint,environment=excluded.environment",
-            params![id, clean.display_name, clean.endpoint, clean.environment, sort_order],
+            "INSERT INTO connections(id,display_name,endpoint,environment,sort_order,auth_kind,credential_ref,ca_pem)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
+             ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name,endpoint=excluded.endpoint,
+               environment=excluded.environment,auth_kind=excluded.auth_kind,
+               credential_ref=excluded.credential_ref,ca_pem=excluded.ca_pem",
+            params![
+                id,
+                clean.display_name,
+                clean.endpoint,
+                clean.environment,
+                sort_order,
+                auth_state.kind.as_str(),
+                auth_state.credential_ref.as_ref().map(CredentialRef::as_str),
+                ca_state.as_ref().map(CaCertificate::as_pem)
+            ],
         )?;
         if let Some(reference) = &detached {
             queue_cleanup(&tx, reference, CleanupReason::Cleanup)?;
         }
+        let stored = read_stored_connection(&tx, &id)?;
         tx.commit()?;
         Ok(ConnectionRecord {
-            profile: ConnectionProfile {
-                id,
-                display_name: clean.display_name,
-                endpoint: clean.endpoint,
-                environment: clean.environment,
-                sort_order,
-                auth: "none",
-                auth_state,
-            },
+            profile: stored.profile,
             detached,
+            has_custom_ca: stored.ca.is_some(),
+        })
+    }
+
+    /// Validate metadata, identity and bounds before any keyring side effect. The combined write
+    /// transaction repeats every check, so this only narrows the window in which a rejected
+    /// request could have touched the OS store.
+    pub fn connection_save_precheck(
+        &self,
+        input: &ConnectionInput,
+        id: Option<&str>,
+    ) -> Result<(), AppError> {
+        input.clone().validate()?;
+        match id {
+            Some(id) => {
+                Uuid::parse_str(id).map_err(|_| AppError::new("invalidInput"))?;
+                let exists: bool = self.0.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM connections WHERE id=?1)",
+                    [id],
+                    |row| row.get(0),
+                )?;
+                if !exists {
+                    return Err(AppError::new("notFound"));
+                }
+            }
+            None => {
+                let count: i64 =
+                    self.0
+                        .query_row("SELECT count(*) FROM connections", [], |row| row.get(0))?;
+                if count >= MAX_CONNECTIONS {
+                    return Err(AppError::new("invalidInput"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// One authenticated write that commits metadata, the credential reference and the custom CA
+    /// chain in a single transaction, applying the target rule to every part:
+    ///
+    /// - `Replace` binds the freshly written reference and queues the previous one;
+    /// - `Keep` preserves the reference and the chain while the endpoint is unchanged;
+    /// - a changed endpoint detaches the old reference (queued for deletion) and drops the old
+    ///   chain even under `Keep`, because neither was granted for the new target; renaming keeps
+    ///   both.
+    ///
+    /// The reference must already exist in the OS store: this method never writes a secret, and a
+    /// caller that changes its mind afterwards must use the shared outbox to account for the
+    /// orphan. The returned record is built inside the transaction, so a post-commit read failure
+    /// can never be mistaken for a rolled-back write.
+    pub(crate) fn save_connection_combined(
+        &mut self,
+        input: ConnectionInput,
+        id: Option<String>,
+        change: ConnectionReferenceChange<'_>,
+        ca: ConnectionCaChange,
+    ) -> Result<ConnectionRecord, AppError> {
+        if let ConnectionReferenceChange::Replace { kind, .. } = change {
+            // A replacement always names a real scheme; `none` cannot bind.
+            if kind == AuthKind::None {
+                return Err(AppError::new("invalidInput"));
+            }
+        }
+        let clean = input.validate()?;
+        let tx = self.0.transaction()?;
+        let (id, sort_order, previous) = match id {
+            Some(id) => {
+                Uuid::parse_str(&id).map_err(|_| AppError::new("invalidInput"))?;
+                let stored = tx
+                    .query_row(
+                        "SELECT sort_order, endpoint, auth_kind, credential_ref, ca_pem FROM connections WHERE id=?1",
+                        [&id],
+                        |row| {
+                            Ok((
+                                row.get::<_, i64>(0)?,
+                                row.get::<_, String>(1)?,
+                                row.get::<_, String>(2)?,
+                                row.get::<_, Option<String>>(3)?,
+                                row.get::<_, Option<String>>(4)?,
+                            ))
+                        },
+                    )
+                    .optional()?
+                    .ok_or_else(|| AppError::new("notFound"))?;
+                (id, stored.0, Some(stored))
+            }
+            None => {
+                let count: i64 =
+                    tx.query_row("SELECT count(*) FROM connections", [], |row| row.get(0))?;
+                if count >= MAX_CONNECTIONS {
+                    return Err(AppError::new("invalidInput"));
+                }
+                let order: i64 = tx.query_row(
+                    "SELECT coalesce(max(sort_order),-1)+1 FROM connections",
+                    [],
+                    |row| row.get(0),
+                )?;
+                (Uuid::new_v4().to_string(), order, None)
+            }
+        };
+        let target_changed = previous
+            .as_ref()
+            .is_some_and(|stored| stored.1 != clean.endpoint);
+        let previous_auth = match &previous {
+            Some(stored) => parse_auth(&stored.2, stored.3.as_deref())?,
+            None => ConnectionAuth::none(),
+        };
+        let previous_ca = match &previous {
+            Some(stored) => match stored.4.as_deref() {
+                Some(pem) => Some(CaCertificate::parse(pem)?),
+                None => None,
+            },
+            None => None,
+        };
+        let (auth_state, detached) = match change {
+            ConnectionReferenceChange::Keep if target_changed => {
+                (ConnectionAuth::none(), previous_auth.credential_ref.clone())
+            }
+            ConnectionReferenceChange::Keep => (previous_auth, None),
+            ConnectionReferenceChange::Clear => {
+                (ConnectionAuth::none(), previous_auth.credential_ref.clone())
+            }
+            ConnectionReferenceChange::Replace { kind, reference } => {
+                let detached = previous_auth
+                    .credential_ref
+                    .filter(|previous_ref| previous_ref != reference);
+                (
+                    ConnectionAuth {
+                        kind,
+                        credential_ref: Some(reference.clone()),
+                    },
+                    detached,
+                )
+            }
+        };
+        let ca_state = match ca {
+            ConnectionCaChange::Keep if target_changed => None,
+            ConnectionCaChange::Keep => previous_ca,
+            ConnectionCaChange::Clear => None,
+            ConnectionCaChange::Replace(certificate) => Some(certificate),
+        };
+        tx.execute(
+            "INSERT INTO connections(id,display_name,endpoint,environment,sort_order,auth_kind,credential_ref,ca_pem)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
+             ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name,endpoint=excluded.endpoint,
+               environment=excluded.environment,auth_kind=excluded.auth_kind,
+               credential_ref=excluded.credential_ref,ca_pem=excluded.ca_pem",
+            params![
+                id,
+                clean.display_name,
+                clean.endpoint,
+                clean.environment,
+                sort_order,
+                auth_state.kind.as_str(),
+                auth_state.credential_ref.as_ref().map(CredentialRef::as_str),
+                ca_state.as_ref().map(CaCertificate::as_pem)
+            ],
+        )?;
+        if let Some(reference) = &auth_state.credential_ref {
+            // The reference is bound to this row now, so a prepare entry would be stale.
+            tx.execute(
+                "DELETE FROM credential_cleanup WHERE reference=?1",
+                [reference.as_str()],
+            )?;
+        }
+        if let Some(reference) = &detached {
+            queue_cleanup(&tx, reference, CleanupReason::Cleanup)?;
+        }
+        let stored = read_stored_connection(&tx, &id)?;
+        tx.commit()?;
+        Ok(ConnectionRecord {
+            profile: stored.profile,
+            detached,
+            has_custom_ca: stored.ca.is_some(),
         })
     }
 
@@ -1102,11 +1458,12 @@ impl Database {
         if let Some(reference) = &auth.credential_ref {
             queue_cleanup(&tx, reference, CleanupReason::Cleanup)?;
         }
-        let profile = read_profile(&tx, id)?;
+        let stored = read_stored_connection(&tx, id)?;
         tx.commit()?;
         Ok(ConnectionRecord {
-            profile,
+            profile: stored.profile,
             detached: auth.credential_ref,
+            has_custom_ca: stored.ca.is_some(),
         })
     }
 
@@ -1146,11 +1503,12 @@ impl Database {
                 queue_cleanup(&tx, previous, CleanupReason::Cleanup)?;
             }
         }
-        let profile = read_profile(&tx, id)?;
+        let stored = read_stored_connection(&tx, id)?;
         tx.commit()?;
         Ok(ConnectionRecord {
-            profile,
+            profile: stored.profile,
             detached: previous,
+            has_custom_ca: stored.ca.is_some(),
         })
     }
 
@@ -1266,6 +1624,30 @@ pub(crate) fn clean_endpoint(value: &str) -> Result<String, AppError> {
     Ok(url.as_str().trim_end_matches('/').to_owned())
 }
 
+/// How one combined authenticated write changes a connection's credential reference.
+pub(crate) enum ConnectionReferenceChange<'a> {
+    /// Keep the bound reference; a changed endpoint detaches it instead, because the secret was
+    /// granted for the old target.
+    Keep,
+    /// Drop any bound reference and queue it for deletion.
+    Clear,
+    /// Bind this freshly written reference, replacing (and queuing) any previous one.
+    Replace {
+        kind: AuthKind,
+        reference: &'a CredentialRef,
+    },
+}
+
+/// How one combined write changes a connection's custom CA chain.
+pub(crate) enum ConnectionCaChange {
+    /// Keep the stored chain; a changed endpoint drops it instead, like the credential.
+    Keep,
+    /// Drop the stored chain.
+    Clear,
+    /// Store this already-validated chain.
+    Replace(CaCertificate),
+}
+
 /// Whether a metadata write may act on a connection that has a bound credential. The legacy IPC
 /// commands cannot report credential handling, so they refuse such a row instead.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1291,8 +1673,12 @@ fn parse_auth(kind: &str, reference: Option<&str>) -> Result<ConnectionAuth, App
     }
 }
 
-/// Read and validate one connection row inside an open transaction.
-fn read_profile(tx: &rusqlite::Transaction<'_>, id: &str) -> Result<ConnectionProfile, AppError> {
+/// Read and validate one whole connection row (profile plus custom CA chain) inside an open
+/// transaction.
+fn read_stored_connection(
+    tx: &rusqlite::Transaction<'_>,
+    id: &str,
+) -> Result<StoredConnection, AppError> {
     let raw = tx
         .query_row(
             &format!(
@@ -1304,7 +1690,7 @@ fn read_profile(tx: &rusqlite::Transaction<'_>, id: &str) -> Result<ConnectionPr
         )
         .optional()?
         .ok_or_else(|| AppError::new("notFound"))?;
-    raw.into_profile()
+    raw.into_stored()
 }
 
 fn queue_cleanup(
@@ -1865,7 +2251,7 @@ mod tests {
         assert_eq!(stored.kind, AuthKind::ApiKey);
         assert_eq!(stored.credential_ref.as_ref(), Some(&reference));
         // The refused writes left the row exactly as it was.
-        let profile = db.read_connection(&created.id).unwrap().unwrap();
+        let profile = db.read_connection(&created.id).unwrap().unwrap().profile;
         assert_eq!(profile.display_name, "Bound");
         assert_eq!(profile.endpoint, "https://example.test/es");
         // Nothing was queued for deletion, so the bound secret stays untouched.
@@ -2490,5 +2876,374 @@ mod tests {
                 .unwrap(),
             1
         );
+    }
+
+    /// A version 4 database as the previous release left it: connection/credential metadata,
+    /// model profiles with credential support and the shared outbox, but no CA column and no
+    /// saved-query table.
+    fn v4_database(path: &Path) -> (Connection, String, CredentialRef, String) {
+        let (conn, connection_id, reference, model_id) = v3_database(path);
+        conn.execute_batch(include_str!("../migrations/004_model_credentials.sql"))
+            .unwrap();
+        (conn, connection_id, reference, model_id)
+    }
+
+    fn legacy_input(name: &str) -> ConnectionInput {
+        ConnectionInput {
+            display_name: name.into(),
+            endpoint: "https://legacy.test/es".into(),
+            environment: "staging".into(),
+        }
+    }
+
+    #[test]
+    fn version_four_database_gains_connection_settings_without_losing_rows() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("v4-settings.sqlite");
+        let (conn, connection_id, reference, model_id) = v4_database(&path);
+        drop(conn);
+
+        let mut db = Database::open(&path).unwrap();
+        assert_eq!(
+            db.0.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            SCHEMA_VERSION
+        );
+        // Every pre-existing row survived; the new state starts empty.
+        let summaries = db.connection_summaries().unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].profile.id, connection_id);
+        assert!(!summaries[0].has_custom_ca);
+        assert_eq!(summaries[0].profile.display_name, "Legacy");
+        assert_eq!(db.pending_credential_cleanup_count().unwrap(), 1);
+        assert_eq!(
+            db.pending_credential_cleanup(8, MAX_ATTEMPTS).unwrap()[0].reference,
+            reference
+        );
+        assert!(db
+            .model_profile(&model_id)
+            .unwrap()
+            .credential_ref
+            .is_none());
+        assert!(db
+            .connection_auth(&connection_id)
+            .unwrap()
+            .unauthenticated());
+        assert_eq!(db.saved_queries_json().unwrap(), None);
+        assert_eq!(
+            db.load().unwrap().active_connection_id.as_deref(),
+            Some(connection_id.as_str())
+        );
+
+        // The new CA column accepts a validated chain through the combined write...
+        let ca = CaCertificate::parse(crate::connection_tls::test_certificates::ROOT_CA_3).unwrap();
+        let record = db
+            .save_connection_combined(
+                legacy_input("Legacy"),
+                Some(connection_id.clone()),
+                ConnectionReferenceChange::Keep,
+                ConnectionCaChange::Replace(ca),
+            )
+            .unwrap();
+        assert!(record.has_custom_ca);
+        assert!(db
+            .transport_snapshot(&connection_id)
+            .unwrap()
+            .ca()
+            .is_some());
+        // ...and the SQL check refuses a document outside the 64 KiB bound.
+        db.run_sql_for_test("UPDATE connections SET ca_pem=hex(zeroblob(32768))")
+            .unwrap();
+        assert!(db
+            .run_sql_for_test("UPDATE connections SET ca_pem=hex(zeroblob(32769))")
+            .is_err());
+        // A hand-written value that is not a certificate fails closed on read.
+        db.run_sql_for_test("UPDATE connections SET ca_pem='not a certificate'")
+            .unwrap();
+        assert_eq!(
+            db.transport_snapshot(&connection_id).unwrap_err().code,
+            "invalidCertificate"
+        );
+        assert_eq!(
+            db.connection_summaries().unwrap_err().code,
+            "invalidCertificate"
+        );
+    }
+
+    #[test]
+    fn failed_connection_settings_migration_keeps_version_four_and_every_row() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("v4-conflict.sqlite");
+        let (conn, connection_id, _, model_id) = v4_database(&path);
+        // Force the fifth step to fail after the ALTER inside it would have succeeded.
+        conn.execute_batch("CREATE TABLE saved_query_library (bogus TEXT);")
+            .unwrap();
+        drop(conn);
+
+        assert!(Database::open(&path).is_err());
+        let conn = Connection::open(&path).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 4);
+        // The column added before the failing statement was rolled back with the transaction.
+        let columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(connections)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(!columns.iter().any(|column| column == "ca_pem"));
+        assert_eq!(
+            conn.query_row(
+                "SELECT display_name FROM connections WHERE id=?1",
+                [&connection_id],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+            "Legacy"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM model_profiles WHERE id=?1",
+                [&model_id],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM credential_cleanup", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn saved_query_library_round_trips_and_is_bounded() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("saved-queries.sqlite");
+        let document = r#"{"version":1,"queries":[{"id":"a"}]}"#;
+        {
+            let db = Database::open(&path).unwrap();
+            assert_eq!(db.saved_queries_json().unwrap(), None);
+            db.save_saved_queries_json(document).unwrap();
+            // The upsert replaces the single row instead of appending.
+            db.save_saved_queries_json(document).unwrap();
+        }
+        let db = Database::open(&path).unwrap();
+        assert_eq!(db.saved_queries_json().unwrap().as_deref(), Some(document));
+
+        // The application bound refuses an oversized document and keeps the previous one.
+        let oversized = "x".repeat(MAX_SAVED_QUERIES_BYTES + 1);
+        assert_eq!(
+            db.save_saved_queries_json(&oversized).unwrap_err().code,
+            "invalidInput"
+        );
+        assert_eq!(db.saved_queries_json().unwrap().as_deref(), Some(document));
+        // The SQL check refuses a document that bypasses the application bound.
+        assert!(db
+            .run_sql_for_test("UPDATE saved_query_library SET json=hex(zeroblob(2097152))")
+            .is_ok());
+        assert!(db
+            .run_sql_for_test("UPDATE saved_query_library SET json=hex(zeroblob(2097153))")
+            .is_err());
+    }
+
+    #[test]
+    fn combined_save_applies_the_target_rule_to_reference_and_ca() {
+        let mut db = Database::open(Path::new(":memory:")).unwrap();
+        let created = db.save_connection(input("First"), None).unwrap().profile;
+        let reference = CredentialRef::generate();
+        let ca = CaCertificate::parse(&crate::connection_tls::test_certificates::chain()).unwrap();
+
+        let record = db
+            .save_connection_combined(
+                input("First"),
+                Some(created.id.clone()),
+                ConnectionReferenceChange::Replace {
+                    kind: AuthKind::Bearer,
+                    reference: &reference,
+                },
+                ConnectionCaChange::Replace(ca),
+            )
+            .unwrap();
+        assert_eq!(record.profile.auth_state.kind, AuthKind::Bearer);
+        assert_eq!(
+            record.profile.auth_state.credential_ref.as_ref(),
+            Some(&reference)
+        );
+        assert!(record.has_custom_ca);
+        assert!(record.detached.is_none());
+        assert_eq!(db.pending_credential_cleanup_count().unwrap(), 0);
+
+        // Renaming with `keep` on the same endpoint preserves both the reference and the chain.
+        let record = db
+            .save_connection_combined(
+                input("Renamed"),
+                Some(created.id.clone()),
+                ConnectionReferenceChange::Keep,
+                ConnectionCaChange::Keep,
+            )
+            .unwrap();
+        assert_eq!(
+            record.profile.auth_state.credential_ref.as_ref(),
+            Some(&reference)
+        );
+        assert!(record.has_custom_ca);
+        assert!(record.detached.is_none());
+
+        // A changed endpoint with `keep` detaches the credential (queued) and drops the chain.
+        let mut moved = input("Renamed");
+        moved.endpoint = "https://moved.test/es".into();
+        let record = db
+            .save_connection_combined(
+                moved,
+                Some(created.id.clone()),
+                ConnectionReferenceChange::Keep,
+                ConnectionCaChange::Keep,
+            )
+            .unwrap();
+        assert_eq!(record.detached.as_ref(), Some(&reference));
+        assert!(record.profile.auth_state.unauthenticated());
+        assert!(!record.has_custom_ca);
+        let queued = db.pending_credential_cleanup(8, MAX_ATTEMPTS).unwrap();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].reference, reference);
+        let snapshot = db.transport_snapshot(&created.id).unwrap();
+        assert!(snapshot.profile().auth_state.unauthenticated());
+        assert!(snapshot.ca().is_none());
+
+        // A replacement without a scheme and a missing connection are refused before any write.
+        assert_eq!(
+            db.save_connection_combined(
+                input("Renamed"),
+                Some(created.id.clone()),
+                ConnectionReferenceChange::Replace {
+                    kind: AuthKind::None,
+                    reference: &reference,
+                },
+                ConnectionCaChange::Keep,
+            )
+            .unwrap_err()
+            .code,
+            "invalidInput"
+        );
+        let missing = Uuid::new_v4().to_string();
+        assert_eq!(
+            db.save_connection_combined(
+                input("Missing"),
+                Some(missing),
+                ConnectionReferenceChange::Keep,
+                ConnectionCaChange::Clear,
+            )
+            .unwrap_err()
+            .code,
+            "notFound"
+        );
+        assert_eq!(
+            db.save_connection_combined(
+                input("Invalid"),
+                Some("not-an-id".into()),
+                ConnectionReferenceChange::Keep,
+                ConnectionCaChange::Keep,
+            )
+            .unwrap_err()
+            .code,
+            "invalidInput"
+        );
+    }
+
+    #[test]
+    fn summaries_report_authenticated_rows_truthfully_without_references() {
+        let mut db = Database::open(Path::new(":memory:")).unwrap();
+        let plain = db.save_connection(input("Plain"), None).unwrap().profile;
+        let bound = db.save_connection(input("Bound"), None).unwrap().profile;
+        let reference = CredentialRef::generate();
+        db.bind_credential(&bound.id, AuthKind::ApiKey, &reference)
+            .unwrap();
+
+        // The legacy read still refuses the whole state while a bound row exists.
+        assert_eq!(db.load().err().unwrap().code, "unsupported");
+
+        let summaries = db.connection_summaries().unwrap();
+        assert_eq!(summaries.len(), 2);
+        assert!(summaries[0].profile.auth_state.unauthenticated());
+        assert_eq!(summaries[0].profile.id, plain.id);
+        assert_eq!(summaries[1].profile.id, bound.id);
+        assert_eq!(summaries[1].profile.auth_state.kind, AuthKind::ApiKey);
+        assert_eq!(
+            summaries[1].profile.auth_state.credential_ref.as_ref(),
+            Some(&reference)
+        );
+        // The internal profile never serializes the reference or the hidden auth state; the
+        // credential-aware projection is built by the settings module.
+        let json = serde_json::to_string(&summaries[1].profile).unwrap();
+        assert!(json.contains(r#""auth":"none""#));
+        assert!(!json.contains("credentialRef"));
+        assert!(!json.contains(reference.as_str()));
+    }
+
+    #[test]
+    fn custom_ca_is_isolated_to_its_own_connection_snapshot() {
+        let mut db = Database::open(Path::new(":memory:")).unwrap();
+        let secured = db.save_connection(input("Secured"), None).unwrap().profile;
+        let plain = db.save_connection(input("Plain"), None).unwrap().profile;
+        let ca = CaCertificate::parse(crate::connection_tls::test_certificates::ROOT_CA_3).unwrap();
+        db.save_connection_combined(
+            input("Secured"),
+            Some(secured.id.clone()),
+            ConnectionReferenceChange::Keep,
+            ConnectionCaChange::Replace(ca),
+        )
+        .unwrap();
+
+        // The chain belongs to the row that stored it; another connection's snapshot has none, so
+        // its client can never be built with a foreign root.
+        assert!(db.transport_snapshot(&secured.id).unwrap().ca().is_some());
+        assert!(db.transport_snapshot(&plain.id).unwrap().ca().is_none());
+        let summaries = db.connection_summaries().unwrap();
+        assert!(summaries[0].has_custom_ca);
+        assert!(!summaries[1].has_custom_ca);
+
+        // Clearing it touches only its own row.
+        db.save_connection_combined(
+            input("Secured"),
+            Some(secured.id.clone()),
+            ConnectionReferenceChange::Keep,
+            ConnectionCaChange::Clear,
+        )
+        .unwrap();
+        assert!(db.transport_snapshot(&secured.id).unwrap().ca().is_none());
+        assert!(db.transport_snapshot(&plain.id).unwrap().ca().is_none());
+    }
+
+    #[test]
+    fn legacy_metadata_write_clears_the_ca_on_an_endpoint_change_only() {
+        let mut db = Database::open(Path::new(":memory:")).unwrap();
+        let created = db.save_connection(input("First"), None).unwrap().profile;
+        let ca = CaCertificate::parse(crate::connection_tls::test_certificates::ROOT_CA_3).unwrap();
+        db.save_connection_combined(
+            input("First"),
+            Some(created.id.clone()),
+            ConnectionReferenceChange::Keep,
+            ConnectionCaChange::Replace(ca),
+        )
+        .unwrap();
+
+        // The legacy metadata path preserves the chain on a rename...
+        let renamed = db
+            .save_connection(input("Renamed"), Some(created.id.clone()))
+            .unwrap();
+        assert!(renamed.has_custom_ca);
+        // ...and drops it with the endpoint change, exactly like a credential.
+        let mut moved = input("Renamed");
+        moved.endpoint = "https://moved.test/es".into();
+        let record = db.save_connection(moved, Some(created.id.clone())).unwrap();
+        assert!(!record.has_custom_ca);
+        assert!(db.transport_snapshot(&created.id).unwrap().ca().is_none());
+        assert_eq!(db.pending_credential_cleanup_count().unwrap(), 0);
     }
 }

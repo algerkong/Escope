@@ -1,4 +1,4 @@
-import { Check, CheckCheck, ChevronDown, Copy, Info, LoaderCircle, MonitorX, Search, TriangleAlert, XCircle } from 'lucide-react';
+import { Check, CheckCheck, ChevronDown, Copy, Download, Info, LoaderCircle, MonitorX, Search, TriangleAlert, XCircle } from 'lucide-react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { EmptyState, IconButton, Modal } from '../../components/controls';
@@ -7,9 +7,11 @@ import { formatRawJson, sliceRaw, type ResultHit } from '../../domain/query-resu
 import { supportsSnapshotPaging } from '../../domain/query-pagination';
 import { INITIAL_RESULT_GRID_STATE, type ResultGridState } from '../../domain/result-grid';
 import { QueryResultGrid, type GridScrollPosition } from './QueryResultGrid';
+import { ResultExportDialog } from './QueryLibrary';
 import type { ExecutionEntry, ExecutionPage } from './useQueryExecutions';
 import { executionErrorKey } from './error-message';
 import { useCopyText } from './useCopyText';
+import type { QueryLibraryService } from '../../services/query-library';
 
 const IDLE: ExecutionState = { status: 'idle' };
 const EMPTY_PAGES: readonly ExecutionPage[] = [];
@@ -32,6 +34,8 @@ interface Props {
   onViewChange: (view: QueryDocument['resultView']) => void;
   /** Continue the execution inside its snapshot; only offered when a cursor exists. */
   onLoadMore: () => void;
+  /** When provided, the loaded rows can be exported as CSV or JSONL through this service. */
+  exportService?: QueryLibraryService;
 }
 
 /**
@@ -40,11 +44,12 @@ interface Props {
  * number. Failed, cancelled and partial executions stay visually distinct from success, and
  * an unavailable (browser) workspace offers neither a request nor a retry.
  */
-export function QueryResults({ kind = 'query', active = true, documentIds, wrapJson = false, grouping = true, renderToolbar, query, entry, available, stale, endpointChanged, onCancel, onRun, canRun = true, onViewChange, onLoadMore }: Props) {
+export function QueryResults({ kind = 'query', active = true, documentIds, wrapJson = false, grouping = true, renderToolbar, query, entry, available, stale, endpointChanged, onCancel, onRun, canRun = true, onViewChange, onLoadMore, exportService }: Props) {
   const { t, i18n } = useTranslation();
   const copy = useCopyText(query.id);
   const [gridStates, setGridStates] = useState<Record<string, { executionKey: string; value: ResultGridState }>>({});
   const [selectedDetail, setDetail] = useState<{ hit: ResultHit; page: number; queryId: string; requestKey: string | null } | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
   const scroll = useRef(new Map<string, { executionKey: string; table?: GridScrollPosition; json?: GridScrollPosition }>());
   const jsonViewport = useRef<HTMLPreElement>(null);
   const state = entry?.state ?? IDLE;
@@ -100,6 +105,13 @@ export function QueryResults({ kind = 'query', active = true, documentIds, wrapJ
     return [...names];
   }, [displayHits]);
   const hits = displayHits;
+  // Export rows are the same loaded hits the grid shows; nothing is fetched or re-parsed here.
+  const exportHits = useMemo(() => displayHits.map((row) => row.hit), [displayHits]);
+  const exportable = exportService !== undefined && (state.status === 'success' || state.status === 'partial') && exportHits.length > 0;
+  // The export dialog follows the execution that is actually displayed: leaving it (running,
+  // failed, another query or a new request) closes it, which also invalidates a pending attempt.
+  useEffect(() => { if (!exportable) setExportOpen(false); }, [exportable]);
+  useEffect(() => { setExportOpen(false); }, [query.id, requestKey]);
   const totals = summary?.totals ?? null;
   const totalText = totals === null ? '' : new Intl.NumberFormat(i18n.language, { useGrouping: grouping }).format(BigInt(totals.text));
   const hitsText = totals === null ? t('queryLive:hitsUnknown')
@@ -206,6 +218,7 @@ export function QueryResults({ kind = 'query', active = true, documentIds, wrapJ
       </> : null}
     </div>;
   const toolbarControls = <div className="ql-toolbar-end">
+        {exportable ? <IconButton icon={Download} label={t('queryLibrary:exportLoaded')} onClick={() => setExportOpen(true)} /> : null}
         {state.status === 'running' || continuing ? <button type="button" className="secondary compact-button" onClick={onCancel}>{t('queryLive:cancel')}</button> : null}
         <div className="segment" role="group" aria-label={t('query:resultView')}>
           {(['table', 'json'] as const).map((view) => <button key={view} type="button"
@@ -266,5 +279,8 @@ export function QueryResults({ kind = 'query', active = true, documentIds, wrapJ
         </div>
       </> : null}
     </Modal>
+    {exportService ? <ResultExportDialog open={exportOpen} service={exportService} hits={exportHits} pages={pages}
+      baseName={'snapshot' in state ? state.snapshot.index : ''} partial={state.status === 'partial'}
+      onClose={() => setExportOpen(false)} /> : null}
   </section>;
 }

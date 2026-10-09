@@ -771,6 +771,7 @@ mod tests {
         let built = search_plan(&profile(), &prepared.index, prepared.body)
             .unwrap()
             .build(&reqwest::Client::new())
+            .unwrap()
             .build()
             .unwrap();
         assert_eq!(built.method(), reqwest::Method::POST);
@@ -821,18 +822,16 @@ mod tests {
     }
 
     #[test]
-    fn an_authenticated_connection_never_builds_a_search_plan() {
+    fn a_bound_search_plan_cannot_be_sent_without_its_resolved_auth() {
         let mut profile = profile();
         profile.auth_state = ConnectionAuth {
             kind: AuthKind::ApiKey,
             credential_ref: Some(crate::credentials::CredentialRef::generate()),
         };
         let target = IndexTarget::parse("logs-*").unwrap();
+        let plan = search_plan(&profile, &target, b"{}".to_vec()).unwrap();
         assert_eq!(
-            search_plan(&profile, &target, b"{}".to_vec())
-                .err()
-                .unwrap()
-                .code,
+            plan.build(&reqwest::Client::new()).err().unwrap().code,
             "unsupported"
         );
     }
@@ -884,11 +883,54 @@ mod tests {
                 r#"{{"requestId":"{REQUEST}","connectionId":"{CONNECTION}","index":"logs-*","rawDsl":"{{}}","headers":{{"authorization":"secret"}}}}"#
             ),
             format!(
+                r#"{{"requestId":"{REQUEST}","connectionId":"{CONNECTION}","index":"logs-*","rawDsl":"{{}}","credentialRef":"{CONNECTION}"}}"#
+            ),
+            format!(
+                r#"{{"requestId":"{REQUEST}","connectionId":"{CONNECTION}","index":"logs-*","rawDsl":"{{}}","secret":"fixture"}}"#
+            ),
+            format!(
+                r#"{{"requestId":"{REQUEST}","connectionId":"{CONNECTION}","index":"logs-*","rawDsl":"{{}}","authorization":"Basic fixture"}}"#
+            ),
+            format!(
                 r#"{{"requestId":"{REQUEST}","connectionId":"{CONNECTION}","index":"logs-*","rawDsl":"{{}}","path":"/_cat/indices"}}"#
             ),
         ] {
             assert!(
                 serde_json::from_str::<QueryExecuteRequest>(&payload).is_err(),
+                "{payload} should be refused"
+            );
+        }
+        // The snapshot envelopes carry the same closed fields: a credential can never be
+        // attached to a PIT open or close either.
+        for payload in [
+            format!(
+                r#"{{"requestId":"{REQUEST}","connectionId":"{CONNECTION}","index":"logs-*","credentialRef":"{CONNECTION}"}}"#
+            ),
+            format!(
+                r#"{{"requestId":"{REQUEST}","connectionId":"{CONNECTION}","index":"logs-*","secret":"fixture"}}"#
+            ),
+            format!(
+                r#"{{"requestId":"{REQUEST}","connectionId":"{CONNECTION}","index":"logs-*","headers":{{"authorization":"secret"}}}}"#
+            ),
+        ] {
+            assert!(
+                serde_json::from_str::<PitOpenRequest>(&payload).is_err(),
+                "{payload} should be refused"
+            );
+        }
+        for payload in [
+            format!(
+                r#"{{"requestId":"{REQUEST}","connectionId":"{CONNECTION}","pitId":"pit-abc123","credentialRef":"{CONNECTION}"}}"#
+            ),
+            format!(
+                r#"{{"requestId":"{REQUEST}","connectionId":"{CONNECTION}","pitId":"pit-abc123","secret":"fixture"}}"#
+            ),
+            format!(
+                r#"{{"requestId":"{REQUEST}","connectionId":"{CONNECTION}","pitId":"pit-abc123","authorization":"Basic fixture"}}"#
+            ),
+        ] {
+            assert!(
+                serde_json::from_str::<PitCloseRequest>(&payload).is_err(),
                 "{payload} should be refused"
             );
         }

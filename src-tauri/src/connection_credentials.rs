@@ -29,13 +29,17 @@
 //! in-process. There is no cross-process coordination and no lock file: two application instances
 //! sharing one SQLite file are not supported, and adding such a lock is out of scope here.
 //!
-//! Out of scope: authenticated network requests, secret payload encoding, startup recovery wiring
-//! and any command that accepts or returns a secret.
+//! Out of scope: request transport, startup recovery wiring and any command that accepts or
+//! returns a secret. The versioned payload encoding stored here is defined by `connection_auth`,
+//! which is also the only reader of a bound secret.
 
+use crate::connection_auth::EsAuthMaterial;
+use crate::connection_tls::CaCertificate;
 use crate::credentials::{CredentialRef, CredentialStore, Secret};
 use crate::error::AppError;
 use crate::storage::{
-    AuthKind, CleanupReason, ConnectionInput, ConnectionProfile, Database, MAX_CLEANUP_BATCH,
+    AuthKind, CleanupReason, ConnectionCaChange, ConnectionInput, ConnectionProfile,
+    ConnectionReferenceChange, Database, MAX_CLEANUP_BATCH,
 };
 
 /// Retry budget per queued reference. A reference that keeps failing stays queued and is reported
@@ -121,6 +125,33 @@ pub struct DeleteOutcome {
     pub cleanup: CleanupPass,
 }
 
+/// Validated credential action of one combined connection save. The material is already built by
+/// its constructors, so an invalid field can never reach the keyring.
+pub enum ConnectionCredentialPlan {
+    Keep,
+    Clear,
+    Replace(EsAuthMaterial),
+}
+
+/// Custom CA action of one combined connection save. The chain is already validated.
+pub enum ConnectionCaPlan {
+    Keep,
+    Clear,
+    Replace(CaCertificate),
+}
+
+/// Result of one combined connection write: metadata, credential reference and CA chain committed
+/// together, plus what the post-commit cleanup could account for.
+#[derive(Debug)]
+pub struct CombinedWrite {
+    pub profile: ConnectionProfile,
+    /// Credential detached or replaced by this call, already queued for deletion.
+    pub detached: Option<CredentialRef>,
+    /// Whether the row now carries a custom CA chain. The chain itself never leaves.
+    pub has_custom_ca: bool,
+    pub cleanup: CleanupPass,
+}
+
 /// Credential lifecycle over one database handle and one injectable credential store.
 pub struct ConnectionCredentials<'a> {
     database: &'a mut Database,
@@ -146,6 +177,93 @@ impl<'a> ConnectionCredentials<'a> {
             detached: record.detached,
             cleanup,
         })
+    }
+
+    /// Create or update one connection, committing metadata, credential reference and custom CA
+    /// chain together. The order is the same crash-safe one the other writes use:
+    ///
+    /// 1. metadata, identity and bounds are validated before any side effect;
+    /// 2. a replacement secret is queued as `prepare` and written under a fresh reference;
+    /// 3. metadata + reference + CA commit in one transaction, with the target rule applied — a
+    ///    changed endpoint detaches the old reference (queued for deletion) and drops the old
+    ///    chain even under `keep`, because neither was granted for the new target; renaming keeps
+    ///    both;
+    /// 4. only then is the detached secret deleted, bounded and accounted for.
+    ///
+    /// A keyring or SQL failure leaves the previous target, credential and chain untouched. The
+    /// freshly written secret is deleted again; if even that fails, the prepare entry stays and
+    /// the bounded cleanup retries it.
+    pub fn save_combined(
+        &mut self,
+        input: ConnectionInput,
+        id: Option<String>,
+        credential: ConnectionCredentialPlan,
+        ca: ConnectionCaPlan,
+    ) -> Result<CombinedWrite, AppError> {
+        // Metadata, identity and bounds before any keyring side effect; the commit transaction
+        // repeats every check.
+        self.database
+            .connection_save_precheck(&input, id.as_deref())?;
+        // Owned by this call so a failed commit can still account for the orphaned secret.
+        let mut prepared: Option<CredentialRef> = None;
+        let change = match credential {
+            ConnectionCredentialPlan::Keep => ConnectionReferenceChange::Keep,
+            ConnectionCredentialPlan::Clear => ConnectionReferenceChange::Clear,
+            ConnectionCredentialPlan::Replace(material) => {
+                let kind = material.kind();
+                let payload = material.encode()?;
+                prepared = Some(CredentialRef::generate());
+                let reference = match &prepared {
+                    Some(reference) => reference,
+                    // Unreachable: the value was just stored above.
+                    None => return Err(AppError::new("storageUnavailable")),
+                };
+                // Persist the intent before the keyring write: a crash before the bind commits
+                // leaves a prepare entry, and the cleanup pass then deletes the orphan.
+                self.database
+                    .queue_credential_cleanup(reference, CleanupReason::Prepare)?;
+                if let Err(error) = self.store.set(reference, &payload) {
+                    // The write may or may not have landed, so the reference stays accounted for.
+                    discard_unbound_secret(self.database, self.store, reference);
+                    return Err(AppError::from(error));
+                }
+                // From here the secret lives in the OS store only.
+                drop(payload);
+                ConnectionReferenceChange::Replace { kind, reference }
+            }
+        };
+        let ca_change = match ca {
+            ConnectionCaPlan::Keep => ConnectionCaChange::Keep,
+            ConnectionCaPlan::Clear => ConnectionCaChange::Clear,
+            ConnectionCaPlan::Replace(certificate) => ConnectionCaChange::Replace(certificate),
+        };
+        let record = match self
+            .database
+            .save_connection_combined(input, id, change, ca_change)
+        {
+            Ok(record) => record,
+            Err(error) => {
+                // The commit did not happen, so the new secret must not survive it.
+                if let Some(reference) = &prepared {
+                    discard_unbound_secret(self.database, self.store, reference);
+                }
+                return Err(error);
+            }
+        };
+        let cleanup = self.cleanup_after_commit(CLEANUP_BATCH);
+        Ok(CombinedWrite {
+            profile: record.profile,
+            detached: record.detached,
+            has_custom_ca: record.has_custom_ca,
+            cleanup,
+        })
+    }
+
+    /// One bounded cleanup pass as a typed outcome for the settings IPC. A pass that cannot be
+    /// accounted for is [`CleanupPass::Incomplete`], never an error that would hide the queued
+    /// state behind a refusal.
+    pub fn cleanup_outcome(&mut self) -> CleanupPass {
+        cleanup_after_commit(self.database, self.store, CLEANUP_BATCH)
     }
 
     /// Bind a new secret to a connection, replacing any previous one.
@@ -191,6 +309,21 @@ impl<'a> ConnectionCredentials<'a> {
                 Err(error)
             }
         }
+    }
+
+    /// Bind an Elasticsearch authentication payload to a connection, replacing any previous one.
+    ///
+    /// This typed path encodes the versioned vault payload the transport reads back. The kind
+    /// recorded on the row is the material's own kind; the caller cannot bind a mismatch here.
+    /// The raw `bind` primitive remains internal lifecycle plumbing, not a secret IPC.
+    pub fn bind_auth(
+        &mut self,
+        connection_id: &str,
+        material: EsAuthMaterial,
+    ) -> Result<CredentialWrite, AppError> {
+        let kind = material.kind();
+        let payload = material.encode()?;
+        self.bind(connection_id, kind, payload)
     }
 
     /// Detach a connection's credential without deleting the connection.
@@ -1216,6 +1349,283 @@ mod tests {
         }
         assert_eq!(database.pending_credential_cleanup_count().unwrap(), 0);
         assert_eq!(database.connection(&id).unwrap_err().code, "notFound");
+    }
+
+    #[test]
+    fn combined_save_writes_then_binds_reference_and_ca_in_one_commit() {
+        let mut fixture = Fixture::new();
+        let id = fixture.add("A", "https://a.test/es");
+        let ca = CaCertificate::parse(crate::connection_tls::test_certificates::ROOT_CA_3).unwrap();
+
+        let write = fixture
+            .credentials()
+            .save_combined(
+                input("A", "https://a.test/es"),
+                Some(id.clone()),
+                ConnectionCredentialPlan::Replace(
+                    EsAuthMaterial::bearer("combined-secret").unwrap(),
+                ),
+                ConnectionCaPlan::Replace(ca),
+            )
+            .unwrap();
+        assert!(write.detached.is_none());
+        assert!(write.has_custom_ca);
+        assert_eq!(write.profile.auth_state.kind, AuthKind::Bearer);
+        assert_eq!(completed(&write.cleanup), &CleanupReport::default());
+
+        // The vault holds exactly the reference the row points at, written before the commit; the
+        // trusted snapshot then resolves the request header and carries the chain.
+        let reference = fixture.reference(&id);
+        assert!(fixture
+            .store
+            .secret(&reference)
+            .unwrap()
+            .contains("combined-secret"));
+        let snapshot = fixture.database.transport_snapshot(&id).unwrap();
+        assert!(snapshot.ca().is_some());
+        let auth = crate::connection_auth::resolve(&snapshot, &fixture.store).unwrap();
+        assert_eq!(
+            auth.header().unwrap().to_str().unwrap(),
+            "Bearer combined-secret"
+        );
+        assert_eq!(
+            fixture.database.pending_credential_cleanup_count().unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn combined_save_keyring_failure_is_prevalidated_and_changes_nothing() {
+        let mut fixture = Fixture::new();
+        let id = fixture.add("A", "https://a.test/es");
+        let ca = CaCertificate::parse(crate::connection_tls::test_certificates::ROOT_CA_3).unwrap();
+        fixture
+            .credentials()
+            .save_combined(
+                input("A", "https://a.test/es"),
+                Some(id.clone()),
+                ConnectionCredentialPlan::Replace(EsAuthMaterial::bearer("first-secret").unwrap()),
+                ConnectionCaPlan::Replace(ca),
+            )
+            .unwrap();
+        let first = fixture.reference(&id);
+        fixture
+            .store
+            .set_fault(Some(CredentialError::StorageFailure));
+
+        let error = fixture
+            .credentials()
+            .save_combined(
+                input("Moved", "https://moved.test/es"),
+                Some(id.clone()),
+                ConnectionCredentialPlan::Replace(
+                    EsAuthMaterial::basic("alice", "second-secret").unwrap(),
+                ),
+                ConnectionCaPlan::Clear,
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "credentialFailure");
+
+        // Previous name, target, credential and chain are untouched.
+        let snapshot = fixture.database.transport_snapshot(&id).unwrap();
+        assert_eq!(snapshot.profile().display_name, "A");
+        assert_eq!(snapshot.profile().endpoint, "https://a.test/es");
+        assert_eq!(
+            snapshot.profile().auth_state.credential_ref.as_ref(),
+            Some(&first)
+        );
+        assert!(snapshot.ca().is_some());
+        assert!(fixture
+            .store
+            .secret(&first)
+            .unwrap()
+            .contains("first-secret"));
+        assert_eq!(
+            fixture.database.pending_credential_cleanup_count().unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn combined_save_commit_failure_erases_the_new_secret_and_keeps_the_old_binding() {
+        let mut fixture = Fixture::new();
+        let id = fixture.add("A", "https://a.test/es");
+        let ca = CaCertificate::parse(crate::connection_tls::test_certificates::ROOT_CA_3).unwrap();
+        fixture
+            .credentials()
+            .save_combined(
+                input("A", "https://a.test/es"),
+                Some(id.clone()),
+                ConnectionCredentialPlan::Replace(EsAuthMaterial::api_key("id", "key").unwrap()),
+                ConnectionCaPlan::Replace(ca),
+            )
+            .unwrap();
+        let first = fixture.reference(&id);
+        fail_bind_writes(&fixture);
+
+        let error = fixture
+            .credentials()
+            .save_combined(
+                input("Renamed", "https://a.test/es"),
+                Some(id.clone()),
+                ConnectionCredentialPlan::Replace(EsAuthMaterial::bearer("second-secret").unwrap()),
+                ConnectionCaPlan::Clear,
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "storageUnavailable");
+
+        // The old row survived in full, including the CA the failed call would have cleared.
+        let snapshot = fixture.database.transport_snapshot(&id).unwrap();
+        assert_eq!(snapshot.profile().display_name, "A");
+        assert_eq!(
+            snapshot.profile().auth_state.credential_ref.as_ref(),
+            Some(&first)
+        );
+        assert!(snapshot.ca().is_some());
+        // The unbound new secret was erased and left no queue entry behind.
+        let written = fixture.store.refs("set:");
+        assert_eq!(written.len(), 2);
+        let abandoned = CredentialRef::parse(&written[1]).unwrap();
+        assert_eq!(fixture.store.secret(&abandoned), None);
+        assert_eq!(
+            fixture.database.pending_credential_cleanup_count().unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn combined_save_target_change_with_keep_detaches_credential_and_ca() {
+        let mut fixture = Fixture::new();
+        let id = fixture.add("A", "https://a.test/es");
+        let ca = CaCertificate::parse(crate::connection_tls::test_certificates::ROOT_CA_3).unwrap();
+        fixture
+            .credentials()
+            .save_combined(
+                input("A", "https://a.test/es"),
+                Some(id.clone()),
+                ConnectionCredentialPlan::Replace(EsAuthMaterial::bearer("old-secret").unwrap()),
+                ConnectionCaPlan::Replace(ca),
+            )
+            .unwrap();
+        let first = fixture.reference(&id);
+
+        let write = fixture
+            .credentials()
+            .save_combined(
+                input("A", "https://moved.test/es"),
+                Some(id.clone()),
+                ConnectionCredentialPlan::Keep,
+                ConnectionCaPlan::Keep,
+            )
+            .unwrap();
+        assert_eq!(write.detached.as_ref(), Some(&first));
+        assert!(!write.has_custom_ca);
+        assert!(write.profile.auth_state.unauthenticated());
+        // The detached secret was deleted by the post-commit pass and the queue is empty.
+        assert_eq!(completed(&write.cleanup).cleaned, 1);
+        assert!(!write.cleanup.cleanup_pending());
+        assert_eq!(fixture.store.secret(&first), None);
+        let snapshot = fixture.database.transport_snapshot(&id).unwrap();
+        assert!(snapshot.ca().is_none());
+        assert!(snapshot.profile().auth_state.unauthenticated());
+        assert_eq!(
+            fixture.database.pending_credential_cleanup_count().unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn combined_save_detach_cleanup_failure_is_pending_and_never_rolls_back() {
+        let mut fixture = Fixture::new();
+        let id = fixture.add("A", "https://a.test/es");
+        fixture
+            .credentials()
+            .save_combined(
+                input("A", "https://a.test/es"),
+                Some(id.clone()),
+                ConnectionCredentialPlan::Replace(EsAuthMaterial::bearer("old-secret").unwrap()),
+                ConnectionCaPlan::Keep,
+            )
+            .unwrap();
+        let first = fixture.reference(&id);
+        fixture
+            .store
+            .delete_fault(Some(CredentialError::StorageFailure));
+
+        let write = fixture
+            .credentials()
+            .save_combined(
+                input("A", "https://moved.test/es"),
+                Some(id.clone()),
+                ConnectionCredentialPlan::Keep,
+                ConnectionCaPlan::Keep,
+            )
+            .unwrap();
+        // The metadata commit is not rolled back; only the cleanup is reported as pending.
+        assert_eq!(write.detached.as_ref(), Some(&first));
+        let report = completed(&write.cleanup);
+        assert_eq!(report.failed, 1);
+        assert!(report.cleanup_pending());
+        assert_eq!(
+            fixture.database.pending_credential_cleanup_count().unwrap(),
+            1
+        );
+        assert!(fixture.store.secret(&first).is_some());
+
+        // A pass that cannot even be accounted for is `incomplete`, never a silent success.
+        fixture.store.delete_fault(None);
+        fixture
+            .database
+            .run_sql_for_test(&format!(
+                "CREATE TRIGGER fail_cancel BEFORE DELETE ON credential_cleanup WHEN old.reference='{}' BEGIN SELECT RAISE(ABORT, 'forced'); END",
+                first.as_str()
+            ))
+            .unwrap();
+        let pass = fixture.credentials().cleanup_outcome();
+        assert!(pass.is_incomplete());
+        assert!(pass.cleanup_pending());
+        fixture
+            .database
+            .run_sql_for_test("DROP TRIGGER fail_cancel")
+            .unwrap();
+        let pass = fixture.credentials().cleanup_outcome();
+        assert_eq!(completed(&pass).cleaned, 1);
+        assert!(!pass.cleanup_pending());
+        assert_eq!(
+            fixture.database.pending_credential_cleanup_count().unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn combined_save_rejects_invalid_input_before_the_store_is_touched() {
+        let mut fixture = Fixture::new();
+        let error = fixture
+            .credentials()
+            .save_combined(
+                input("", "https://a.test/es"),
+                None,
+                ConnectionCredentialPlan::Replace(EsAuthMaterial::bearer("unused").unwrap()),
+                ConnectionCaPlan::Keep,
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "invalidName");
+        let error = fixture
+            .credentials()
+            .save_combined(
+                input("Missing", "https://a.test/es"),
+                Some(uuid::Uuid::new_v4().to_string()),
+                ConnectionCredentialPlan::Replace(EsAuthMaterial::bearer("unused").unwrap()),
+                ConnectionCaPlan::Keep,
+            )
+            .unwrap_err();
+        assert_eq!(error.code, "notFound");
+        assert!(fixture.store.events().is_empty());
+        assert!(fixture.database.connection_summaries().unwrap().is_empty());
+        assert_eq!(
+            fixture.database.pending_credential_cleanup_count().unwrap(),
+            0
+        );
     }
 
     #[test]

@@ -1,6 +1,10 @@
 mod ai;
 mod connection;
+mod connection_access;
+mod connection_auth;
 pub mod connection_credentials;
+mod connection_settings;
+mod connection_tls;
 pub mod credentials;
 mod error;
 mod model_api_key;
@@ -11,9 +15,12 @@ mod operation;
 mod query;
 mod read_only;
 mod resources;
+mod saved_queries;
 mod storage;
 
 use connection::{ConnectionIdentity, ConnectionProbe, ReadOnlyClient};
+use connection_auth::ResolvedAuth;
+use credentials::SystemCredentialStore;
 use error::AppError;
 use query::{
     PitCloseRequest, PitCloseResponse, PitOpenRequest, PitOpenResponse, QueryExecuteRequest,
@@ -22,7 +29,9 @@ use query::{
 use read_only::{CancelRequest, Cancellation, RequestRegistry};
 use resources::{ResourceReadRequest, ResourceReadResponse};
 use std::sync::Mutex;
-use storage::{ConnectionInput, ConnectionProfile, Database, Preferences, StoredState};
+use storage::{
+    ConnectionInput, ConnectionProfile, Database, Preferences, StoredState, TransportSnapshot,
+};
 use tauri::{Manager, State};
 
 struct StorageState(Mutex<Result<Database, AppError>>);
@@ -43,6 +52,22 @@ fn with_database<T>(
         Ok(database) => action(database),
         Err(error) => Err(error.clone()),
     }
+}
+
+/// Read one connection for a network request and resolve its stored authentication.
+///
+/// The snapshot comes only from the validated row the database read for this stable connection
+/// ID; no network command accepts a reference or a secret, and a missing, unavailable or corrupt vault
+/// entry fails here — before a plan is built — instead of degrading into an unauthenticated
+/// send. The database lock is released before any network await, the store is resolved per
+/// request without a cache, and the same immutable snapshot plans the request and the response.
+fn connection_for_request(
+    state: &StorageState,
+    connection_id: &str,
+) -> Result<(TransportSnapshot, ResolvedAuth), AppError> {
+    let snapshot = with_database(state, |db| db.transport_snapshot(connection_id))?;
+    let auth = connection_auth::resolve(&snapshot, &SystemCredentialStore::new())?;
+    Ok((snapshot, auth))
 }
 
 #[tauri::command]
@@ -106,11 +131,17 @@ async fn resource_read(
         let mut guard = requests
             .0
             .register(&request.request_id, &request.connection_id)?;
-        let profile = with_database(&state, |db| db.connection(&request.connection_id))?;
-        let client = network.0.as_ref().map_err(Clone::clone)?;
-        let plan = resources::resource_plan(&profile, request.resource, target.as_ref())?;
+        let (snapshot, auth) = connection_for_request(&state, &request.connection_id)?;
+        let profile = snapshot.profile();
+        let client = network
+            .0
+            .as_ref()
+            .map_err(Clone::clone)?
+            .for_snapshot(&snapshot)?;
+        let plan = resources::resource_plan(profile, request.resource, target.as_ref())?
+            .authenticate(&auth)?;
         let raw = client.execute(plan, guard.cancellation()).await?;
-        ResourceReadResponse::new(&request, &profile, raw)
+        ResourceReadResponse::new(&request, profile, raw)
     }
     .await;
     result.map_err(|mut error: AppError| {
@@ -139,17 +170,23 @@ async fn query_execute(
         let mut guard = requests
             .0
             .register(&request.request_id, &request.connection_id)?;
-        let profile = with_database(&state, |db| db.connection(&request.connection_id))?;
-        let client = network.0.as_ref().map_err(Clone::clone)?;
+        let (snapshot, auth) = connection_for_request(&state, &request.connection_id)?;
+        let profile = snapshot.profile();
+        let client = network
+            .0
+            .as_ref()
+            .map_err(Clone::clone)?
+            .for_snapshot(&snapshot)?;
         // A continuation searches inside the snapshot with the composed body; a first page
         // targets the index the draft names.
         let plan = if prepared.continuation {
-            query::paginated_search_plan(&profile, prepared.body)?
+            query::paginated_search_plan(profile, prepared.body)?
         } else {
-            query::search_plan(&profile, &prepared.index, prepared.body)?
+            query::search_plan(profile, &prepared.index, prepared.body)?
         };
+        let plan = plan.authenticate(&auth)?;
         let raw = client.execute(plan, guard.cancellation()).await?;
-        QueryExecuteResponse::new(&request, &profile, raw, request.pit_id.as_deref())
+        QueryExecuteResponse::new(&request, profile, raw, request.pit_id.as_deref())
     }
     .await;
     result.map_err(|mut error: AppError| {
@@ -177,11 +214,16 @@ async fn pit_open(
         let mut guard = requests
             .0
             .register(&request.request_id, &request.connection_id)?;
-        let profile = with_database(&state, |db| db.connection(&request.connection_id))?;
-        let client = network.0.as_ref().map_err(Clone::clone)?;
-        let plan = query::pit_open_plan(&profile, &target)?;
+        let (snapshot, auth) = connection_for_request(&state, &request.connection_id)?;
+        let profile = snapshot.profile();
+        let client = network
+            .0
+            .as_ref()
+            .map_err(Clone::clone)?
+            .for_snapshot(&snapshot)?;
+        let plan = query::pit_open_plan(profile, &target)?.authenticate(&auth)?;
         let raw = client.execute(plan, guard.cancellation()).await?;
-        PitOpenResponse::new(&request, &profile, raw)
+        PitOpenResponse::new(&request, profile, raw)
     }
     .await;
     result.map_err(|mut error: AppError| {
@@ -201,9 +243,14 @@ async fn pit_close(
     request.validate()?;
     let request_id = request.request_id.clone();
     let result: Result<PitCloseResponse, AppError> = async {
-        let profile = with_database(&state, |db| db.connection(&request.connection_id))?;
-        let client = network.0.as_ref().map_err(Clone::clone)?;
-        let plan = query::pit_close_plan(&profile, &request.pit_id)?;
+        let (snapshot, auth) = connection_for_request(&state, &request.connection_id)?;
+        let profile = snapshot.profile();
+        let client = network
+            .0
+            .as_ref()
+            .map_err(Clone::clone)?
+            .for_snapshot(&snapshot)?;
+        let plan = query::pit_close_plan(profile, &request.pit_id)?.authenticate(&auth)?;
         client.execute(plan, &mut Cancellation::never()).await?;
         Ok(PitCloseResponse::new(&request))
     }
@@ -237,21 +284,33 @@ fn request_cancel(
 async fn connection_test(
     state: State<'_, StorageState>,
     network: State<'_, NetworkState>,
+    requests: State<'_, RequestState>,
     probe: ConnectionProbe,
 ) -> Result<ConnectionIdentity, AppError> {
     probe.validate()?;
     let result = async {
-        let profile = with_database(&state, |db| db.connection(&probe.connection_id))?;
-        let client = network.0.as_ref().map_err(Clone::clone)?;
-        client
-            .test(
-                &profile,
-                ConnectionProbe {
-                    request_id: probe.request_id.clone(),
-                    connection_id: probe.connection_id.clone(),
-                },
-            )
-            .await
+        let mut guard = requests
+            .0
+            .register(&probe.request_id, &probe.connection_id)?;
+        let (snapshot, auth) = connection_for_request(&state, &probe.connection_id)?;
+        let client = network
+            .0
+            .as_ref()
+            .map_err(Clone::clone)?
+            .for_snapshot(&snapshot)?;
+        let read = client.test(
+            snapshot.profile(),
+            ConnectionProbe {
+                request_id: probe.request_id.clone(),
+                connection_id: probe.connection_id.clone(),
+            },
+            &auth,
+        );
+        tokio::select! {
+            biased;
+            () = guard.cancellation().cancelled() => Err(AppError::new("cancelled")),
+            result = read => result,
+        }
     }
     .await;
     result.map_err(|mut error: AppError| {
@@ -263,6 +322,7 @@ async fn connection_test(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let database = (|| {
                 let directory = app
@@ -295,6 +355,14 @@ pub fn run() {
             pit_close,
             request_cancel,
             connection_test,
+            connection_access::connection_access,
+            connection_settings::connections_load,
+            connection_settings::connections_save,
+            connection_settings::connections_delete,
+            connection_settings::connections_cleanup,
+            saved_queries::saved_queries_load,
+            saved_queries::saved_queries_save,
+            saved_queries::saved_queries_export,
             ai::ai_chat,
             ai::ai_chat_cancel,
             models::models_load,

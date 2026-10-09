@@ -1,4 +1,4 @@
-import { Braces, Database, FileCheck2, Layers, Play, Plus, Settings, ShieldCheck, TriangleAlert, Undo2 } from 'lucide-react';
+import { Bookmark, Braces, Database, FileCheck2, Layers, LoaderCircle, Play, Plus, Save, Settings, ShieldCheck, Star, TriangleAlert, Undo2 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ConnectionProfile } from '../../domain/connection';
@@ -12,10 +12,13 @@ import { DATA_PREVIEW_DSL } from '../../domain/query-pagination';
 import type { SettingsRoute } from '../../app/routes';
 import { connectionTestLabel, type ConnectionTestState } from '../connections/useConnectionTests';
 import { formatQueryDsl, validateQueryDsl, type QueryDslError } from '../../domain/query-dsl';
+import { documentFromEntry, type SavedQueryEntry } from '../../domain/query-library';
 import { desktopQueryBackend, type QueryBackend } from '../../services/ipc';
+import { defaultQueryLibraryService, type QueryLibraryService } from '../../services/query-library';
 import { desktopModelService, type ModelService } from '../../services/models';
 import { detectWindowPlatform } from '../../services/window';
 import { AiChatPanel } from '../ai/AiChatPanel';
+import { QueryLibraryDialog, SaveDraftDialog, useQueryLibrary, type SaveDraftResult } from './QueryLibrary';
 import { QueryResults } from './QueryResults';
 import { DataPreview } from './DataPreview';
 import { VisualQueryEditor, type VisualEditorDraft } from './VisualQueryEditor';
@@ -58,9 +61,13 @@ interface Props {
   active?: boolean;
   /** Registration seam for the app command palette; the App keeps ownership of the palette. */
   onCommandReady?: (command: QueryCommand | null) => void;
+  /** Injectable seam for the local query library and loaded-result export. */
+  libraryService?: QueryLibraryService;
+  /** Restore a saved query as a new tab; the App owns tab creation and never auto-executes it. */
+  restoreQuery?: (document: QueryDocument) => void;
 }
 
-export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResults, toggleAI, onSettings, updateQuery, selectTab, openIndex, addQuery, closeTab, backend = desktopQueryBackend, modelService = desktopModelService, aiBackend, canQuery, active = true, onCommandReady }: Props) {
+export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResults, toggleAI, onSettings, updateQuery, selectTab, openIndex, addQuery, closeTab, backend = desktopQueryBackend, modelService = desktopModelService, aiBackend, canQuery, active = true, onCommandReady, libraryService = defaultQueryLibraryService, restoreQuery }: Props) {
   const { t } = useTranslation();
   const [closing, setClosing] = useState<QueryDocument | null>(null);
   const [checked, setChecked] = useState<Record<string, { source: string; error: QueryDslError | null }>>({});
@@ -81,6 +88,10 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   } = useQueryResources(backend);
   const { entries, run, cancel, release, reconcile, loadMore } = useQueryExecutions(backend);
   const panels = useWorkspacePanels(aiOpen, active);
+  const library = useQueryLibrary(libraryService);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [saveDraftOpen, setSaveDraftOpen] = useState(false);
+  const [savedEntryIds, setSavedEntryIds] = useState<Record<string, string>>({});
 
   const tab = state.tabs.find((item) => item.document.id === state.activeTabId);
   const home = useMemo<QueryDocument>(() => ({
@@ -100,6 +111,11 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   }, [queryId]);
   const dirtyVisualIds = useMemo(() => new Set(Object.entries(visualDrafts)
     .filter(([, draft]) => draft.problems.length > 0).map(([id]) => id)), [visualDrafts]);
+  // In visual mode an invalid/unsupported draft means the displayed DSL is stale behind it; saving
+  // then would silently persist the old text, so the draft actions are disabled until it is fixed
+  // or the editor is switched back to JSON, where the textarea is the source of truth.
+  const saveBlockedByVisual = showingQuery && editorMode === 'visual' && (!visualValid || dirtyVisualIds.has(queryId));
+  const canSaveDraft = showingQuery && !saveBlockedByVisual;
   const target = profiles.find((profile) => profile.id === query.connectionId);
   const resourceTarget = profiles.find((profile) => profile.id === state.activeConnectionId);
   const available = backend.available && (canQuery ?? true);
@@ -179,6 +195,32 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
     if (error) setRejections((current) => ({ ...current, [query.id]: error }));
   }, [query, canRun, active, target, run]);
 
+  const linkedEntryId = savedEntryIds[query.id];
+  const linkedEntry = linkedEntryId === undefined ? null
+    : library.entries.find((entry) => entry.id === linkedEntryId) ?? null;
+
+  // The App callback opens a new query from the entry (it keeps the freshly minted document.id).
+  // Without it there is no safe restore path: copying the entry into the current tab would keep
+  // this tab's connection while the draft was saved against another one, so the library disables
+  // restore instead. The link is recorded before restoring, so re-saving updates the entry.
+  const restoreSaved = useCallback((entry: SavedQueryEntry) => {
+    if (!restoreQuery) return;
+    const document = documentFromEntry(entry);
+    setSavedEntryIds((current) => ({ ...current, [document.id]: entry.id }));
+    setLibraryOpen(false);
+    restoreQuery(document);
+  }, [restoreQuery]);
+
+  const saveDraftValues = useCallback((values: { name: string; favorite: boolean }): SaveDraftResult => {
+    const result = library.saveDraft(query, { name: values.name, favorite: values.favorite, entryId: linkedEntryId });
+    if (result.ok) setSavedEntryIds((current) => ({ ...current, [query.id]: result.entryId }));
+    return result;
+  }, [library, query, linkedEntryId]);
+
+  const toggleSavedFavorite = useCallback((entry: SavedQueryEntry) => {
+    library.setFavorite(entry.id, !entry.favorite);
+  }, [library]);
+
   const closeDocument = useCallback((id: string) => {
     const previousFocus = document.activeElement;
     cancel(id);
@@ -190,6 +232,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
     setEditorModes(prune);
     setVisualValidity(prune);
     setVisualDrafts(prune);
+    setSavedEntryIds(prune);
     requestAnimationFrame(() => {
       if (previousFocus?.isConnected && previousFocus !== document.body
         && !previousFocus.closest('[role="dialog"]') && document.activeElement === previousFocus) return;
@@ -324,6 +367,20 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
             setChecked((current) => Object.fromEntries(Object.entries(current).filter(([id]) => id !== queryId)));
             editor.current?.focus();
           }} />
+          <IconButton icon={Save} label={t('queryLibrary:saveDraft')} disabled={!canSaveDraft}
+            title={saveBlockedByVisual ? t('queryLibrary:saveBlockedVisual') : t('queryLibrary:saveDraft')}
+            onClick={() => setSaveDraftOpen(true)} />
+          {linkedEntry ? <IconButton className={`qlib-star${linkedEntry.favorite ? ' active' : ''}`} icon={Star}
+            aria-pressed={linkedEntry.favorite} label={t(linkedEntry.favorite ? 'queryLibrary:favoriteRemove' : 'queryLibrary:favoriteAdd')}
+            onClick={() => library.setFavorite(linkedEntry.id, !linkedEntry.favorite)} /> : null}
+          <IconButton icon={Bookmark} label={t('queryLibrary:open')} onClick={() => setLibraryOpen(true)} />
+          {library.saveStatus.status !== 'idle' ? <span className={`qlib-save-state ${library.saveStatus.status}`} role="status">
+            {library.saveStatus.status === 'saving'
+              ? <><LoaderCircle className="spin" size={13} aria-hidden="true" />{t('queryLibrary:saving')}</> : null}
+            {library.saveStatus.status === 'saved' ? t('queryLibrary:saved') : null}
+            {library.saveStatus.status === 'error' ? <><TriangleAlert size={13} aria-hidden="true" />{t('queryLibrary:saveFailed')}
+              <button type="button" className="secondary compact-button" onClick={library.retrySave}>{t('retry')}</button></> : null}
+          </span> : null}
           <button className="primary run-button" disabled={!canRun} title={runTitle} onClick={() => void runQuery()}><Play size={14} />{t('query:run')}</button>
         </div>
         <div hidden={editorMode !== 'visual'}>
@@ -358,7 +415,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
       </section> : null}
       <QueryResults kind={showingQuery ? 'query' : 'preview'} query={query} entry={entry}
         available={available} stale={stale} endpointChanged={endpointChanged} documentIds={documentIds} active={active} wrapJson={preferences.wrapJson}
-        canRun={canRun} grouping={preferences.grouping}
+        canRun={canRun} grouping={preferences.grouping} exportService={libraryService}
         renderToolbar={showingQuery ? undefined : (summary, controls) => <DataPreview document={query} target={target} available={available}
           locked={tab?.kind === 'index'} busy={execution.status === 'running' || Boolean(entry?.continuing)} summary={summary}
           onOpen={selectIndex} onRefresh={() => { void runQuery(); }} onNewQuery={() => addQuery(query)}
@@ -374,6 +431,13 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
       onReset={() => panels.resize('ai', PANEL_DEFAULTS.ai)} />
     <AiChatPanel modelService={modelService} backend={aiBackend} open={aiOpen} active={active} query={showingQuery ? query : null}
       onClose={toggleAI} onSettings={() => onSettings('models')} />
+    <SaveDraftDialog open={saveDraftOpen} entry={linkedEntry} initialName={query.name} status={library.status}
+      loadError={library.loadError} saveStatus={library.saveStatus} onClose={() => setSaveDraftOpen(false)}
+      onSave={saveDraftValues} onRetrySave={library.retrySave} />
+    <QueryLibraryDialog open={libraryOpen} kind={libraryService.kind} status={library.status} loadError={library.loadError}
+      entries={library.entries} saveStatus={library.saveStatus} profiles={profiles} onClose={() => setLibraryOpen(false)}
+      onRestore={restoreQuery ? restoreSaved : undefined} onDelete={library.deleteEntry} onToggleFavorite={toggleSavedFavorite}
+      onRetrySave={library.retrySave} onReload={library.reload} />
     <Modal open={closing !== null} onClose={() => setClosing(null)} title={t('query:closeTitle')}
       description={t('query:closeDetail', { name: closing?.name || t('query:title') })}>
       <div className="dialog-actions"><button className="secondary" onClick={() => setClosing(null)}>{t('cancel')}</button>

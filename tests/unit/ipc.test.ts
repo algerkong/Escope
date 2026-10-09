@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { openPit, closePit,
   cancelRequest, errorCode, executeQuery, readResource, testConnection,
-  type ConnectionIdentity, type ConnectionProbe, type QueryRequest, type ResourceRequest,
+  type ConnectionIdentity, type ConnectionProbe, type IpcError, type QueryRequest, type ResourceRequest,
 } from '../../src/services/ipc';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), isTauri: vi.fn() }));
@@ -24,7 +24,10 @@ describe('read-only connection IPC', () => {
 
   it('sends only stable IDs and never forwards caller URLs, methods or headers', async () => {
     vi.mocked(invoke).mockResolvedValue(identity);
-    const input = { ...probe, url: 'https://other.test', method: 'DELETE', headers: { Authorization: 'fixture-secret' } };
+    const input = {
+      ...probe, url: 'https://other.test', method: 'DELETE', headers: { Authorization: 'fixture-secret' },
+      credentialRef: 'caller-selected-reference', username: 'fixture-user', password: 'fixture-password',
+    };
     await expect(testConnection(input)).resolves.toEqual(identity);
     expect(invoke).toHaveBeenCalledExactlyOnceWith('connection_test', { probe });
   });
@@ -67,6 +70,31 @@ const resourceRequest: ResourceRequest = {
   index: 'orders-*',
 };
 const queryRequest: QueryRequest = { requestId: 'q-1', connectionId: probe.connectionId, index: 'orders-*', rawDsl: '{"size":1}' };
+
+describe('connection credential failure contract', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.mocked(isTauri).mockReturnValue(true);
+  });
+
+  it.each(['credentialNotFound', 'credentialUnavailable', 'credentialFailure'] as const)(
+    'preserves %s across every read family without retries or fallback',
+    async (code) => {
+      const error = { code, requestId: probe.requestId, retryable: false } satisfies IpcError;
+      vi.mocked(invoke).mockRejectedValue(error);
+      const calls = [
+        () => testConnection(probe),
+        () => readResource({ ...resourceRequest, requestId: probe.requestId }),
+        () => executeQuery({ ...queryRequest, requestId: probe.requestId }),
+        () => openPit({ ...probe, index: 'orders-*' }),
+        () => closePit({ ...probe, pitId: 'pit-fixture' }),
+      ];
+      for (const call of calls) await expect(call()).rejects.toBe(error);
+      expect(invoke).toHaveBeenCalledTimes(calls.length);
+      expect(errorCode(error, 'unexpected')).toBe(code);
+    },
+  );
+});
 
 describe('read-only resource and query IPC', () => {
   beforeEach(() => {

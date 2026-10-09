@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type HTMLAttributes, type MouseEvent as ReactMouseEvent } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type HTMLAttributes, type MouseEvent as ReactMouseEvent } from 'react';
 import '../styles/table-selection.css';
 
 export type TableRowSelection = Record<string, true>;
@@ -49,7 +49,8 @@ export function useTableRowSelection({ rowIds, visibleRowIds = rowIds, scope, ac
   latest.current = { rowIds, visibleRowIds, value, change, active };
   const previousScope = useRef(scope);
 
-  useEffect(() => {
+  // Commit the scope reset before new rows can receive input; a passive reset can erase a new gesture.
+  useLayoutEffect(() => {
     if (previousScope.current !== scope) {
       previousScope.current = scope;
       anchor.current = null;

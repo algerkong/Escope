@@ -1,0 +1,36 @@
+/*
+ * Query library dialogs (drafts/favorites) and loaded-result export.
+ * `.qlib-`-scoped so the global tokens and layout stay untouched; data text stays selectable.
+ */
+
+.qlib-panel { display: flex; flex-direction: column; gap: 10px; min-width: 0; width: 100%; }
+.qlib-status { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-height: 20px; }
+.qlib-status:empty { display: none; }
+.qlib-chip { font-size: .72rem; line-height: 1.6; padding: 0 7px; border-radius: 10px; border: 1px solid var(--border); color: var(--muted); }
+.qlib-error { color: var(--error); }
+.qlib-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 22px 10px; color: var(--muted); text-align: center; }
+.qlib-empty h3 { margin: 0; font-size: .95rem; color: inherit; }
+.qlib-empty p { margin: 0; font-size: .8rem; max-width: 42ch; }
+.qlib-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: min(46vh, 420px); overflow-y: auto; }
+.qlib-list:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.qlib-entry { display: flex; align-items: center; gap: 6px; padding: 6px 4px; border-bottom: 1px solid var(--border); min-width: 0; }
+.qlib-entry-body { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.qlib-entry-body strong { font-size: .86rem; overflow-wrap: anywhere; }
+.qlib-meta { color: var(--muted); font-size: .74rem; overflow-wrap: anywhere; -webkit-user-select: text; user-select: text; }
+.qlib-star.active { color: var(--accent); }
+.qlib-star.active svg { fill: currentColor; }
+.qlib-delete { color: var(--muted); }
+.qlib-delete:hover { color: var(--error); }
+.qlib-form { display: flex; flex-direction: column; gap: 8px; min-width: 0; width: 100%; }
+.qlib-form > label { font-size: .82rem; color: var(--muted); }
+.qlib-form > input { width: 100%; padding: 5px 8px; font-size: .85rem; }
+.qlib-check { display: flex; align-items: center; gap: 6px; font-size: .82rem; color: var(--muted); }
+.qlib-check input { width: auto; }
+.qlib-export-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.qlib-export-row .segment { margin-left: 0; }
+.qlib-save-state { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 5px; max-width: 100%; font-size: .74rem; color: var(--muted); }
+.qlib-save-state.saved { color: var(--success); }
+.qlib-save-state.error { color: var(--error); }
+.qlib-label { font-size: .82rem; color: var(--muted); }
+.qlib-form .dialog-actions { margin-top: 4px; }
+.qlib-form .notice { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }

@@ -1,0 +1,36 @@
+.connection-access .endpoint {
+  overflow-wrap: anywhere;
+}
+
+.connection-access h3 {
+  margin: 1rem 0 .5rem;
+  font-size: var(--ui-size);
+}
+
+.access-results dl {
+  margin: 0;
+}
+
+.access-results dl > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+  gap: .75rem;
+  padding: .3rem 0;
+}
+
+.access-results dt {
+  color: var(--muted);
+}
+
+.access-results dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.access-results [data-access="denied"] {
+  color: var(--error);
+}
+
+.access-results [data-access="available"] {
+  color: var(--success);
+}

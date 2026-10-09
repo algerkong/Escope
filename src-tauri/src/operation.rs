@@ -4,9 +4,13 @@
 //! method. There is no generic proxy command: a request can never carry a URL, a method or a
 //! header from the frontend, and a plan is only ever built from a stored connection.
 
+use crate::connection_auth::ResolvedAuth;
+use crate::credentials::CredentialRef;
 use crate::error::AppError;
-use crate::storage::ConnectionProfile;
+use crate::storage::{AuthKind, ConnectionProfile};
+use reqwest::header::{HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Client, Method, RequestBuilder};
+use std::fmt;
 use url::Url;
 
 /// The complete read-only API surface. Anything that is not a variant here — every write,
@@ -15,6 +19,10 @@ use url::Url;
 pub enum ReadOnlyOperation {
     /// `GET {base}/` — cluster identity and version.
     ClusterIdentity,
+    /// `GET {base}/_security/_authenticate` - the authenticated caller, never user management.
+    Authenticate,
+    /// `POST {base}/_security/user/_has_privileges` - check fixed read permissions for this caller.
+    Privileges,
     /// `GET {base}/_cluster/health` — cluster health. Cluster-wide, never carries a target.
     ClusterHealth,
     /// `GET {base}/_resolve/index/{target}` — authorized index and alias discovery.
@@ -48,6 +56,8 @@ impl ReadOnlyOperation {
     pub fn parse(name: &str) -> Result<Self, AppError> {
         match name {
             "connection.test" => Ok(Self::ClusterIdentity),
+            "connection.authenticate" => Ok(Self::Authenticate),
+            "connection.privileges" => Ok(Self::Privileges),
             "resource.clusterHealth" => Ok(Self::ClusterHealth),
             "resource.indices" => Ok(Self::IndexDiscovery),
             "resource.indexSettings" => Ok(Self::IndexSettings),
@@ -65,9 +75,10 @@ impl ReadOnlyOperation {
     /// The method is a property of the operation; a caller can never choose it.
     pub const fn method(self) -> Method {
         match self {
-            Self::Search | Self::PitOpen | Self::PitSearch => Method::POST,
+            Self::Search | Self::PitOpen | Self::PitSearch | Self::Privileges => Method::POST,
             Self::PitClose => Method::DELETE,
             Self::ClusterIdentity
+            | Self::Authenticate
             | Self::ClusterHealth
             | Self::IndexDiscovery
             | Self::IndexSettings
@@ -95,7 +106,10 @@ impl ReadOnlyOperation {
     /// Whether this operation carries a JSON body. Only the search family and the snapshot
     /// close — whose body is composed here from an already validated id — ever do.
     pub const fn carries_body(self) -> bool {
-        matches!(self, Self::Search | Self::PitSearch | Self::PitClose)
+        matches!(
+            self,
+            Self::Search | Self::PitSearch | Self::PitClose | Self::Privileges
+        )
     }
 }
 
@@ -162,24 +176,110 @@ fn valid_index_item(item: &str) -> bool {
     )
 }
 
+/// The authentication state a plan was built with, taken from the connection's trusted metadata.
+/// [`RequestPlan::authenticate`] fixes the matching header; [`RequestPlan::build`] refuses to
+/// produce a request while the state is still unresolved, so a plan for a secured connection can
+/// never be sent unauthenticated by skipping the resolution step.
+enum PlanAuth {
+    /// Unauthenticated connection: no header may be attached to this plan.
+    None,
+    /// Bound connection: exactly this kind and reference must provide the header.
+    Unresolved {
+        kind: AuthKind,
+        reference: CredentialRef,
+    },
+    /// The header resolved for the same kind and reference.
+    Resolved {
+        kind: AuthKind,
+        reference: CredentialRef,
+        header: HeaderValue,
+    },
+}
+
+impl fmt::Debug for PlanAuth {
+    /// The header value is never printed, whether or not the sensitive flag alone would redact it.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => f.write_str("None"),
+            Self::Unresolved { kind, reference } => {
+                write!(f, "Unresolved({kind:?}, {reference:?})")
+            }
+            Self::Resolved {
+                kind, reference, ..
+            } => {
+                write!(f, "Resolved({kind:?}, {reference:?}, header [REDACTED])")
+            }
+        }
+    }
+}
+
 /// A fully determined request: fixed method, absolute URL derived from the stored connection and
-/// an optional JSON body. The connection's own base path is preserved.
+/// an optional JSON body, plus the authentication the plan was bound to. The connection's own
+/// base path is preserved.
 #[derive(Debug)]
 pub struct RequestPlan {
     method: Method,
     url: Url,
     body: Option<Vec<u8>>,
+    /// Stable ID of the connection the plan was built for. `authenticate` refuses auth resolved
+    /// for another connection.
+    connection_id: String,
+    /// Normalized endpoint (scheme, host, port, base path) the plan targets. Auth resolved for a
+    /// different endpoint is refused, so an endpoint change can never reuse the old secret.
+    endpoint: String,
+    auth: PlanAuth,
 }
 
 impl RequestPlan {
-    pub fn build(self, client: &Client) -> RequestBuilder {
+    /// Attach the authentication resolved for this exact connection snapshot.
+    ///
+    /// Refused with `unsupported` when the plan and the resolution disagree about the connection,
+    /// the endpoint, the kind or the reference, and when the plan's own secured state does not
+    /// receive a matching header. This is the only way a plan can carry an `Authorization` header.
+    pub fn authenticate(mut self, auth: &ResolvedAuth) -> Result<Self, AppError> {
+        if auth.connection_id() != self.connection_id || auth.endpoint() != self.endpoint {
+            return Err(AppError::new("unsupported"));
+        }
+        let plan_kind = match &self.auth {
+            PlanAuth::None => AuthKind::None,
+            PlanAuth::Unresolved { kind, .. } | PlanAuth::Resolved { kind, .. } => *kind,
+        };
+        if auth.kind() != plan_kind {
+            return Err(AppError::new("unsupported"));
+        }
+        let next = match (&self.auth, auth.reference(), auth.header()) {
+            (PlanAuth::None, None, None) => PlanAuth::None,
+            (PlanAuth::Unresolved { kind, reference }, Some(resolved), Some(header))
+                if resolved == reference =>
+            {
+                PlanAuth::Resolved {
+                    kind: *kind,
+                    reference: reference.clone(),
+                    header: header.clone(),
+                }
+            }
+            _ => return Err(AppError::new("unsupported")),
+        };
+        self.auth = next;
+        Ok(self)
+    }
+
+    /// Turn the plan into a request.
+    ///
+    /// A plan for a bound connection refuses to build while its authentication is unresolved, so
+    /// skipping the resolution step cannot turn a secured plan into an unauthenticated send. A
+    /// resolved plan adds exactly one sensitive `Authorization` header; an unauthenticated plan
+    /// can never add one.
+    pub fn build(self, client: &Client) -> Result<RequestBuilder, AppError> {
         let mut request = client.request(self.method, self.url);
         if let Some(body) = self.body {
-            request = request
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .body(body);
+            request = request.header(CONTENT_TYPE, "application/json").body(body);
         }
-        request
+        match self.auth {
+            PlanAuth::None => Ok(request),
+            PlanAuth::Unresolved { .. } => Err(AppError::new("unsupported")),
+            PlanAuth::Resolved { header, .. } => Ok(request.header(AUTHORIZATION, header)),
+        }
     }
 }
 
@@ -199,6 +299,25 @@ pub(crate) fn resource_request(
         return Err(AppError::new("permissionDenied"));
     }
     plan(profile, operation, target, None)
+}
+
+/// The privilege names and request body are fixed here, not supplied as a REST payload.
+pub(crate) fn privileges_request(
+    profile: &ConnectionProfile,
+    target: Option<&IndexTarget>,
+) -> Result<RequestPlan, AppError> {
+    let indices = target.map_or_else(Vec::new, |target| {
+        vec![serde_json::json!({
+            "names": target.as_str().split(',').collect::<Vec<_>>(),
+            "privileges": ["read", "view_index_metadata"],
+        })]
+    });
+    let body = serde_json::to_vec(&serde_json::json!({
+        "cluster": ["monitor"],
+        "index": indices,
+    }))
+    .map_err(|_| AppError::new("invalidInput"))?;
+    plan(profile, ReadOnlyOperation::Privileges, None, Some(body))
 }
 
 /// Plan the single search execution: the only operation that carries a body.
@@ -257,6 +376,8 @@ fn relative(
     };
     match operation {
         ReadOnlyOperation::ClusterIdentity => Ok(String::new()),
+        ReadOnlyOperation::Authenticate => Ok("_security/_authenticate".to_owned()),
+        ReadOnlyOperation::Privileges => Ok("_security/user/_has_privileges".to_owned()),
         ReadOnlyOperation::ClusterHealth => Ok("_cluster/health".to_owned()),
         ReadOnlyOperation::IndexDiscovery => Ok(format!("_resolve/index/{}", target()?)),
         ReadOnlyOperation::IndexSettings => Ok(format!("{}/_settings", target()?)),
@@ -296,24 +417,40 @@ fn plan(
     if target.is_some() != operation.takes_target() {
         return Err(AppError::new("permissionDenied"));
     }
-    let url = base_url(profile)?
+    let base = base_url(profile)?;
+    let endpoint = base.as_str().to_owned();
+    let url = base
         .join(&relative(operation, target)?)
         .map_err(|_| AppError::new("invalidEndpoint"))?;
+    let auth = match (profile.auth_state.kind, &profile.auth_state.credential_ref) {
+        (AuthKind::None, None) => PlanAuth::None,
+        (kind, Some(reference)) if kind != AuthKind::None => PlanAuth::Unresolved {
+            kind,
+            reference: reference.clone(),
+        },
+        // A half-populated state cannot come from the database, and a hand-built one must not
+        // produce a request that silently omits its authentication.
+        _ => return Err(AppError::new("unsupported")),
+    };
     Ok(RequestPlan {
         method: operation.method(),
         url,
         body,
+        connection_id: profile.id.clone(),
+        endpoint,
+        auth,
     })
 }
 
 /// The connection's own base URL: scheme, host, port and the configured path prefix, nothing
-/// else. A connection with a bound credential is refused until an authenticated request path
-/// exists, so a stored secret can never be sent by an unauthenticated plan.
+/// else. A connection with a bound credential is valid here: its plan records the binding and
+/// only [`RequestPlan::authenticate`] can supply the matching header, so a stored secret can
+/// never be sent by an unauthenticated plan.
 pub(crate) fn base_url(profile: &ConnectionProfile) -> Result<Url, AppError> {
-    // The IPC-facing `auth` label stays "none"; the real state is the internal metadata. Both are
-    // checked so a stored credential can never reach the network before the authenticated request
-    // path exists.
-    if profile.auth != "none" || !profile.auth_state.unauthenticated() {
+    // The IPC-facing label is never a request-authentication switch: authenticated requests are
+    // driven by the internal metadata, which the resolver reads. A label outside `none` is a
+    // state this build does not produce, so it is refused rather than guessed at.
+    if profile.auth != "none" {
         return Err(AppError::new("unsupported"));
     }
     let mut url = Url::parse(&profile.endpoint).map_err(|_| AppError::new("invalidEndpoint"))?;
@@ -467,6 +604,7 @@ mod tests {
             let request = resource_request(&profile, operation, None)
                 .unwrap()
                 .build(&Client::new())
+                .unwrap()
                 .build()
                 .unwrap();
             assert_eq!(request.method(), Method::GET);
@@ -477,6 +615,7 @@ mod tests {
         let request = resource_request(&profile, ReadOnlyOperation::IndexSettings, Some(&settings))
             .unwrap()
             .build(&Client::new())
+            .unwrap()
             .build()
             .unwrap();
         assert_eq!(request.method(), Method::GET);
@@ -492,6 +631,7 @@ mod tests {
         let request = identity_request(&profile)
             .unwrap()
             .build(&Client::new())
+            .unwrap()
             .build()
             .unwrap();
         assert_eq!(request.method(), Method::GET);
@@ -509,15 +649,16 @@ mod tests {
                 "invalidEndpoint"
             );
         }
-        // A stored credential is refused through the internal metadata as well, so the plan cannot
-        // send it before the authenticated request path exists.
+        // A stored credential no longer refuses the plan, but the plan refuses to become a
+        // request until the matching resolution is attached.
         profile.endpoint = "https://example.test/proxy/es".into();
         profile.auth_state = ConnectionAuth {
             kind: AuthKind::ApiKey,
             credential_ref: Some(CredentialRef::generate()),
         };
+        let plan = identity_request(&profile).unwrap();
         assert_eq!(
-            identity_request(&profile).err().unwrap().code,
+            plan.build(&Client::new()).err().unwrap().code,
             "unsupported"
         );
         // The IPC-facing label alone is enough to refuse as well.
@@ -527,6 +668,35 @@ mod tests {
             identity_request(&profile).err().unwrap().code,
             "unsupported"
         );
+    }
+
+    #[test]
+    fn a_bound_plan_never_builds_a_request_without_its_resolved_auth() {
+        let mut profile = profile("https://example.test/proxy/es");
+        profile.auth_state = ConnectionAuth {
+            kind: AuthKind::Basic,
+            credential_ref: Some(CredentialRef::generate()),
+        };
+        let target = IndexTarget::parse("logs-*").unwrap();
+        let plan = search_request(&profile, &target, b"{}".to_vec()).unwrap();
+
+        // A bound plan refuses to build a request until its own resolution is attached; the
+        // header itself can only arrive through `authenticate` (covered end-to-end in
+        // `connection_auth` / `connection` tests, where a real resolution exists).
+        assert_eq!(
+            plan.build(&Client::new()).err().unwrap().code,
+            "unsupported"
+        );
+
+        // `Debug` never prints a header or credential material: the plan is bound but unresolved,
+        // and the message carries only the kind and a redacted reference.
+        let rendered = format!(
+            "{:?}",
+            search_request(&profile, &target, b"{}".to_vec()).unwrap()
+        );
+        assert!(!rendered.contains("Basic "));
+        assert!(!rendered.contains("Authorization"));
+        assert!(rendered.contains("CredentialRef([REDACTED])"));
     }
 
     #[test]
@@ -550,6 +720,7 @@ mod tests {
             let request = resource_request(&profile, operation, Some(&target))
                 .unwrap()
                 .build(&Client::new())
+                .unwrap()
                 .build()
                 .unwrap();
             assert_eq!(request.method(), Method::GET);
@@ -572,6 +743,7 @@ mod tests {
         let request = search_request(&profile, &target, b"{}".to_vec())
             .unwrap()
             .build(&Client::new())
+            .unwrap()
             .build()
             .unwrap();
         assert_eq!(request.method(), Method::POST);
@@ -679,6 +851,7 @@ mod tests {
         let request = pit_open_request(&profile, &target)
             .unwrap()
             .build(&Client::new())
+            .unwrap()
             .build()
             .unwrap();
         assert_eq!(request.method(), Method::POST);
@@ -691,6 +864,7 @@ mod tests {
         let request = pit_search_request(&profile, b"{\"size\":1}".to_vec())
             .unwrap()
             .build(&Client::new())
+            .unwrap()
             .build()
             .unwrap();
         assert_eq!(request.method(), Method::POST);
@@ -703,6 +877,7 @@ mod tests {
         let request = pit_close_request(&profile, "pit-abc123")
             .unwrap()
             .build(&Client::new())
+            .unwrap()
             .build()
             .unwrap();
         assert_eq!(request.method(), Method::DELETE);
@@ -728,14 +903,16 @@ mod tests {
         );
         assert!(resource_request(&profile, ReadOnlyOperation::PitSearch, None).is_err());
         assert!(resource_request(&profile, ReadOnlyOperation::PitClose, None).is_err());
-        // A stored credential still refuses every snapshot plan.
+        // A stored credential is bound into every snapshot plan and can never be sent without its
+        // resolved header.
         let mut secured = profile;
         secured.auth_state = ConnectionAuth {
             kind: AuthKind::ApiKey,
             credential_ref: Some(CredentialRef::generate()),
         };
+        let plan = pit_open_request(&secured, &target).unwrap();
         assert_eq!(
-            pit_open_request(&secured, &target).err().unwrap().code,
+            plan.build(&Client::new()).err().unwrap().code,
             "unsupported"
         );
     }

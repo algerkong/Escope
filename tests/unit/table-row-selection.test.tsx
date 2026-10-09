@@ -1,14 +1,22 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { useLayoutEffect } from 'react';
 import { useTableRowSelection } from '../../src/components/useTableRowSelection';
 
 const IDS = ['a', 'b', 'c', 'd', 'e'];
 
-function Harness({ ids = IDS, visible = ids, scope = 'first', active = true, name = 'rows', onAction }: {
-  ids?: readonly string[]; visible?: readonly string[]; scope?: string; active?: boolean; name?: string; onAction?: () => void;
+function Harness({ ids = IDS, visible = ids, scope = 'first', active = true, name = 'rows', onAction, selectOnCommit = false }: {
+  ids?: readonly string[]; visible?: readonly string[]; scope?: string; active?: boolean; name?: string; onAction?: () => void; selectOnCommit?: boolean;
 }) {
   const selection = useTableRowSelection({ rowIds: ids, visibleRowIds: visible, scope, active });
+  useLayoutEffect(() => {
+    if (!selectOnCommit) return;
+    const rows = selection.bodyRef.current?.rows;
+    rows?.[0]?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+    rows?.[1]?.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, buttons: 1 }));
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+  }, [scope, selectOnCommit, selection.bodyRef]);
   return <>
     <div data-testid={`scroll-${name}`} style={{ overflowY: 'auto' }}>
       <table aria-label={name}><thead><tr><th>Value</th></tr></thead>
@@ -36,6 +44,13 @@ const drag = (from: HTMLElement, to: HTMLElement) => {
 afterEach(() => { document.getSelection()?.removeAllRanges(); vi.restoreAllMocks(); });
 
 describe('table row selection', () => {
+  it('does not erase a new-scope gesture when passive effects finish after the commit', () => {
+    const view = render(<Harness selectOnCommit />);
+    expect(selected()).toEqual(['a', 'b']);
+    view.rerender(<Harness scope="replacement" selectOnCommit />);
+    expect(selected()).toEqual(['a', 'b']);
+  });
+
   it('keeps one clicked row selected after the pointer leaves and replaces it on the next click', async () => {
     const user = userEvent.setup();
     render(<Harness />);

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ConnectionProfile } from '../../domain/connection';
-import { errorCode, testConnection, type ConnectionIdentity } from '../../services/ipc';
+import { cancelRequest, errorCode, testConnection, type ConnectionIdentity } from '../../services/ipc';
 
 type Target = { requestId: string; endpoint: string };
 export type ConnectionTestState =
@@ -17,16 +17,21 @@ export function connectionTestLabel(result?: ConnectionTestState): string {
   }[result.status];
 }
 
-export function useConnectionTests(probe: typeof testConnection = testConnection) {
+export function useConnectionTests(probe: typeof testConnection = testConnection, cancel: typeof cancelRequest = cancelRequest) {
   const [results, setResults] = useState<Record<string, ConnectionTestState>>({});
   const pending = useRef(new Map<string, string>());
   useEffect(() => {
     const requests = pending.current;
-    return () => { requests.clear(); };
-  }, []);
+    return () => {
+      for (const [connectionId, requestId] of requests) void cancel({ connectionId, requestId }).catch(() => undefined);
+      requests.clear();
+    };
+  }, [cancel]);
 
   const invalidate = useCallback((id: string, removed = false) => {
+    const requestId = pending.current.get(id);
     pending.current.delete(id);
+    if (requestId) void cancel({ connectionId: id, requestId }).catch(() => undefined);
     setResults((current) => {
       if (!(id in current)) return current;
       const next = { ...current };
@@ -34,7 +39,7 @@ export function useConnectionTests(probe: typeof testConnection = testConnection
       else next[id] = { status: 'stale' };
       return next;
     });
-  }, []);
+  }, [cancel]);
 
   const run = useCallback(async (profile: ConnectionProfile) => {
     const { id, endpoint } = profile;

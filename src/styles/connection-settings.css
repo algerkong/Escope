@@ -1,0 +1,33 @@
+/*
+ * Connection settings: credential/CA metadata badges, the credential and custom-CA fields of the
+ * editor and the secure-cleanup notice. Selectors are `.connection-`-scoped; shared tokens, the
+ * compact control shells and the global layout stay untouched.
+ */
+
+.connection-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 4px 0 2px; }
+.connection-badge {
+  display: inline-flex; align-items: center; gap: 4px; font-size: .72rem; line-height: 1.7;
+  padding: 0 5px; border-radius: 3px; border: 1px solid var(--border); color: var(--muted);
+  white-space: nowrap;
+}
+.connection-badge.warn { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 40%, transparent); }
+
+.connection-cleanup { border-radius: 6px; margin: 10px 0; }
+.connection-cleanup span { flex: 1; min-width: 0; }
+
+.connection-editor .form-field { margin-bottom: 12px; }
+.connection-editor .form-field textarea { width: 100%; }
+.connection-editor .notice { margin: 0 0 12px; }
+.connection-notice span { flex: 1; min-width: 0; }
+.connection-hint { margin: 0 0 12px; overflow-wrap: anywhere; }
+
+.connection-field { display: grid; gap: 4px; margin-bottom: 12px; }
+.connection-field > label { font-size: .8rem; color: var(--muted); }
+.connection-field input { width: 100%; }
+.connection-secret-row { display: flex; align-items: center; gap: 6px; }
+.connection-secret-row input { flex: 1; min-width: 0; font-family: var(--code-font); font-size: .82rem; }
+
+.connection-ca-input {
+  resize: vertical; min-height: 84px; max-height: 220px;
+  font-family: var(--code-font); font-size: .78rem;
+}

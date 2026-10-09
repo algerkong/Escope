@@ -20,6 +20,10 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+# C04.1: the same rustls instance reqwest already builds with, named directly only so a failed
+# handshake can be recognized by error type (`rustls::Error`) instead of by message text. No
+# feature beyond what the tree already enables and no TLS behavior change.
+rustls = { version = "0.23", default-features = false, features = ["std"] }
 tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread", "time"] }
 # A02.1/A04.1 streaming transport: `eventsource-stream` is the maintained SSE framing parser,
 # `futures-util` drives the parsed streams, and `bytes` is the chunk type the parser consumes
@@ -28,6 +32,12 @@ eventsource-stream = "0.2"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 bytes = "1"
 zeroize = "1"
+# C01.3: the maintained base64 implementation for Basic/API Key authorization encodings. No
+# hand-rolled encoding; already in the tree through reqwest.
+base64 = "0.22"
+# Q07/E01: native file dialogs for a user-chosen export path. The plugin is initialized in
+# `lib.rs`; the export command itself lives in `saved_queries.rs`.
+tauri-plugin-dialog = "2"
 
 # F08.1: OS credential store. Only the maintained keyring platform backend is used,
 # no hand-written OS FFI. macOS/Linux backends stay out until they are verified.
@@ -35,4 +45,10 @@ zeroize = "1"
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
 
 [dev-dependencies]
+# C04.1 regression fixtures: ephemeral self-signed certificates generated in memory and a local
+# loopback TLS server. `ring` keeps the certificate generation on the provider the tree already
+# links; no real service, no system trust store and no on-disk key is involved.
+rcgen = { version = "0.13", default-features = false, features = ["pem", "ring"] }
+# The loopback TLS server side of the regression fixture; same rustls instance as the client.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 tempfile = "3"

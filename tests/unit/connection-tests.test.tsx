@@ -6,6 +6,8 @@ import { App } from '../../src/app/App';
 import { i18n } from '../../src/locales';
 import { useConnectionTests } from '../../src/features/connections/useConnectionTests';
 import { ConnectionTestResult } from '../../src/features/connections/ConnectionTestResult';
+import { executionErrorKey, resourceErrorKey } from '../../src/features/query/error-message';
+import { clusterErrorKey } from '../../src/features/cluster/error-message';
 import type { ConnectionProfile } from '../../src/domain/connection';
 import type { ConnectionIdentity, ConnectionProbe } from '../../src/services/ipc';
 import { createSessionStorage } from '../../src/services/storage';
@@ -211,12 +213,12 @@ describe('connection test UI', () => {
     expect(within(renamedRow).getByText('身份已确认')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '编辑 Renamed' }));
     fireEvent.change(screen.getByLabelText('Elasticsearch 地址'), { target: { value: 'https://changed.test' } });
-    const save = service.saveConnection;
-    service.saveConnection = vi.fn().mockRejectedValue({ code: 'storageUnavailable' });
+    const save = service.saveConnectionSecure;
+    service.saveConnectionSecure = vi.fn().mockRejectedValue({ code: 'storageUnavailable' });
     await user.click(screen.getByRole('button', { name: '保存' }));
     await waitFor(() => expect(within(screen.getByRole('dialog')).getByRole('alert')).toBeInTheDocument());
     expect(within(renamedRow).getByText('身份已确认')).toBeInTheDocument();
-    service.saveConnection = save;
+    service.saveConnectionSecure = save;
     await user.click(screen.getByRole('button', { name: '保存' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(screen.getByText('地址已更改，请重新测试。')).toBeInTheDocument();
@@ -297,6 +299,30 @@ describe('connection test UI', () => {
 });
 
 describe('connection test result', () => {
+  it.each(['zh-CN', 'en-US'])('renders credential errors in %s without raw details', async (locale) => {
+    await i18n.changeLanguage(locale);
+    const { rerender } = render(<></>);
+    for (const code of ['credentialNotFound', 'credentialUnavailable', 'credentialFailure']) {
+      const key = `errors:${code}`;
+      expect(i18n.exists(key)).toBe(true);
+      expect(executionErrorKey(code, (entry) => i18n.exists(entry))).toBe(key);
+      expect(resourceErrorKey(code, (entry) => i18n.exists(entry))).toBe(key);
+      expect(clusterErrorKey(code, (entry) => i18n.exists(entry))).toBe(key);
+      const result = {
+        status: 'error' as const, requestId: 'request', endpoint: profile.endpoint, code,
+        detail: 'fixture-vault-detail', credentialRef: 'fixture-reference',
+      };
+      rerender(<I18nextProvider i18n={i18n}><ConnectionTestResult timeZone="system" result={result} /></I18nextProvider>);
+      const alert = screen.getByRole('alert');
+      expect(alert).toHaveTextContent(i18n.t(key));
+      expect(alert).not.toHaveTextContent(i18n.t('errors:notFound'));
+      expect(alert).not.toHaveTextContent(i18n.t('errors:unexpected'));
+      expect(alert).not.toHaveTextContent('fixture-vault-detail');
+      expect(alert).not.toHaveTextContent('fixture-reference');
+      expect(alert).not.toHaveTextContent(code);
+    }
+  });
+
   it('falls back to a generic message for an error code without a localized entry', () => {
     render(<I18nextProvider i18n={i18n}><ConnectionTestResult timeZone="system"
       result={{ status: 'error', requestId: 'request', endpoint: profile.endpoint, code: 'tlsHandshakeFailed' }} /></I18nextProvider>);

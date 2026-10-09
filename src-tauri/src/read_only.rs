@@ -168,7 +168,7 @@ impl Drop for RequestGuard<'_> {
 }
 
 /// The cancellation channel of a single request.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Cancellation {
     receiver: watch::Receiver<bool>,
 }
@@ -187,7 +187,16 @@ impl Cancellation {
 
     /// Resolves once this request is cancelled, or once its sender is gone (guard dropped).
     pub async fn cancelled(&mut self) {
-        let _ = self.receiver.changed().await;
+        while !self.is_cancelled() {
+            if self.receiver.changed().await.is_err() {
+                return;
+            }
+        }
+    }
+
+    /// Remains true after an earlier await observed the signal, including across export pages.
+    pub fn is_cancelled(&self) -> bool {
+        *self.receiver.borrow() || self.receiver.has_changed().is_err()
     }
 }
 

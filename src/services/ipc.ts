@@ -6,7 +6,7 @@ export type ErrorCode = 'invalidInput' | 'invalidName' | 'invalidEndpoint' | 'in
   | 'storageUnavailable' | 'workspaceConflict' | 'notFound' | 'unsupported' | 'permissionDenied' | 'serverForbidden' | 'cancelled'
   | 'busy' | 'networkError' | 'timeout' | 'authenticationFailed' | 'rateLimited'
   | 'credentialNotFound' | 'credentialUnavailable' | 'credentialFailure'
-  | 'invalidCertificate' | 'tlsError' | 'exportFailed'
+  | 'invalidCertificate' | 'tlsError' | 'exportFailed' | 'exportTargetChanged' | 'exportUnsupportedQuery'
   | 'redirectBlocked' | 'httpError' | 'notElasticsearch' | 'responseTooLarge' | 'invalidResponse';
 
 export interface ConnectionProbe {

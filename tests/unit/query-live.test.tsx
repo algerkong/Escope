@@ -13,6 +13,8 @@ import type { ConnectionProfile } from '../../src/domain/connection';
 import { i18n } from '../../src/locales';
 import { enLive, zhLive } from '../../src/locales/query-live';
 import type { PitOpenRequest, QueryBackend, QueryRequest, QueryResponse, ResourceRequest, ResourceResponse } from '../../src/services/ipc';
+import type { SnapshotExportService } from '../../src/services/query-export';
+import type { SnapshotExportOutcome, SnapshotExportRequest } from '../../src/domain/query-export';
 
 const baseProfile: ConnectionProfile = {
   id: 'c1', displayName: 'Fixture ES', endpoint: 'https://es.test', environment: 'development', sortOrder: 0, auth: 'none',
@@ -62,6 +64,7 @@ interface SetupOptions {
   active?: boolean;
   grouping?: boolean;
   onCommandReady?: (command: QueryCommand | null) => void;
+  snapshotExportService?: SnapshotExportService;
 }
 
 function setup(backend: QueryBackend, options: SetupOptions = {}) {
@@ -102,6 +105,7 @@ function setup(backend: QueryBackend, options: SetupOptions = {}) {
       addQuery={() => {}}
       closeTab={(id) => setState((current) => closeWorkspaceTab(current, id))}
       backend={backend} canQuery={options.canQuery} active={options.active ?? true}
+      snapshotExportService={options.snapshotExportService}
       onCommandReady={options.onCommandReady} /></I18nextProvider>;
   }
   render(<Harness />);
@@ -112,6 +116,105 @@ const runButton = () => screen.getByRole('button', { name: '执行查询' });
 const fields = () => screen.getByLabelText('查询 DSL');
 
 beforeEach(async () => { await i18n.changeLanguage('zh-CN'); });
+
+function exportOutcome(request: SnapshotExportRequest): SnapshotExportOutcome {
+  return {
+    requestId: request.requestId, connectionId: request.connectionId, status: 'saved',
+    rows: 1, bytes: 80, fileState: 'complete', fileName: request.fileName, reason: null, pitCleanup: 'closed',
+  };
+}
+
+describe('full snapshot export integration', () => {
+  it('exports the displayed execution after draft edits without touching its live result or PIT', async () => {
+    const backend = makeBackend();
+    const exporter: SnapshotExportService = {
+      available: true, run: vi.fn(async (request) => exportOutcome(request)), cancel: vi.fn(async () => true),
+    };
+    const { user } = setup(backend, { snapshotExportService: exporter });
+    await user.click(runButton());
+    const openExport = await screen.findByRole('button', { name: '导出全部匹配文档' });
+    const executed = vi.mocked(backend.execute).mock.calls[0]![0];
+    fireEvent.change(fields(), { target: { value: '{"query": ' } });
+    fireEvent.change(screen.getByLabelText('索引或匹配模式'), { target: { value: 'draft-only' } });
+    await user.click(openExport);
+    expect(exporter.run).not.toHaveBeenCalled();
+    const dialog = screen.getByRole('dialog', { name: '全量快照导出' });
+    expect(within(dialog).getByText('orders-1')).toBeVisible();
+    await user.click(within(dialog).getByRole('button', { name: '选择文件并导出' }));
+    await within(dialog).findByText('全部匹配文档已保存。');
+    const sent = vi.mocked(exporter.run).mock.calls[0]![0];
+    expect(sent.index).toBe(executed.index);
+    expect(sent.expectedEndpoint).toBe(baseProfile.endpoint);
+    expect(sent.rawDsl).not.toContain('draft-only');
+    expect(sent).not.toHaveProperty('pitId');
+    expect(backend.execute).toHaveBeenCalledTimes(1);
+    expect(backend.closePit).not.toHaveBeenCalled();
+    expect(fields()).toHaveValue('{"query": ');
+  });
+
+  it('keeps a preview export bound to its original target when the endpoint changes', async () => {
+    const backend = makeBackend();
+    const result = deferred<SnapshotExportOutcome>();
+    const exporter: SnapshotExportService = {
+      available: true, run: vi.fn(() => result.promise), cancel: vi.fn(async () => true),
+    };
+    const { user, control } = setup(backend, { surface: 'preview', snapshotExportService: exporter });
+    await user.click(await screen.findByRole('button', { name: 'orders-1' }));
+    await user.click(await screen.findByRole('button', { name: '导出全部匹配文档' }));
+    await user.click(screen.getByRole('button', { name: '选择文件并导出' }));
+    const sent = vi.mocked(exporter.run).mock.calls[0]![0];
+    control.setEndpoint('https://replacement.test');
+    await waitFor(() => expect(exporter.cancel).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('原标签或连接目标已不可用，不能启动或继续此导出。')).toBeVisible();
+    await act(async () => {
+      result.resolve({
+        ...exportOutcome(sent), status: 'cancelled', reason: 'cancelled', fileState: 'partial', fileName: 'chosen.csv.partial-fixture',
+      });
+    });
+    expect(screen.getByText('chosen.csv.partial-fixture')).toBeVisible();
+    expect(exporter.run).toHaveBeenCalledTimes(1);
+    expect(sent.expectedEndpoint).toBe(baseProfile.endpoint);
+    expect(backend.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains loaded export but offers no full scan when the service is unavailable', async () => {
+    const backend = makeBackend();
+    const exporter: SnapshotExportService = { available: false, run: vi.fn(), cancel: vi.fn() };
+    const { user } = setup(backend, { snapshotExportService: exporter });
+    await user.click(runButton());
+    expect(await screen.findByRole('button', { name: '导出已加载结果' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: '导出全部匹配文档' })).not.toBeInTheDocument();
+    expect(exporter.run).not.toHaveBeenCalled();
+  });
+
+  it('keeps a hidden export running across tab switches and restores its original progress', async () => {
+    const backend = makeBackend();
+    const result = deferred<SnapshotExportOutcome>();
+    const exporter: SnapshotExportService = {
+      available: true, run: vi.fn(() => result.promise), cancel: vi.fn(async () => true),
+    };
+    const { user } = setup(backend, {
+      seeds: [{ index: 'orders-1' }, { index: 'other-1' }], snapshotExportService: exporter,
+    });
+    await user.click(runButton());
+    await user.click(await screen.findByRole('button', { name: '导出全部匹配文档' }));
+    await user.click(screen.getByRole('button', { name: '选择文件并导出' }));
+    const sent = vi.mocked(exporter.run).mock.calls[0]![0];
+    await user.click(screen.getByRole('button', { name: '收起导出进度' }));
+    expect(screen.queryByRole('dialog', { name: '全量快照导出' })).not.toBeInTheDocument();
+    await user.click(screen.getAllByRole('tab')[2]!);
+    expect(screen.getByLabelText('索引或匹配模式')).toHaveValue('other-1');
+    expect(exporter.cancel).not.toHaveBeenCalled();
+    expect(backend.execute).toHaveBeenCalledTimes(1);
+    await act(async () => { result.resolve(exportOutcome(sent)); });
+    expect(screen.queryByRole('dialog', { name: '全量快照导出' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '导出进度' }));
+    const dialog = screen.getByRole('dialog', { name: '全量快照导出' });
+    expect(within(dialog).getByText('orders-1')).toBeVisible();
+    expect(within(dialog).getByText('全部匹配文档已保存。')).toBeVisible();
+    expect(exporter.run).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('compact data preview', () => {
   it.each([

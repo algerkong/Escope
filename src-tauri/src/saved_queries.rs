@@ -203,7 +203,7 @@ pub(crate) fn saved_queries_save(
     with_database(&state, |database| save_library(database, library))
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ExportFormat {
     Csv,
@@ -218,7 +218,7 @@ impl ExportFormat {
         }
     }
 
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Csv => "CSV",
             Self::Jsonl => "JSONL",
@@ -226,7 +226,7 @@ impl ExportFormat {
     }
 
     /// Extension as the dialog filter spells it: without the dot.
-    fn filter_extension(self) -> &'static str {
+    pub(crate) fn filter_extension(self) -> &'static str {
         match self {
             Self::Csv => "csv",
             Self::Jsonl => "jsonl",
@@ -261,7 +261,11 @@ fn validate_export(request: &ExportRequest) -> Result<(), AppError> {
     if request.content.is_empty() || request.content.len() > MAX_EXPORT_BYTES {
         return Err(AppError::new("invalidInput"));
     }
-    let name = request.file_name.trim();
+    validate_export_name(&request.file_name, request.format)
+}
+
+pub(crate) fn validate_export_name(file_name: &str, format: ExportFormat) -> Result<(), AppError> {
+    let name = file_name.trim();
     if name.is_empty() || name.chars().count() > MAX_EXPORT_NAME_CHARS {
         return Err(AppError::new("invalidInput"));
     }
@@ -271,7 +275,7 @@ fn validate_export(request: &ExportRequest) -> Result<(), AppError> {
         return Err(AppError::new("invalidInput"));
     }
     let lowered = name.to_ascii_lowercase();
-    let Some(stem) = lowered.strip_suffix(request.format.suffix()) else {
+    let Some(stem) = lowered.strip_suffix(format.suffix()) else {
         return Err(AppError::new("invalidInput"));
     };
     // No silent extension fix-up and no stem that Windows would reject or strip.

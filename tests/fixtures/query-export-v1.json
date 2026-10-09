@@ -1,0 +1,31 @@
+{
+  "request": {
+    "requestId": "8f3b2f1c-4f3e-4a5b-8c9d-0e1f2a3b4c5d",
+    "connectionId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5e",
+    "expectedEndpoint": "https://es.test/base",
+    "index": "orders-*",
+    "rawDsl": "{\"query\":{\"range\":{\"id\":{\"gte\":9007199254740993}}},\"size\":2,\"sort\":[\"_shard_doc\"],\"track_total_hits\":true}",
+    "format": "jsonl",
+    "fileName": "escope-orders.jsonl",
+    "maxRows": 100000,
+    "maxBytes": 268435456
+  },
+  "progress": {
+    "requestId": "8f3b2f1c-4f3e-4a5b-8c9d-0e1f2a3b4c5d",
+    "connectionId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5e",
+    "phase": "writing",
+    "rows": 2,
+    "bytes": 256
+  },
+  "outcome": {
+    "requestId": "8f3b2f1c-4f3e-4a5b-8c9d-0e1f2a3b4c5d",
+    "connectionId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5e",
+    "status": "saved",
+    "rows": 2,
+    "bytes": 256,
+    "fileState": "complete",
+    "fileName": "escope-orders.jsonl",
+    "reason": null,
+    "pitCleanup": "closed"
+  }
+}

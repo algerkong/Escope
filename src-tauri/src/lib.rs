@@ -13,6 +13,7 @@ mod model_discovery;
 mod models;
 mod operation;
 mod query;
+mod query_export;
 mod read_only;
 mod resources;
 mod saved_queries;
@@ -337,6 +338,7 @@ pub fn run() {
             app.manage(StorageState(Mutex::new(database)));
             app.manage(NetworkState(ReadOnlyClient::new()));
             app.manage(RequestState(RequestRegistry::default()));
+            app.manage(query_export::SnapshotExportState::new());
             // AI chat keeps its own client and its own cancellation registry, so an AI cancel can
             // never reach an Elasticsearch request and vice versa.
             app.manage(ai::AiState::new());
@@ -364,6 +366,8 @@ pub fn run() {
             saved_queries::saved_queries_load,
             saved_queries::saved_queries_save,
             saved_queries::saved_queries_export,
+            query_export::query_export,
+            query_export::query_export_cancel,
             workspace_recovery::workspace_recovery_load,
             workspace_recovery::workspace_recovery_save,
             ai::ai_chat,

@@ -1,4 +1,4 @@
-import { Bookmark, Braces, Database, FileCheck2, History, Layers, LoaderCircle, Play, Plus, Save, Settings, ShieldCheck, Star, TriangleAlert, Undo2 } from 'lucide-react';
+import { Bookmark, Braces, Database, FileCheck2, FileDown, History, Layers, LoaderCircle, Play, Plus, Save, Settings, ShieldCheck, Star, TriangleAlert, Undo2 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ConnectionProfile } from '../../domain/connection';
@@ -15,11 +15,14 @@ import { formatQueryDsl, validateQueryDsl, type QueryDslError } from '../../doma
 import { documentFromEntry, type SavedQueryEntry } from '../../domain/query-library';
 import { desktopQueryBackend, type QueryBackend } from '../../services/ipc';
 import { defaultQueryLibraryService, type QueryLibraryService } from '../../services/query-library';
+import { desktopSnapshotExportService, type SnapshotExportService } from '../../services/query-export';
+import type { SnapshotExportSource } from '../../domain/query-export';
 import { desktopModelService, type ModelService } from '../../services/models';
 import { detectWindowPlatform } from '../../services/window';
 import { AiChatPanel } from '../ai/AiChatPanel';
 import { QueryLibraryDialog, SaveDraftDialog, useQueryLibrary, type SaveDraftResult } from './QueryLibrary';
 import { QueryResults } from './QueryResults';
+import { SnapshotExportDialog, type SnapshotExportTaskState } from './SnapshotExportDialog';
 import { DataPreview } from './DataPreview';
 import { VisualQueryEditor, type VisualEditorDraft } from './VisualQueryEditor';
 import { ResourceSidebar } from './ResourceSidebar';
@@ -65,12 +68,13 @@ interface Props {
   onCommandReady?: (command: QueryCommand | null) => void;
   /** Injectable seam for the local query library and loaded-result export. */
   libraryService?: QueryLibraryService;
+  snapshotExportService?: SnapshotExportService;
   /** Restore a saved query as a new tab; the App owns tab creation and never auto-executes it. */
   restoreQuery?: (document: QueryDocument) => void;
   recovery?: WorkspaceRecoveryController;
 }
 
-export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResults, toggleAI, onSettings, updateQuery, selectTab, openIndex, addQuery, closeTab, backend = desktopQueryBackend, modelService = desktopModelService, aiBackend, canQuery, active = true, onCommandReady, libraryService = defaultQueryLibraryService, restoreQuery, recovery }: Props) {
+export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResults, toggleAI, onSettings, updateQuery, selectTab, openIndex, addQuery, closeTab, backend = desktopQueryBackend, modelService = desktopModelService, aiBackend, canQuery, active = true, onCommandReady, libraryService = defaultQueryLibraryService, snapshotExportService = desktopSnapshotExportService, restoreQuery, recovery }: Props) {
   const { t } = useTranslation();
   const [closing, setClosing] = useState<QueryDocument | null>(null);
   const [checked, setChecked] = useState<Record<string, { source: string; error: QueryDslError | null }>>({});
@@ -96,6 +100,9 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const [historyOpen, setHistoryOpen] = useState(false);
   const [saveDraftOpen, setSaveDraftOpen] = useState(false);
   const [savedEntryIds, setSavedEntryIds] = useState<Record<string, string>>({});
+  const [exportSource, setExportSource] = useState<SnapshotExportSource | null>(null);
+  const [exportVisible, setExportVisible] = useState(false);
+  const [exportTaskState, setExportTaskState] = useState<SnapshotExportTaskState>('idle');
 
   const tab = state.tabs.find((item) => item.document.id === state.activeTabId);
   const home = useMemo<QueryDocument>(() => ({
@@ -343,6 +350,12 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
       <div className="workspace-recovery-bar">
         {recovery ? <WorkspaceRecoveryStatus recovery={recovery} /> : null}
         <div className="workspace-recovery-actions">
+          {exportSource ? <IconButton icon={exportTaskState === 'running' ? LoaderCircle
+            : exportTaskState === 'saved' ? FileCheck2 : exportTaskState === 'error' || exportTaskState === 'incomplete' ? TriangleAlert : FileDown}
+            label={t('queryExport:task')} className="qexport-task" data-state={exportTaskState}
+            title={`${exportSource.index}: ${t(exportTaskState === 'saved' ? 'queryExport:saved'
+              : exportTaskState === 'error' || exportTaskState === 'incomplete' ? 'queryExport:incompleteTask' : 'queryExport:task')}`}
+            onClick={() => setExportVisible(true)} /> : null}
           <IconButton icon={Bookmark} label={t('queryLibrary:open')} onClick={() => setLibraryOpen(true)} />
           {recovery ? <IconButton icon={History} label={t('queryHistory:open')} onClick={() => setHistoryOpen(true)} /> : null}
         </div>
@@ -433,6 +446,16 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
       <QueryResults kind={showingQuery ? 'query' : 'preview'} query={query} entry={entry}
         available={available} stale={stale} endpointChanged={endpointChanged} documentIds={documentIds} active={active} wrapJson={preferences.wrapJson}
         canRun={canRun} grouping={preferences.grouping} exportService={libraryService}
+        onSnapshotExport={available && snapshotExportService.available && target !== undefined && !endpointChanged
+          && entry?.endpoint && (execution.status === 'success' || execution.status === 'partial')
+          ? () => {
+            if (!exportSource) setExportSource({
+              queryId: execution.snapshot.queryId, connectionId: execution.snapshot.connectionId,
+              connectionName: target.displayName, endpoint: entry.endpoint!, index: execution.snapshot.index,
+              rawDsl: execution.snapshot.rawDsl,
+            });
+            setExportVisible(true);
+          } : undefined}
         layout={recoveryTab?.grid} onLayoutChange={recoveryTab ? (layout) => recovery?.setGridLayout(queryId, layout) : undefined}
         renderToolbar={showingQuery ? undefined : (summary, controls) => <DataPreview document={query} target={target} available={available}
           locked={tab?.kind === 'index'} busy={execution.status === 'running' || Boolean(entry?.continuing)} summary={summary}
@@ -456,6 +479,11 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
       entries={library.entries} saveStatus={library.saveStatus} profiles={profiles} onClose={() => setLibraryOpen(false)}
       onRestore={restoreQuery ? restoreSaved : undefined} onDelete={library.deleteEntry} onToggleFavorite={toggleSavedFavorite}
       onRetrySave={library.retrySave} onReload={library.reload} />
+    {exportSource ? <SnapshotExportDialog open={exportVisible && active} source={exportSource} service={snapshotExportService}
+      targetAvailable={state.tabs.some((item) => item.document.id === exportSource.queryId)
+        && profiles.some((profile) => profile.id === exportSource.connectionId && profile.endpoint === exportSource.endpoint)}
+      onHide={() => setExportVisible(false)} onTaskState={setExportTaskState}
+      onClose={() => { setExportSource(null); setExportVisible(false); }} /> : null}
     {recovery ? <ExecutionHistoryDialog open={historyOpen} recovery={recovery} profiles={profiles}
       onClose={() => setHistoryOpen(false)} onRestore={restoreQuery} /> : null}
     <Modal open={closing !== null} onClose={() => setClosing(null)} title={t('query:closeTitle')}

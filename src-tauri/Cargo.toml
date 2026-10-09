@@ -15,12 +15,18 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["arbitrary_precision"] }
+serde_json = { version = "1", features = ["arbitrary_precision", "preserve_order", "raw_value"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread", "time"] }
+# A02.1/A04.1 streaming transport: `eventsource-stream` is the maintained SSE framing parser,
+# `futures-util` drives the parsed streams, and `bytes` is the chunk type the parser consumes
+# (already in the tree through reqwest; named directly because our stream guard yields it).
+eventsource-stream = "0.2"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+bytes = "1"
 zeroize = "1"
 
 # F08.1: OS credential store. Only the maintained keyring platform backend is used,

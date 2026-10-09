@@ -4,12 +4,14 @@ import { en } from './en-US';
 import { zh } from './zh-CN';
 import { enLive, zhLive } from './query-live';
 import { enCluster, zhCluster } from './cluster';
+import { enModels, zhModels } from './models';
+import { enAiChat, zhAiChat } from './ai-chat';
 
 export const i18n = i18next.createInstance();
 void i18n.use(initReactI18next).init({
   resources: {
-    'zh-CN': { ...zh, queryLive: zhLive, cluster: zhCluster },
-    'en-US': { ...en, queryLive: enLive, cluster: enCluster },
+    'zh-CN': { ...zh, queryLive: zhLive, cluster: zhCluster, models: zhModels, aiChat: zhAiChat },
+    'en-US': { ...en, queryLive: enLive, cluster: enCluster, models: enModels, aiChat: enAiChat },
   },
   lng: navigator.language.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US',
   fallbackLng: 'en-US',

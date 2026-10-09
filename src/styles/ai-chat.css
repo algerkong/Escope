@@ -1,0 +1,134 @@
+/*
+ * AI chat side panel: direct multi-turn chat — target selector, bounded transcript, attachment
+ * snapshot and composer.
+ *
+ * Selectors are `.ai-`-scoped so the global tokens and layout stay untouched. The panel is a
+ * height-flexible column: the header and the composer (model target row included) never shrink,
+ * and the transcript between them owns the remaining height and scrolls internally, so the panel
+ * can never grow past the workspace footer. No width is set here — the workspace owns the sidebar
+ * width (280–640px) and its splitters. Long ids, messages, dsl, code and tables wrap or scroll
+ * inside the panel instead of widening it; the theme scrollbars apply unchanged.
+ */
+
+.ai-sidebar { min-height: 0; overflow: hidden; }
+.ai-sidebar[hidden] { display: none !important; }
+.ai-heading-actions { display: flex; align-items: center; gap: 2px; }
+.ai-state { flex-shrink: 0; display: flex; align-items: center; gap: 7px; font-size: .82rem; padding: 8px 14px; }
+.ai-notice { border-radius: 6px; margin: 0; flex-shrink: 0; }
+.ai-notice button { margin-left: auto; flex-shrink: 0; }
+
+/* Composer target row: the model selector and its tools belong to the composer, not the header.
+   The row wraps instead of compressing the selector into a vertical stack at the 280px minimum. */
+.ai-composer-target { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+/* The wrapper is the flex item; the select keeps filling it and keeps its own compact padding. */
+.ai-composer-target .select-control { flex: 1 1 7rem; min-width: 0; max-width: 100%; }
+.ai-composer-model {
+  min-width: 0; max-width: 100%; padding: 3px 6px; font-size: .82rem;
+  text-overflow: ellipsis;
+}
+
+/* Transcript scroll area: fills the space between the header and the composer. */
+.ai-body-wrap { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; display: flex; }
+.ai-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 10px 14px; }
+.ai-jump {
+  position: absolute; right: 12px; bottom: 10px; z-index: 1;
+  background: var(--elevated); border: 1px solid var(--border); box-shadow: 0 2px 8px #0000001f;
+}
+
+.ai-turns { display: flex; flex-direction: column; }
+.ai-turn { display: flex; flex-direction: column; gap: 5px; padding: 9px 0; border-bottom: 1px solid var(--border); }
+.ai-turn:last-child { border-bottom: 0; }
+.ai-turn-head { display: flex; align-items: center; gap: 8px; font-size: .72rem; color: var(--muted); flex-wrap: wrap; }
+.ai-turn-role { font-weight: 500; color: var(--text); }
+.ai-turn-model { overflow-wrap: anywhere; min-width: 0; }
+.ai-turn-time { margin-left: auto; }
+.ai-turn-prompt, .ai-turn-text { overflow-wrap: anywhere; margin: 0; -webkit-user-select: text; user-select: text; }
+.ai-turn-prompt { white-space: pre-wrap; font-size: .84rem; }
+.ai-turn-text { font-size: .84rem; line-height: 1.55; }
+.ai-turn-status { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: .75rem; color: var(--muted); }
+.ai-turn-note { overflow-wrap: anywhere; }
+.ai-turn-note.failed { color: var(--error); }
+.ai-turn-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.ai-turn-actual { min-width: 0; font-size: .72rem; overflow-wrap: anywhere; }
+.ai-turn-actions { display: flex; align-items: center; gap: 2px; }
+.ai-turn-actions .icon-button { width: 26px; height: 26px; min-width: 26px; }
+.ai-copy-note { font-size: .68rem; color: var(--success); overflow-wrap: anywhere; }
+.ai-copy-note.failed { color: var(--error); }
+
+.ai-chip {
+  display: inline-flex; align-items: center; gap: 4px; font-size: .68rem; line-height: 1.6;
+  padding: 0 6px; border-radius: 3px; border: 1px solid var(--border); color: var(--muted);
+}
+.ai-chip.success { color: var(--success); border-color: color-mix(in srgb, var(--success) 40%, transparent); }
+.ai-chip.partial, .ai-chip.cancelled, .ai-chip.warning { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 40%, transparent); }
+.ai-chip.failed { color: var(--error); border-color: color-mix(in srgb, var(--error) 40%, transparent); }
+
+/* Attachment: header stays one row; the expanded snapshot scrolls inside itself. */
+.ai-attachment-row { display: flex; flex-shrink: 0; }
+.ai-attachment { flex: 1; min-width: 0; border: 1px solid var(--border); border-radius: 6px; background: var(--subtle); overflow: hidden; }
+.ai-attachment-head { display: flex; align-items: center; gap: 6px; padding: 3px 4px 3px 8px; min-width: 0; font-size: .78rem; }
+.ai-attachment-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-attachment-head .ai-chip { display: block; min-width: 0; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-attachment-spacer { flex: 1; }
+.ai-attachment-head .icon-button { width: 26px; height: 26px; min-width: 26px; }
+.ai-attachment-head .icon-button[aria-pressed="true"] svg { transform: rotate(180deg); }
+.ai-attachment-body { border-top: 1px solid var(--border); max-height: 32dvh; overflow: auto; }
+.ai-attachment-meta { display: grid; grid-template-columns: minmax(56px, 4.5rem) minmax(0, 1fr); gap: 3px 8px; margin: 0; padding: 8px 10px; font-size: .76rem; }
+.ai-attachment-meta dt { color: var(--muted); }
+.ai-attachment-meta dd { margin: 0; overflow-wrap: anywhere; font-family: var(--code-font); font-size: .74rem; }
+.ai-attachment-dsl {
+  margin: 0; padding: 0 10px 8px; white-space: pre-wrap; overflow-wrap: anywhere;
+  font: var(--code-size)/1.5 var(--code-font); -webkit-user-select: text; user-select: text;
+}
+
+/* Composer: one focused surface; the textarea itself never draws a second ring. */
+.ai-composer {
+  flex-shrink: 0; display: flex; flex-direction: column; gap: 8px;
+  border-top: 1px solid var(--border); padding: 8px 14px 10px; max-height: 52dvh; overflow-y: auto;
+}
+.ai-composer-surface {
+  display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--control-border);
+  border-radius: 8px; background: var(--app);
+  transition: border-color .14s ease, box-shadow .14s ease;
+}
+.ai-composer-surface:focus-within { border-color: var(--focus-ring); box-shadow: 0 0 0 3px var(--focus-halo); }
+.ai-composer-input {
+  width: 100%; min-height: 58px; max-height: 34dvh; padding: 8px 10px; resize: none; overflow-y: auto;
+  border: 0; border-radius: 0; background: transparent; box-shadow: none;
+}
+.ai-composer-input:focus, .ai-composer-input:focus-visible { border: 0; outline: none; box-shadow: none; }
+.ai-composer-foot { display: flex; align-items: center; gap: 6px; padding: 2px 6px 4px 8px; }
+.ai-composer-spacer { flex: 1; }
+.ai-composer-foot .icon-button { width: 28px; height: 28px; min-width: 28px; }
+
+/* Markdown replies: compact typography; tables and code scroll inside the turn. */
+.ai-md { overflow-wrap: anywhere; }
+.ai-md > :first-child { margin-top: 0; }
+.ai-md > :last-child { margin-bottom: 0; }
+.ai-md p { margin: 0 0 6px; }
+.ai-md h1, .ai-md h2, .ai-md h3, .ai-md h4, .ai-md h5, .ai-md h6 { font-size: .88rem; font-weight: 600; margin: 10px 0 4px; }
+.ai-md ul, .ai-md ol { margin: 0 0 6px; padding-left: 18px; }
+.ai-md li + li { margin-top: 2px; }
+.ai-md blockquote { margin: 0 0 6px; padding-left: 8px; border-left: 2px solid var(--border); color: var(--muted); }
+.ai-md hr { border: 0; border-top: 1px solid var(--border); margin: 8px 0; }
+.ai-md a { color: var(--text); text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
+.ai-md :not(pre) > code {
+  background: var(--subtle); border: 1px solid var(--border); border-radius: 4px;
+  padding: 0 4px; font-size: .76rem; overflow-wrap: anywhere;
+}
+.ai-md table { display: block; max-width: 100%; overflow-x: auto; border: 1px solid var(--border); border-radius: 6px; }
+.ai-md th, .ai-md td { padding: 5px 8px; font-size: .76rem; white-space: nowrap; }
+.ai-md-image {
+  display: inline-block; font-size: .74rem; color: var(--muted);
+  border: 1px dashed var(--border); border-radius: 4px; padding: 0 5px;
+}
+
+.ai-code { margin: 6px 0; border: 1px solid var(--border); border-radius: 6px; background: var(--subtle); overflow: hidden; }
+.ai-code-head { display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 2px 4px 2px 8px; border-bottom: 1px solid var(--border); }
+.ai-code-lang { margin-right: auto; font-family: var(--code-font); font-size: .68rem; color: var(--muted); overflow-wrap: anywhere; }
+.ai-code-head .icon-button { width: 26px; height: 26px; min-width: 26px; }
+.ai-code pre {
+  margin: 0; padding: 8px 10px; max-height: 36dvh; overflow: auto;
+  white-space: pre-wrap; overflow-wrap: anywhere; font: var(--code-size)/1.55 var(--code-font);
+  -webkit-user-select: text; user-select: text;
+}

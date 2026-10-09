@@ -1,7 +1,12 @@
+mod ai;
 mod connection;
 pub mod connection_credentials;
 pub mod credentials;
 mod error;
+mod model_api_key;
+pub mod model_credentials;
+mod model_discovery;
+mod models;
 mod operation;
 mod query;
 mod read_only;
@@ -207,6 +212,11 @@ pub fn run() {
             app.manage(StorageState(Mutex::new(database)));
             app.manage(NetworkState(ReadOnlyClient::new()));
             app.manage(RequestState(RequestRegistry::default()));
+            // AI chat keeps its own client and its own cancellation registry, so an AI cancel can
+            // never reach an Elasticsearch request and vice versa.
+            app.manage(ai::AiState::new());
+            // Model discovery has its own client and registry, separate from chat and search.
+            app.manage(model_discovery::DiscoveryState::new());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -219,6 +229,15 @@ pub fn run() {
             query_execute,
             request_cancel,
             connection_test,
+            ai::ai_chat,
+            ai::ai_chat_cancel,
+            models::models_load,
+            models::models_save,
+            models::models_delete,
+            models::models_select,
+            models::models_cleanup,
+            model_discovery::models_discover,
+            model_discovery::models_discover_cancel,
         ])
         .run(tauri::generate_context!())
         .expect("EScope desktop runtime failed");

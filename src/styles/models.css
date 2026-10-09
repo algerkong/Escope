@@ -16,8 +16,8 @@
 .models-state.error { color: var(--error); }
 .models-state button { margin-left: 4px; }
 
-.model-list { list-style: none; margin: 10px 0 0; padding: 0; border: 1px solid var(--border); border-radius: 6px; }
-.model-row { display: flex; align-items: flex-start; gap: 14px; padding: 12px; border-bottom: 1px solid var(--border); }
+.model-list { list-style: none; margin: 6px 0 0; padding: 0; }
+.model-row { display: flex; align-items: flex-start; gap: 14px; padding: 12px 4px; border-bottom: 1px solid var(--border); }
 .model-row:last-child { border-bottom: 0; }
 .model-row.is-default { background: var(--subtle); }
 .model-default { display: inline-flex; align-items: center; gap: 6px; min-width: 132px; font-size: .8rem; color: var(--muted); }
@@ -30,9 +30,18 @@
   border: 1px solid var(--border); color: var(--muted); white-space: nowrap;
 }
 .model-badge.warn { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 40%, transparent); }
+.model-badge.success { color: var(--success); border-color: color-mix(in srgb, var(--success) 40%, transparent); }
 .model-endpoint { font-size: .82rem; overflow-wrap: anywhere; }
 .model-id { font-size: .78rem; overflow-wrap: anywhere; }
 .model-actions { display: flex; gap: 4px; }
+
+.model-test { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: .75rem; margin-top: 2px; }
+.model-test-ok { color: var(--success); }
+.model-test-fail { color: var(--error); }
+.model-test-reply {
+  margin: 0; font-size: .78rem; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere;
+  max-height: 4.8em; overflow: auto; -webkit-user-select: text; user-select: text;
+}
 
 .model-form { display: flex; flex-direction: column; gap: 4px; }
 .model-form label { font-size: .8rem; color: var(--muted); }
@@ -41,7 +50,28 @@
 .model-hint { margin: 0 0 8px; }
 .model-form .notice { margin: 0 0 10px; }
 
+.model-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, 170px); gap: 8px 10px; }
+.model-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.model-id-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.model-id-row input { flex: 1; min-width: 120px; }
+/* The wrapper is the flex item: a percentage width on the inner select would resolve against it. */
+.model-id-row .select-control { flex: 0 1 auto; min-width: 0; max-width: 40%; }
+.model-id-select { min-width: 0; }
+.model-id-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.model-key-row { display: flex; align-items: center; gap: 6px; }
+.model-key-row .model-key-input { flex: 1; min-width: 0; }
+.model-key-input { font-family: var(--code-font); font-size: .82rem; }
+.model-clear-key { display: flex; align-items: center; gap: 6px; font-size: .8rem; color: var(--muted); margin: 2px 0 8px; }
+.model-key-status { display: inline-flex; align-items: center; gap: 4px; font-size: .72rem; }
+.model-key-status.muted { color: var(--muted); }
+
 @media (max-width: 760px) {
   .model-row { flex-wrap: wrap; }
   .models-filter input { max-width: 100%; }
+}
+
+@media (max-width: 560px) {
+  .model-grid { grid-template-columns: minmax(0, 1fr); }
+  .model-id-row, .model-key-row { flex-wrap: wrap; }
+  .model-id-row .select-control { max-width: 100%; }
 }

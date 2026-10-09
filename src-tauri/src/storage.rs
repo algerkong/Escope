@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 /// Highest schema version this build understands. A file above it fails closed instead of being
 /// opened with an unknown layout.
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 /// Hard upper bound for one credential cleanup batch, so no caller can request unbounded work.
 pub const MAX_CLEANUP_BATCH: usize = 64;
@@ -219,6 +219,26 @@ pub struct ConnectionRecord {
     pub detached: Option<CredentialRef>,
 }
 
+/// Result of a model metadata write that may detach a credential.
+#[derive(Debug)]
+pub struct ModelRecord {
+    pub profile: ModelProfile,
+    /// Credential detached or replaced by the write, already queued for deletion.
+    pub detached: Option<CredentialRef>,
+}
+
+/// The credential action a model write applies in the same transaction as its metadata.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ModelReferenceChange<'a> {
+    /// Keep the existing reference, unless the target changed: a new endpoint or protocol can
+    /// never silently reuse the authentication the user granted for the old one.
+    Keep,
+    /// Drop the reference; the secret is queued for deletion.
+    Clear,
+    /// Bind this freshly written reference, replacing any previous one.
+    Replace(&'a CredentialRef),
+}
+
 /// One connection row exactly as stored, before validation. Read through this so `load`,
 /// `connection`, `bind_credential` and `detach_credential` all apply the same field checks and the
 /// same fail-closed credential rules.
@@ -355,8 +375,10 @@ impl ModelInput {
 }
 
 /// One stored model profile. Serialized exactly as `tests/fixtures/models-state-canonical.json`
-/// spells it; `Deserialize` exists so that fixture can be pinned from the Rust side too.
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+/// spells it: `hasApiKey` is the only credential fact on the wire, and the reference itself is
+/// skipped so it can never be returned, logged or accepted from a caller. `Deserialize` exists so
+/// the fixture can be pinned from the Rust side too.
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ModelProfile {
     pub id: String,
@@ -365,6 +387,13 @@ pub struct ModelProfile {
     pub endpoint: String,
     pub model_id: String,
     pub sort_order: i64,
+    /// Whether a credential reference is persisted for this row. It says nothing about whether the
+    /// secret still exists in the OS store or whether the model can be used successfully.
+    pub has_api_key: bool,
+    /// The trusted reference persisted on the row. Resolved only from here, never supplied by a
+    /// caller, and never serialized.
+    #[serde(skip)]
+    pub(crate) credential_ref: Option<CredentialRef>,
 }
 
 /// Everything the model settings page reads in one call, so the list and the default selection can
@@ -375,6 +404,9 @@ pub struct ModelProfile {
 pub struct ModelsState {
     pub profiles: Vec<ModelProfile>,
     pub default_model_id: Option<String>,
+    /// True while the shared credential outbox still holds a reference that may exist in the OS
+    /// store. A warning, not a failure: `models_cleanup` retries the bounded deletion.
+    pub credential_cleanup_pending: bool,
 }
 
 /// One model row exactly as stored, before validation. Read through this so `models`, `save_model`
@@ -386,10 +418,12 @@ struct RawModel {
     endpoint: String,
     model_id: String,
     sort_order: i64,
+    credential_ref: Option<String>,
 }
 
 impl RawModel {
-    const COLUMNS: &'static str = "id, display_name, protocol, endpoint, model_id, sort_order";
+    const COLUMNS: &'static str =
+        "id, display_name, protocol, endpoint, model_id, sort_order, credential_ref";
 
     fn read(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
         Ok(Self {
@@ -399,6 +433,7 @@ impl RawModel {
             endpoint: row.get(3)?,
             model_id: row.get(4)?,
             sort_order: row.get(5)?,
+            credential_ref: row.get(6)?,
         })
     }
 
@@ -409,6 +444,13 @@ impl RawModel {
         if Uuid::parse_str(&self.id).is_err() || !(0..=1_000_000).contains(&self.sort_order) {
             return Err(AppError::new("storageUnavailable"));
         }
+        // A reference is only usable when it is the canonical spelling this module writes.
+        let credential_ref = match self.credential_ref.as_deref() {
+            Some(value) => {
+                Some(CredentialRef::parse(value).map_err(|_| AppError::new("storageUnavailable"))?)
+            }
+            None => None,
+        };
         let clean = ModelInput {
             display_name: self.display_name,
             protocol,
@@ -424,6 +466,8 @@ impl RawModel {
             endpoint: clean.endpoint,
             model_id: clean.model_id,
             sort_order: self.sort_order,
+            has_api_key: credential_ref.is_some(),
+            credential_ref,
         })
     }
 }
@@ -479,6 +523,7 @@ impl Database {
                 1 => tx.execute_batch(include_str!("../migrations/001_initial.sql"))?,
                 2 => tx.execute_batch(include_str!("../migrations/002_credentials.sql"))?,
                 3 => tx.execute_batch(include_str!("../migrations/003_models.sql"))?,
+                4 => tx.execute_batch(include_str!("../migrations/004_model_credentials.sql"))?,
                 _ => return Err(AppError::new("unsupported")),
             }
             tx.commit()?;
@@ -740,7 +785,8 @@ impl Database {
 
     /// Model profiles plus the resolved default selection, read in one shot. A stored default that
     /// no longer names a profile falls back to the first one — the same rule the frontend session
-    /// adapter applies, so both adapters answer the same question with the same answer.
+    /// adapter applies, so both adapters answer the same question with the same answer. The
+    /// credential flag reports the shared outbox, never a keyring probe.
     pub fn models(&self) -> Result<ModelsState, AppError> {
         let mut statement = self.0.prepare(&format!(
             "SELECT {} FROM model_profiles ORDER BY sort_order, id",
@@ -767,31 +813,110 @@ impl Database {
         Ok(ModelsState {
             profiles,
             default_model_id,
+            credential_cleanup_pending: self.pending_credential_cleanup_count()? > 0,
         })
     }
 
-    /// Create or update one model profile. `id` is the stable identity: an update keeps it and its
-    /// sort order, and a new profile is appended. Model metadata has no credential to detach, so
-    /// editing an endpoint only changes the target.
+    /// Trusted read of one model profile including its credential reference. Used by the
+    /// credential and discovery paths; the reference never leaves the backend.
+    pub fn model_profile(&self, id: &str) -> Result<ModelProfile, AppError> {
+        Uuid::parse_str(id).map_err(|_| AppError::new("invalidInput"))?;
+        read_model_row(&self.0, id)?.ok_or_else(|| AppError::new("notFound"))
+    }
+
+    /// Validate metadata, identity and bounds before any keyring side effect. The write
+    /// transaction repeats every check, so this only narrows the window in which a rejected
+    /// request could have touched the OS store.
+    pub fn model_save_precheck(
+        &self,
+        input: &ModelInput,
+        id: Option<&str>,
+    ) -> Result<(), AppError> {
+        input.clone().validate()?;
+        match id {
+            Some(id) => {
+                Uuid::parse_str(id).map_err(|_| AppError::new("invalidInput"))?;
+                let exists: bool = self.0.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM model_profiles WHERE id=?1)",
+                    [id],
+                    |row| row.get(0),
+                )?;
+                if !exists {
+                    return Err(AppError::new("notFound"));
+                }
+            }
+            None => {
+                let count: i64 =
+                    self.0
+                        .query_row("SELECT count(*) FROM model_profiles", [], |row| row.get(0))?;
+                if count >= MAX_MODEL_PROFILES as i64 {
+                    return Err(AppError::new("invalidInput"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Create or update one model profile without touching its credential. Kept for callers that
+    /// only own metadata; a target change still detaches the old reference and queues it, so this
+    /// path can never leave an old secret bound to a new endpoint or protocol.
     pub fn save_model(
         &mut self,
         input: ModelInput,
         id: Option<String>,
     ) -> Result<ModelProfile, AppError> {
+        Ok(self
+            .save_model_record(input, id, ModelReferenceChange::Keep)?
+            .profile)
+    }
+
+    /// Create or update one model profile and apply a credential action in the same transaction.
+    /// `id` is the stable identity: an update keeps it and its sort order, and a new profile is
+    /// appended. The returned snapshot is built inside the transaction, so a post-commit read
+    /// failure can never be mistaken for a rolled-back write.
+    ///
+    /// Target rules: renaming or changing only the model id keeps the reference; changing the
+    /// endpoint or the protocol detaches it unless the caller binds a replacement in the same
+    /// write. A detached or replaced reference is queued for deletion inside this transaction and
+    /// is only removed from the OS store afterwards.
+    pub(crate) fn save_model_record(
+        &mut self,
+        input: ModelInput,
+        id: Option<String>,
+        change: ModelReferenceChange<'_>,
+    ) -> Result<ModelRecord, AppError> {
         let clean = input.validate()?;
         let tx = self.0.transaction()?;
-        let (id, sort_order) = match id {
+        let (id, sort_order, previous, previous_target) = match id {
             Some(id) => {
                 Uuid::parse_str(&id).map_err(|_| AppError::new("invalidInput"))?;
-                let sort_order = tx
+                let stored = tx
                     .query_row(
-                        "SELECT sort_order FROM model_profiles WHERE id=?1",
+                        "SELECT sort_order, protocol, endpoint, credential_ref FROM model_profiles WHERE id=?1",
                         [&id],
-                        |row| row.get::<_, i64>(0),
+                        |row| {
+                            Ok((
+                                row.get::<_, i64>(0)?,
+                                row.get::<_, String>(1)?,
+                                row.get::<_, String>(2)?,
+                                row.get::<_, Option<String>>(3)?,
+                            ))
+                        },
                     )
                     .optional()?
                     .ok_or_else(|| AppError::new("notFound"))?;
-                (id, sort_order)
+                let previous = stored
+                    .3
+                    .as_deref()
+                    .map(CredentialRef::parse)
+                    .transpose()
+                    .map_err(|_| AppError::new("storageUnavailable"))?;
+                (
+                    id,
+                    stored.0,
+                    previous,
+                    Some((ModelProtocol::parse(&stored.1)?, stored.2)),
+                )
             }
             None => {
                 let count: i64 =
@@ -804,43 +929,83 @@ impl Database {
                     [],
                     |row| row.get(0),
                 )?;
-                (Uuid::new_v4().to_string(), order)
+                (Uuid::new_v4().to_string(), order, None, None)
             }
         };
+        let target_changed = previous_target
+            .map(|(protocol, endpoint)| protocol != clean.protocol || endpoint != clean.endpoint)
+            .unwrap_or(false);
+        let (next, detached) = match change {
+            ModelReferenceChange::Keep if target_changed => (None, previous),
+            ModelReferenceChange::Keep => (previous, None),
+            ModelReferenceChange::Clear => (None, previous),
+            ModelReferenceChange::Replace(reference) => (
+                Some(reference.clone()),
+                previous.filter(|old| old != reference),
+            ),
+        };
         tx.execute(
-            "INSERT INTO model_profiles(id,display_name,protocol,endpoint,model_id,sort_order)
-             VALUES (?1,?2,?3,?4,?5,?6)
+            "INSERT INTO model_profiles(id,display_name,protocol,endpoint,model_id,sort_order,credential_ref)
+             VALUES (?1,?2,?3,?4,?5,?6,?7)
              ON CONFLICT(id) DO UPDATE SET display_name=excluded.display_name,protocol=excluded.protocol,
-               endpoint=excluded.endpoint,model_id=excluded.model_id",
+               endpoint=excluded.endpoint,model_id=excluded.model_id,credential_ref=excluded.credential_ref",
             params![
                 id,
                 clean.display_name,
                 clean.protocol.as_str(),
                 clean.endpoint,
                 clean.model_id,
-                sort_order
+                sort_order,
+                next.as_ref().map(CredentialRef::as_str)
             ],
         )?;
+        if let Some(reference) = &next {
+            // The reference is bound to this row now, so a prepare entry would be stale.
+            tx.execute(
+                "DELETE FROM credential_cleanup WHERE reference=?1",
+                [reference.as_str()],
+            )?;
+        }
+        if let Some(reference) = &detached {
+            queue_cleanup(&tx, reference, CleanupReason::Cleanup)?;
+        }
+        let profile = read_model_row(&tx, &id)?.ok_or_else(|| AppError::new("notFound"))?;
         tx.commit()?;
-        Ok(ModelProfile {
-            id,
-            display_name: clean.display_name,
-            protocol: clean.protocol,
-            endpoint: clean.endpoint,
-            model_id: clean.model_id,
-            sort_order,
-        })
+        Ok(ModelRecord { profile, detached })
     }
 
     /// Delete one profile and repair the stored default in the same transaction: the selection
     /// moves to the first remaining profile, or becomes `NULL` when none is left. Without this the
     /// row would keep pointing at an id that no longer exists.
     pub fn delete_model(&mut self, id: &str) -> Result<(), AppError> {
+        self.delete_model_record(id).map(|_| ())
+    }
+
+    /// Delete one profile, repair the default and queue its credential reference in one
+    /// transaction. The returned reference is already detached and queued; the caller attempts the
+    /// keyring deletion afterwards.
+    pub(crate) fn delete_model_record(
+        &mut self,
+        id: &str,
+    ) -> Result<Option<CredentialRef>, AppError> {
         Uuid::parse_str(id).map_err(|_| AppError::new("invalidInput"))?;
         let tx = self.0.transaction()?;
-        if tx.execute("DELETE FROM model_profiles WHERE id=?1", [id])? == 0 {
+        let stored: Option<Option<String>> = tx
+            .query_row(
+                "SELECT credential_ref FROM model_profiles WHERE id=?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(stored) = stored else {
             return Err(AppError::new("notFound"));
-        }
+        };
+        let detached = stored
+            .as_deref()
+            .map(CredentialRef::parse)
+            .transpose()
+            .map_err(|_| AppError::new("storageUnavailable"))?;
+        tx.execute("DELETE FROM model_profiles WHERE id=?1", [id])?;
         tx.execute(
             "UPDATE workspace
              SET default_model_id=(SELECT id FROM model_profiles ORDER BY sort_order,id LIMIT 1)
@@ -849,8 +1014,11 @@ impl Database {
                     OR NOT EXISTS (SELECT 1 FROM model_profiles WHERE id=default_model_id))",
             [],
         )?;
+        if let Some(reference) = &detached {
+            queue_cleanup(&tx, reference, CleanupReason::Cleanup)?;
+        }
         tx.commit()?;
-        Ok(())
+        Ok(detached)
     }
 
     /// Remember which profile is the default. `None` clears the stored selection, which the next
@@ -987,9 +1155,10 @@ impl Database {
     }
 
     /// One bounded batch of queued references that may be deleted right now. Entries that exhausted
-    /// their retry budget and entries a connection still uses are skipped in SQL, so a stuck head
-    /// can never starve later entries; they stay in the table for recovery and are counted by
-    /// [`Database::credential_cleanup_backlog`]. `limit` is clamped to [`MAX_CLEANUP_BATCH`].
+    /// their retry budget and entries a connection or a model row still uses are skipped in SQL, so
+    /// a stuck head can never starve later entries; they stay in the table for recovery and are
+    /// counted by [`Database::credential_cleanup_backlog`]. `limit` is clamped to
+    /// [`MAX_CLEANUP_BATCH`].
     pub fn pending_credential_cleanup(
         &self,
         limit: usize,
@@ -1000,6 +1169,7 @@ impl Database {
             "SELECT reference, reason, attempts FROM credential_cleanup
              WHERE attempts < ?1
                AND NOT EXISTS (SELECT 1 FROM connections WHERE credential_ref = credential_cleanup.reference)
+               AND NOT EXISTS (SELECT 1 FROM model_profiles WHERE credential_ref = credential_cleanup.reference)
              ORDER BY attempts, queued_at, reference
              LIMIT ?2",
         )?;
@@ -1033,7 +1203,8 @@ impl Database {
     }
 
     /// Queue counts by category for the given retry budget. Skipped entries are never deleted or
-    /// forgotten, so a caller can surface how many still need attention.
+    /// forgotten, so a caller can surface how many still need attention. A reference still bound
+    /// to a connection or a model row counts as deferred, never as cleaned.
     pub fn credential_cleanup_backlog(
         &self,
         max_attempts: i64,
@@ -1044,7 +1215,8 @@ impl Database {
                (SELECT count(*) FROM credential_cleanup WHERE attempts >= ?1) AS abandoned,
                (SELECT count(*) FROM credential_cleanup
                  WHERE attempts < ?1
-                   AND EXISTS (SELECT 1 FROM connections WHERE credential_ref = credential_cleanup.reference)) AS deferred",
+                   AND (EXISTS (SELECT 1 FROM connections WHERE credential_ref = credential_cleanup.reference)
+                        OR EXISTS (SELECT 1 FROM model_profiles WHERE credential_ref = credential_cleanup.reference))) AS deferred",
             [max_attempts],
             |row| {
                 Ok(CleanupBacklog {
@@ -1075,8 +1247,9 @@ impl Database {
 }
 
 /// Validate and normalize a stored HTTP(S) base endpoint. Credentials, query strings and fragments
-/// are refused: a saved endpoint is a target, never a place to hide a secret.
-fn clean_endpoint(value: &str) -> Result<String, AppError> {
+/// are refused: a saved endpoint is a target, never a place to hide a secret. Shared with model
+/// discovery, which validates the same draft endpoint before a profile exists.
+pub(crate) fn clean_endpoint(value: &str) -> Result<String, AppError> {
     if value.len() > 2048 {
         return Err(AppError::new("invalidEndpoint"));
     }
@@ -1144,6 +1317,21 @@ fn queue_cleanup(
         params![reference.as_str(), reason.as_str(), now()],
     )?;
     Ok(())
+}
+
+/// Read and validate one model row, or `None` when it does not exist.
+fn read_model_row(conn: &Connection, id: &str) -> Result<Option<ModelProfile>, AppError> {
+    let raw = conn
+        .query_row(
+            &format!(
+                "SELECT {} FROM model_profiles WHERE id=?1",
+                RawModel::COLUMNS
+            ),
+            [id],
+            RawModel::read,
+        )
+        .optional()?;
+    raw.map(RawModel::into_profile).transpose()
 }
 
 fn now() -> i64 {
@@ -2079,6 +2267,152 @@ mod tests {
         assert!(db.models().unwrap().profiles.is_empty());
         assert_eq!(db.models().unwrap().default_model_id, None);
         assert_eq!(db.pending_credential_cleanup_count().unwrap(), 0);
+    }
+
+    /// A version 3 database as the previous release left it: model profiles and the credential
+    /// outbox exist, but the model table has no credential reference yet.
+    fn v3_database(path: &Path) -> (Connection, String, CredentialRef, String) {
+        let (conn, connection_id, reference) = v2_database(path);
+        conn.execute_batch(include_str!("../migrations/003_models.sql"))
+            .unwrap();
+        let model_id = Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO model_profiles(id,display_name,protocol,endpoint,model_id,sort_order)
+             VALUES (?1,'Legacy model','ollama','http://127.0.0.1:11434','llama3.1:8b',0)",
+            [&model_id],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE workspace SET default_model_id=?1 WHERE singleton=1",
+            [&model_id],
+        )
+        .unwrap();
+        (conn, connection_id, reference, model_id)
+    }
+
+    #[test]
+    fn version_three_database_gains_the_model_credential_reference() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("v3-credentials.sqlite");
+        let (conn, connection_id, reference, model_id) = v3_database(&path);
+        drop(conn);
+
+        let db = Database::open(&path).unwrap();
+        assert_eq!(
+            db.0.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            SCHEMA_VERSION
+        );
+        let state = db.models().unwrap();
+        assert_eq!(state.profiles.len(), 1);
+        assert_eq!(state.profiles[0].id, model_id);
+        assert!(!state.profiles[0].has_api_key);
+        assert!(state.profiles[0].credential_ref.is_none());
+        assert_eq!(state.default_model_id.as_deref(), Some(model_id.as_str()));
+        // The pre-existing queue entry is preserved and still reported as pending.
+        assert!(state.credential_cleanup_pending);
+        assert_eq!(db.pending_credential_cleanup_count().unwrap(), 1);
+        assert_eq!(
+            db.load().unwrap().active_connection_id.as_deref(),
+            Some(connection_id.as_str())
+        );
+
+        // The new column accepts a canonical reference and fails closed on a foreign spelling.
+        db.run_sql_for_test(&format!(
+            "UPDATE model_profiles SET credential_ref='{}' WHERE id='{model_id}'",
+            reference.as_str()
+        ))
+        .unwrap();
+        let profile = db.model_profile(&model_id).unwrap();
+        assert!(profile.has_api_key);
+        assert_eq!(profile.credential_ref.as_ref(), Some(&reference));
+        db.run_sql_for_test(&format!(
+            "UPDATE model_profiles SET credential_ref='zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz' WHERE id='{model_id}'"
+        ))
+        .unwrap();
+        assert_eq!(db.models().unwrap_err().code, "storageUnavailable");
+    }
+
+    #[test]
+    fn failed_model_credential_migration_keeps_the_previous_version_and_rows() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("credential-conflict.sqlite");
+        let (conn, _, _, model_id) = v3_database(&path);
+        // Force the fourth step to fail after the migration starts.
+        conn.execute_batch("ALTER TABLE model_profiles ADD COLUMN credential_ref INTEGER;")
+            .unwrap();
+        drop(conn);
+
+        assert!(Database::open(&path).is_err());
+        let conn = Connection::open(&path).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 3);
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM model_profiles WHERE id=?1",
+                [&model_id],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM credential_cleanup", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn legacy_model_metadata_paths_stay_safe_for_bound_keys() {
+        let mut db = Database::open(Path::new(":memory:")).unwrap();
+        let saved = db
+            .save_model(model_input("Local", "llama3.1:8b"), None)
+            .unwrap();
+        let reference = CredentialRef::generate();
+        db.run_sql_for_test(&format!(
+            "UPDATE model_profiles SET credential_ref='{}' WHERE id='{}'",
+            reference.as_str(),
+            saved.id
+        ))
+        .unwrap();
+
+        // Renaming and changing the model id keep the bound reference.
+        let mut renamed = model_input("Renamed", "qwen2.5:7b");
+        let kept = db
+            .save_model(renamed.clone(), Some(saved.id.clone()))
+            .unwrap();
+        assert!(kept.has_api_key);
+
+        // An endpoint change detaches it and queues it in the same metadata write.
+        renamed.endpoint = "http://127.0.0.1:9999".into();
+        let moved = db.save_model(renamed, Some(saved.id.clone())).unwrap();
+        assert!(!moved.has_api_key);
+        let queued = db.pending_credential_cleanup(8, MAX_ATTEMPTS).unwrap();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].reference, reference);
+
+        // Deleting a profile that still has a bound reference queues it too instead of losing it.
+        let deleted_reference = CredentialRef::generate();
+        db.run_sql_for_test(&format!(
+            "UPDATE model_profiles SET credential_ref='{}' WHERE id='{}'",
+            deleted_reference.as_str(),
+            saved.id
+        ))
+        .unwrap();
+        db.delete_model(&saved.id).unwrap();
+        let queued: Vec<CredentialRef> = db
+            .pending_credential_cleanup(8, MAX_ATTEMPTS)
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.reference)
+            .collect();
+        assert!(queued.contains(&reference));
+        assert!(queued.contains(&deleted_reference));
+        assert!(db.models().unwrap().credential_cleanup_pending);
     }
 
     #[test]

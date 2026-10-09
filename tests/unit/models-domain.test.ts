@@ -4,7 +4,7 @@ import canonicalState from '../fixtures/models-state-canonical.json';
 import invalidInput from '../fixtures/models-input-invalid.json';
 import unknownKeyInput from '../fixtures/models-input-unknown-key.json';
 import {
-  MAX_MODEL_PROFILES, modelProtocols, requireModelProfile, requireModelsState, resolveDefaultModel,
+  MAX_MODEL_PROFILES, modelProtocols, normalizeModelEndpoint, requireModelProfile, requireModelsState, resolveDefaultModel,
   sortModels, validateModelInput, type ModelInput, type ModelProfile,
 } from '../../src/domain/models';
 
@@ -44,6 +44,22 @@ describe('model profile wire contract', () => {
     expect(() => validateModelInput({ ...asInput(canonicalInput), modelId: 'm'.repeat(201) })).toThrow('invalidInput');
   });
 
+  it('refuses payloads carrying extra fields and counts limits in code points', () => {
+    // A payload with a secret-like extra key is refused instead of being silently stripped,
+    // mirroring deny_unknown_fields on the backend.
+    expect(Object.keys(unknownKeyInput)).toContain('apiKey');
+    expect(() => validateModelInput(asInput(unknownKeyInput))).toThrow('invalidInput');
+    // Limits count code points, matching chars().count() on the backend: 80 astral characters
+    // (160 UTF-16 units) are accepted, 81 are refused, and the same holds for the model id.
+    const astral = '𝄞';
+    expect(validateModelInput({ ...asInput(canonicalInput), displayName: astral.repeat(80) }).displayName)
+      .toBe(astral.repeat(80));
+    expect(() => validateModelInput({ ...asInput(canonicalInput), displayName: astral.repeat(81) })).toThrow('invalidName');
+    expect(validateModelInput({ ...asInput(canonicalInput), modelId: astral.repeat(200) }).modelId)
+      .toBe(astral.repeat(200));
+    expect(() => validateModelInput({ ...asInput(canonicalInput), modelId: astral.repeat(201) })).toThrow('invalidInput');
+  });
+
   it('normalizes the endpoint the same way the backend stores it', () => {
     expect(validateModelInput({ ...asInput(canonicalInput), endpoint: 'http://127.0.0.1:11434/' }).endpoint)
       .toBe('http://127.0.0.1:11434');
@@ -56,26 +72,44 @@ describe('model profile wire contract', () => {
     expect(state.profiles).toHaveLength(2);
     expect(state.defaultModelId).toBe(canonicalState.defaultModelId);
     expect(requireModelProfile(state.profiles[1])).toEqual(state.profiles[1]);
-    expect(requireModelsState({ profiles: [], defaultModelId: null })).toEqual({ profiles: [], defaultModelId: null });
+    expect(requireModelsState({ profiles: [], defaultModelId: null, credentialCleanupPending: false }))
+      .toEqual({ profiles: [], defaultModelId: null, credentialCleanupPending: false });
 
     const cases: unknown[] = [
       { ...canonicalState, extra: true },
-      { profiles: canonicalState.profiles, defaultModelId: 'missing' },
-      { profiles: canonicalState.profiles, defaultModelId: null },
-      { profiles: [{ ...first, apiKey: 'placeholder-not-a-key' }], defaultModelId: first.id },
-      { profiles: [{ ...first, endpoint: 'https://user:secret@example.test' }], defaultModelId: first.id },
-      { profiles: [{ ...first, protocol: 'anthropic' }], defaultModelId: first.id },
-      { profiles: [{ ...first, id: 'not-a-uuid' }], defaultModelId: 'not-a-uuid' },
-      { profiles: [{ ...first, sortOrder: -1 }], defaultModelId: first.id },
-      { profiles: [{ ...first, displayName: '' }], defaultModelId: first.id },
-      { profiles: [first, first], defaultModelId: first.id },
-      { profiles: Array.from({ length: MAX_MODEL_PROFILES + 1 }, () => first), defaultModelId: first.id },
-      { profiles: 'none', defaultModelId: null },
+      { ...canonicalState, defaultModelId: 'missing' },
+      { ...canonicalState, defaultModelId: null },
+      { ...canonicalState, profiles: [{ ...first, apiKey: 'placeholder-not-a-key' }], defaultModelId: first.id },
+      { ...canonicalState, profiles: [{ ...first, endpoint: 'https://user:secret@example.test' }], defaultModelId: first.id },
+      { ...canonicalState, profiles: [{ ...first, protocol: 'anthropic' }], defaultModelId: first.id },
+      { ...canonicalState, profiles: [{ ...first, id: 'not-a-uuid' }], defaultModelId: 'not-a-uuid' },
+      { ...canonicalState, profiles: [{ ...first, sortOrder: -1 }], defaultModelId: first.id },
+      { ...canonicalState, profiles: [{ ...first, displayName: '' }], defaultModelId: first.id },
+      { ...canonicalState, profiles: [first, first], defaultModelId: first.id },
+      { ...canonicalState, profiles: Array.from({ length: MAX_MODEL_PROFILES + 1 }, () => first), defaultModelId: first.id },
+      { ...canonicalState, profiles: 'none', defaultModelId: null },
       null,
     ];
     for (const value of cases) {
       expect(() => requireModelsState(value), JSON.stringify(value).slice(0, 80)).toThrow();
     }
+  });
+
+  it('exposes credential state but never accepts a secret or a credential reference in profiles', () => {
+    expect(requireModelProfile(second).hasApiKey).toBe(true);
+    expect(requireModelsState({ ...canonicalState, credentialCleanupPending: true }).credentialCleanupPending).toBe(true);
+    expect(() => requireModelProfile({ ...second, hasApiKey: 'configured' })).toThrow('invalidModelProfile');
+    expect(() => requireModelProfile({ ...second, credentialRef: first.id })).toThrow('invalidModelProfile');
+    expect(() => requireModelsState({ ...canonicalState, credentialCleanupPending: 0 })).toThrow('invalidModelsState');
+    expect(() => validateModelInput({ ...canonicalInput, hasApiKey: true } as ModelInput)).toThrow('invalidInput');
+  });
+
+  it('normalizes custom HTTP/HTTPS discovery endpoints without needing a model ID', () => {
+    expect(normalizeModelEndpoint(' http://model.internal:8788/team/v1/ '))
+      .toBe('http://model.internal:8788/team/v1');
+    expect(normalizeModelEndpoint('https://models.example.test:9443/base/'))
+      .toBe('https://models.example.test:9443/base');
+    expect(() => normalizeModelEndpoint('http://user:secret@model.internal/v1')).toThrow('invalidEndpoint');
   });
 
   it('resolves the default selection exactly like the backend', () => {

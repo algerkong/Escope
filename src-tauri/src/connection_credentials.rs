@@ -212,54 +212,82 @@ impl<'a> ConnectionCredentials<'a> {
     }
 
     /// Drain one bounded batch of queued references. Never deletes a reference that a connection
-    /// still uses, and never fails because a deletion failed. This returns `Err` only when the pass
-    /// itself could not be accounted for; the write paths wrap that in [`CleanupPass::Incomplete`]
-    /// instead, because by then their metadata is already committed.
+    /// or a model row still uses, and never fails because a deletion failed. This returns `Err`
+    /// only when the pass itself could not be accounted for; the write paths wrap that in
+    /// [`CleanupPass::Incomplete`] instead, because by then their metadata is already committed.
     pub fn run_pending_cleanup(&mut self, limit: usize) -> Result<CleanupReport, AppError> {
-        let limit = limit.min(MAX_CLEANUP_BATCH);
-        let pending = self
-            .database
-            .pending_credential_cleanup(limit, MAX_CLEANUP_ATTEMPTS)?;
-        let mut report = CleanupReport::default();
-        for entry in pending {
-            report.attempted += 1;
-            match self.store.delete(&entry.reference) {
-                Ok(()) => {
-                    self.database.cancel_credential_cleanup(&entry.reference)?;
-                    report.cleaned += 1;
-                }
-                Err(_) => {
-                    // The store error is dropped: it can carry OS detail, and the queue entry is
-                    // the record that matters.
-                    self.database.record_cleanup_attempt(&entry.reference)?;
-                    report.failed += 1;
-                }
-            }
-        }
-        let backlog = self
-            .database
-            .credential_cleanup_backlog(MAX_CLEANUP_ATTEMPTS)?;
-        report.deferred = backlog.deferred as usize;
-        report.abandoned = backlog.abandoned as usize;
-        report.remaining = backlog.total as usize;
-        Ok(report)
+        run_cleanup_pass(self.database, self.store, limit)
     }
 
     /// Cleanup after a committed write. A storage or store failure here must never look like a
     /// failed write, and must never look like a successful cleanup either.
     fn cleanup_after_commit(&mut self, limit: usize) -> CleanupPass {
-        match self.run_pending_cleanup(limit) {
-            Ok(report) => CleanupPass::Completed(report),
-            Err(_) => CleanupPass::Incomplete,
-        }
+        cleanup_after_commit(self.database, self.store, limit)
     }
 
     /// Best-effort removal of a secret that was never bound. Any failure keeps the queued record,
     /// which is the conservative outcome, and never masks the error that caused the rollback.
     fn discard_new_secret(&mut self, reference: &CredentialRef) {
-        if self.store.delete(reference).is_ok() {
-            let _ = self.database.cancel_credential_cleanup(reference);
+        discard_unbound_secret(self.database, self.store, reference);
+    }
+}
+
+/// One bounded cleanup pass over the shared outbox, used by both connection and model credential
+/// workflows. Never deletes a reference that a connection or a model still uses, never retries
+/// beyond the persisted attempt budget, and never fails because a single deletion failed. This
+/// returns `Err` only when the pass itself could not be accounted for.
+pub(crate) fn run_cleanup_pass(
+    database: &mut Database,
+    store: &dyn CredentialStore,
+    limit: usize,
+) -> Result<CleanupReport, AppError> {
+    let limit = limit.min(MAX_CLEANUP_BATCH);
+    let pending = database.pending_credential_cleanup(limit, MAX_CLEANUP_ATTEMPTS)?;
+    let mut report = CleanupReport::default();
+    for entry in pending {
+        report.attempted += 1;
+        match store.delete(&entry.reference) {
+            Ok(()) => {
+                database.cancel_credential_cleanup(&entry.reference)?;
+                report.cleaned += 1;
+            }
+            Err(_) => {
+                // The store error is dropped: it can carry OS detail, and the queue entry is the
+                // record that matters.
+                database.record_cleanup_attempt(&entry.reference)?;
+                report.failed += 1;
+            }
         }
+    }
+    let backlog = database.credential_cleanup_backlog(MAX_CLEANUP_ATTEMPTS)?;
+    report.deferred = backlog.deferred as usize;
+    report.abandoned = backlog.abandoned as usize;
+    report.remaining = backlog.total as usize;
+    Ok(report)
+}
+
+/// Cleanup after a committed write. A storage or store failure here must never look like a failed
+/// write, and must never look like a successful cleanup either.
+pub(crate) fn cleanup_after_commit(
+    database: &mut Database,
+    store: &dyn CredentialStore,
+    limit: usize,
+) -> CleanupPass {
+    match run_cleanup_pass(database, store, limit) {
+        Ok(report) => CleanupPass::Completed(report),
+        Err(_) => CleanupPass::Incomplete,
+    }
+}
+
+/// Best-effort removal of a secret that was never bound to a row. Any failure keeps the queued
+/// record, which is the conservative outcome, and never masks the error that caused the rollback.
+pub(crate) fn discard_unbound_secret(
+    database: &mut Database,
+    store: &dyn CredentialStore,
+    reference: &CredentialRef,
+) {
+    if store.delete(reference).is_ok() {
+        let _ = database.cancel_credential_cleanup(reference);
     }
 }
 

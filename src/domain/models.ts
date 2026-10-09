@@ -1,9 +1,8 @@
 /**
  * Model profile configuration: what the settings page stores, and nothing else.
  *
- * A profile is a display name, a wire protocol, an endpoint and the model id the user typed. There
- * is no field for an API key, token, header or credential reference, and no field describing a
- * connection state: this module can say what was configured, never that a model works.
+ * Profiles expose whether an API key is configured, never its value or credential reference.
+ * Configuration and model discovery do not prove that generation is available.
  *
  * The stored-data rules mirror `storage.rs` and are pinned by the shared fixtures in
  * `tests/fixtures/models-*.json`, so both languages agree on the field names, the protocol
@@ -22,6 +21,7 @@ export interface ModelProfile {
   endpoint: string;
   modelId: string;
   sortOrder: number;
+  hasApiKey: boolean;
 }
 
 /** What the settings form submits. */
@@ -31,12 +31,13 @@ export type ModelInput = Pick<ModelProfile, 'displayName' | 'protocol' | 'endpoi
 export interface ModelsState {
   profiles: ModelProfile[];
   defaultModelId: string | null;
+  credentialCleanupPending: boolean;
 }
 
 export const modelProtocols: readonly ModelProtocol[] = ['openaiCompatible', 'ollama'];
 
 const inputKeys = ['displayName', 'protocol', 'endpoint', 'modelId'] as const;
-const profileKeys = [...inputKeys, 'id', 'sortOrder'] as const;
+const profileKeys = [...inputKeys, 'id', 'sortOrder', 'hasApiKey'] as const;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Storage order: explicit sort order first, then the stable id. Both adapters order the same way. */
@@ -60,22 +61,30 @@ export function resolveDefaultModel(profiles: readonly ModelProfile[], stored: s
  * query string or fragment. Throws the error code the UI shows instead of silently repairing input.
  */
 export function validateModelInput(input: ModelInput): ModelInput {
+  // Credential changes use a separate IPC argument and cannot enter metadata.
+  requireKeys(input as unknown as Record<string, unknown>, inputKeys, 'invalidInput');
   const displayName = input.displayName.trim();
-  if (!displayName || displayName.length > 80) throw new Error('invalidName');
+  // Match Rust chars().count(), including characters outside the BMP.
+  if (!displayName || [...displayName].length > 80) throw new Error('invalidName');
   if (!modelProtocols.includes(input.protocol)) throw new Error('invalidInput');
   const modelId = input.modelId.trim();
-  if (!modelId || modelId.length > 200) throw new Error('invalidInput');
+  if (!modelId || [...modelId].length > 200) throw new Error('invalidInput');
+  return { displayName, protocol: input.protocol, endpoint: normalizeModelEndpoint(input.endpoint), modelId };
+}
+
+/** Also used for model discovery before the user has selected a model ID. */
+export function normalizeModelEndpoint(value: string): string {
   let endpoint: URL;
   try {
-    endpoint = new URL(input.endpoint.trim());
+    endpoint = new URL(value.trim());
   } catch {
     throw new Error('invalidEndpoint');
   }
-  if (input.endpoint.length > 2048 || !['http:', 'https:'].includes(endpoint.protocol) || !endpoint.hostname ||
+  if (value.length > 2048 || !['http:', 'https:'].includes(endpoint.protocol) || !endpoint.hostname ||
     endpoint.username || endpoint.password || endpoint.search || endpoint.hash) {
     throw new Error('invalidEndpoint');
   }
-  return { displayName, protocol: input.protocol, endpoint: endpoint.href.replace(/\/+$/, ''), modelId };
+  return endpoint.href.replace(/\/+$/, '');
 }
 
 function requireKeys(source: Record<string, unknown>, keys: readonly string[], code: string): void {
@@ -103,6 +112,7 @@ export function requireModelProfile(value: unknown): ModelProfile {
   if (typeof sortOrder !== 'number' || !Number.isInteger(sortOrder) || sortOrder < 0 || sortOrder > 1_000_000) {
     throw new Error(code);
   }
+  if (typeof source.hasApiKey !== 'boolean') throw new Error(code);
   let clean: ModelInput;
   try {
     clean = validateModelInput({
@@ -114,7 +124,7 @@ export function requireModelProfile(value: unknown): ModelProfile {
   } catch {
     throw new Error(code);
   }
-  return { ...clean, id, sortOrder };
+  return { ...clean, id, sortOrder, hasApiKey: source.hasApiKey };
 }
 
 /**
@@ -126,7 +136,8 @@ export function requireModelsState(value: unknown): ModelsState {
   const code = 'invalidModelsState';
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(code);
   const source = value as Record<string, unknown>;
-  requireKeys(source, ['profiles', 'defaultModelId'], code);
+  requireKeys(source, ['profiles', 'defaultModelId', 'credentialCleanupPending'], code);
+  if (typeof source.credentialCleanupPending !== 'boolean') throw new Error(code);
   if (!Array.isArray(source.profiles) || source.profiles.length > MAX_MODEL_PROFILES) throw new Error(code);
   const profiles = source.profiles.map(requireModelProfile);
   const ids = new Set(profiles.map((profile) => profile.id));
@@ -134,5 +145,5 @@ export function requireModelsState(value: unknown): ModelsState {
   const stored = source.defaultModelId;
   if (stored !== null && (typeof stored !== 'string' || !ids.has(stored))) throw new Error(code);
   if (profiles.length > 0 && stored === null) throw new Error(code);
-  return { profiles, defaultModelId: stored };
+  return { profiles, defaultModelId: stored, credentialCleanupPending: source.credentialCleanupPending };
 }

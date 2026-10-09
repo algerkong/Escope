@@ -1,0 +1,1 @@
+{"requestId":"6f3b2f1c-4f3e-4a5b-8c9d-0e1f2a3b4c5d","modelProfileId":"1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5e","protocol":"ollama","endpoint":"http://127.0.0.1:11434","modelId":"fixture-model","actualModelId":"fixture-model-v1","sequence":1,"text":"A term query matches an exact value.","outcome":"complete"}

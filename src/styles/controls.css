@@ -1,0 +1,51 @@
+/*
+ * Shared control shell for `SelectControl`.
+ *
+ * The component keeps every prop on the real `<select>`, so the wrapper only draws the chevron
+ * and reserves its space; per-component rules (setting rows, model form, visual query rows,
+ * cluster filters, AI composer) keep styling the select itself. Where the engine supports the
+ * stylable select, `appearance: base-select` lets the picker inherit the semantic tokens;
+ * everywhere else the standard native popup remains, and forced colors gets the native arrow back.
+ */
+
+.select-control {
+  position: relative; display: inline-block; min-width: 0; max-width: 100%;
+  vertical-align: middle;
+}
+.select-control > select { width: 100%; }
+.select-control > .select-control-input {
+  appearance: none; -webkit-appearance: none;
+  padding-right: 24px; text-overflow: ellipsis; cursor: pointer;
+}
+.select-control > .select-control-input:disabled { cursor: not-allowed; }
+.select-control-chevron {
+  position: absolute; right: 7px; top: 50%; transform: translateY(-50%);
+  color: var(--muted); pointer-events: none;
+}
+
+/* Progressive: on engines with the stylable select, theme the picker and its options too. */
+@supports (appearance: base-select) {
+  .select-control > .select-control-input { appearance: base-select; }
+  .select-control > .select-control-input::picker-icon { display: none; }
+  .select-control > .select-control-input::picker(select) {
+    appearance: base-select;
+    margin-top: 4px; padding: 4px;
+    background: var(--elevated); border: 1px solid var(--border); border-radius: 6px;
+    box-shadow: 0 10px 30px #0003; color: var(--text);
+    max-width: calc(100vw - 24px); max-height: min(360px, 55dvh); overflow: auto; overscroll-behavior: contain;
+  }
+  .select-control > .select-control-input option {
+    padding: 6px 8px; border-radius: 4px; min-height: 28px; white-space: normal; overflow-wrap: anywhere;
+  }
+  .select-control > .select-control-input option:checked,
+  .select-control > .select-control-input option:hover { background: var(--subtle); }
+  .select-control > .select-control-input option:focus-visible { outline-offset: -2px; outline: 2px solid var(--focus-ring); }
+}
+
+/* Forced colors: drop the custom artwork and let the system arrow and colors take over. */
+@media (forced-colors: active) {
+  .select-control > .select-control-input {
+    appearance: auto; -webkit-appearance: auto; padding-right: 8px;
+  }
+  .select-control-chevron { display: none; }
+}

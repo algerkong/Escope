@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { I18nextProvider } from 'react-i18next';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { QueryWorkspace } from '../../src/features/query/QueryWorkspace';
-import { createQuery, type WorkspaceState } from '../../src/domain/query';
+import { createQuery, selectWorkspaceTab, updateWorkspaceDocument, type WorkspaceState } from '../../src/domain/query';
 import { defaultPreferences } from '../../src/domain/preferences';
 import { i18n } from '../../src/locales';
 
@@ -16,17 +16,17 @@ function setup(dsl = original) {
     const [state, setState] = useState<WorkspaceState>(() => {
       const a = { ...createQuery(null), dsl };
       const b = { ...createQuery(null), dsl: '{"size":3}' };
-      return { activeConnectionId: null, activeQueryId: a.id, queries: [a, b] };
+      return { activeConnectionId: null, activeTabId: a.id, tabs: [a, b].map((document) => ({ kind: 'query', document })), lastTabByConnection: {} };
     });
     return <I18nextProvider i18n={i18n}><QueryWorkspace state={state} profiles={[]} preferences={defaultPreferences}
       aiOpen={false} testResults={{}} toggleAI={() => {}} onSettings={() => {}}
       updateQuery={(id, patch) => {
         update(id, patch);
-        setState((current) => ({ ...current, queries: current.queries.map((query) => query.id === id
-          ? { ...query, ...patch, revision: query.revision + 1 } : query) }));
+        setState((current) => updateWorkspaceDocument(current, id, patch));
       }}
-      selectQuery={(id) => setState((current) => ({ ...current, activeQueryId: id }))}
-      addQuery={() => {}} closeQuery={() => {}} /></I18nextProvider>;
+      selectTab={(id) => setState((current) => selectWorkspaceTab(current, id))}
+      openIndex={() => { throw new Error('No live index backend'); }}
+      addQuery={() => {}} closeTab={() => {}} /></I18nextProvider>;
   }
   render(<Harness />);
   return { user: userEvent.setup(), update };
@@ -67,7 +67,7 @@ describe('local DSL editor actions', () => {
   it('does not apply formatting undo or a prior diagnostic to a different tab', async () => {
     const { user } = setup();
     await user.click(screen.getByRole('button', { name: '格式化 JSON' }));
-    await user.click(screen.getAllByRole('tab')[1]!);
+    await user.click(screen.getAllByRole('tab')[2]!);
     expect(screen.getByRole('button', { name: '撤销格式化' })).toBeDisabled();
     expect(screen.queryByText('JSON 语法有效')).not.toBeInTheDocument();
     expect(screen.getByRole('textbox', { name: '查询 DSL' })).toHaveValue('{"size":3}');

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { selectConnection, validateConnection, type ConnectionProfile } from '../../src/domain/connection';
 import { defaultPreferences, parsePreferences, resolveLocale } from '../../src/domain/preferences';
-import { acceptResponse, cancelExecution, createQuery, createSnapshot, switchConnection, type ExecutionState } from '../../src/domain/query';
+import { acceptResponse, cancelExecution, createQuery, createSnapshot, selectWorkspaceTab, switchConnection, type ExecutionState, type WorkspaceState } from '../../src/domain/query';
 import { createSessionStorage } from '../../src/services/storage';
 import { en } from '../../src/locales/en-US';
 import { zh } from '../../src/locales/zh-CN';
@@ -56,11 +56,14 @@ describe('execution and workspace isolation', () => {
   });
   it('switches without rebinding an existing query or losing drafts', () => {
     const query = { ...createQuery('a'), dsl: 'untouched', revision: 3 };
-    const initial = { activeConnectionId: 'a', activeQueryId: query.id, queries: [query] };
-    const second = switchConnection(initial, 'b', 'json');
-    expect(second.queries[0]).toBe(query);
-    expect(second.queries[1]?.connectionId).toBe('b');
-    expect(switchConnection(second, 'a', 'table').activeQueryId).toBe(query.id);
+    const initial: WorkspaceState = selectWorkspaceTab({
+      activeConnectionId: 'a', activeTabId: null, tabs: [{ kind: 'query', document: query }], lastTabByConnection: {},
+    }, query.id);
+    const second = switchConnection(initial, 'b');
+    expect(second.tabs[0]?.document).toBe(query);
+    expect(second.tabs).toHaveLength(1);
+    expect(second.activeTabId).toBeNull();
+    expect(switchConnection(second, 'a').activeTabId).toBe(query.id);
   });
   it('unimplemented execution never produces mock results', async () => {
     await expect(executeQuery({ requestId: 'r', connectionId: 'a', index: 'orders', rawDsl: '{}' })).rejects.toMatchObject({ code: 'unsupported' });

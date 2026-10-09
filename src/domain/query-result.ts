@@ -1,4 +1,4 @@
-import { parseTree, type Node, type ParseError } from 'jsonc-parser';
+import { applyEdits, createScanner, format, parseTree, type Node, type ParseError } from 'jsonc-parser';
 
 /**
  * Lossless reader for raw Elasticsearch JSON responses.
@@ -64,6 +64,14 @@ export function parseRawJson(raw: string): Node | null {
   return hasDuplicateKey(root) ? null : root;
 }
 
+/** Display-only indentation. Copy paths still use the original bytes, including numeric tokens. */
+export function formatRawJson(raw: string): string {
+  if (parseRawJson(raw) === null) return raw;
+  return applyEdits(raw, format(raw, undefined, {
+    insertSpaces: true, tabSize: 2, eol: '\n', insertFinalNewline: false,
+  }));
+}
+
 export function property(node: Node | null | undefined, name: string): Node | undefined {
   if (!node || node.type !== 'object') return undefined;
   for (const child of node.children ?? []) {
@@ -104,8 +112,12 @@ export function rangeOf(node: Node | undefined): RawRange | null {
 }
 
 const PREVIEW_LIMIT = 160;
-/** Scannable source fields per document; wide documents keep the remaining keys out of the table. */
-export const MAX_HIT_COLUMNS = 16;
+export const MAX_PIT_ID_LENGTH = 64 * 1024;
+
+export function isValidPitId(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= MAX_PIT_ID_LENGTH
+    && /^[\x21-\x7e]+$/.test(value);
+}
 
 function truncate(text: string): string {
   return text.length > PREVIEW_LIMIT ? `${text.slice(0, PREVIEW_LIMIT)}…` : text;
@@ -113,13 +125,23 @@ function truncate(text: string): string {
 
 /**
  * One-line preview. Scalars keep their verbatim token text; only strings are unescaped
- * (string decoding is exact). Nested objects and arrays stay raw text with whitespace
- * collapsed, so a value is never re-serialized.
+ * (string decoding is exact). For nested data, only whitespace between JSON tokens is
+ * removed. Whitespace and escapes inside string values remain untouched.
  */
 function previewOf(raw: string, node: Node): { preview: string; nested: boolean } {
   if (node.type === 'string') return { preview: truncate(String(node.value ?? '')), nested: false };
   const text = raw.slice(node.offset, node.offset + node.length);
-  if (node.type === 'object' || node.type === 'array') return { preview: truncate(text.replace(/\s+/g, ' ')), nested: true };
+  if (node.type === 'object' || node.type === 'array') {
+    const scanner = createScanner(text, true);
+    let compact = '';
+    while (scanner.getPosition() < text.length) {
+      scanner.scan();
+      if (scanner.getTokenLength() === 0) break;
+      compact += text.slice(scanner.getTokenOffset(), scanner.getTokenOffset() + scanner.getTokenLength());
+      if (compact.length > PREVIEW_LIMIT) break;
+    }
+    return { preview: truncate(compact), nested: true };
+  }
   return { preview: truncate(text), nested: false };
 }
 
@@ -128,6 +150,11 @@ export interface ResultColumn {
   /** Display text; never a re-serialized number. */
   readonly preview: string;
   readonly nested: boolean;
+  /** Full scalar text for local sorting; string values are decoded, numbers remain raw tokens. */
+  readonly value: {
+    readonly kind: 'string' | 'number' | 'boolean' | 'null' | 'object' | 'array';
+    readonly text: string;
+  };
 }
 
 export interface ResultHit {
@@ -138,6 +165,8 @@ export interface ResultHit {
   readonly score: string | null;
   readonly source: RawRange | null;
   readonly fields: RawRange | null;
+  /** Raw `sort` array of this hit: the continuation cursor when the request defined a sort. */
+  readonly sort: RawRange | null;
   /** Top-level columns from `_source`, or from `fields` when no source was returned. */
   readonly columns: readonly ResultColumn[];
   readonly hasSource: boolean;
@@ -171,6 +200,8 @@ export interface QuerySummary {
   readonly terminatedEarly: boolean;
   readonly totals: ResultTotals | null;
   readonly maxScore: string | null;
+  /** Snapshot id the cluster returned with this page, verbatim; `null` when none was sent. */
+  readonly pitId: string | null;
   readonly shards: ResultShards;
   readonly hits: readonly ResultHit[];
 }
@@ -190,8 +221,11 @@ function hitColumns(raw: string, source: Node | undefined, fields: Node | undefi
     const name = textOf(entry.children?.[0]);
     const value = entry.children?.[1];
     if (name === undefined || value === undefined) continue;
-    columns.push({ name, ...previewOf(raw, value) });
-    if (columns.length >= MAX_HIT_COLUMNS) break;
+    const kind = value.type === 'property' ? 'null' : value.type;
+    columns.push({
+      name, ...previewOf(raw, value),
+      value: { kind, text: kind === 'string' ? String(value.value) : raw.slice(value.offset, value.offset + value.length) },
+    });
   }
   return columns;
 }
@@ -201,12 +235,17 @@ function parseHit(raw: string, node: Node, position: number): ResultHit {
   const source = sourceNode?.type === 'object' || sourceNode?.type === 'array' ? sourceNode : undefined;
   const fieldsNode = property(node, 'fields');
   const fields = fieldsNode?.type === 'object' ? fieldsNode : undefined;
+  // A cursor only exists when the request produced sort values; anything that is not an array is
+  // treated as absent instead of failing the whole page, because the cursor is optional.
+  const sortNode = property(node, 'sort');
+  const sort = sortNode?.type === 'array' ? sortNode : undefined;
   return {
     id: textOf(property(node, '_id')) ?? String(position),
     index: textOf(property(node, '_index')) ?? null,
     score: rawTextOf(raw, property(node, '_score')),
     source: rangeOf(source),
     fields: rangeOf(fields),
+    sort: rangeOf(sort),
     columns: hitColumns(raw, source, fields),
     hasSource: source !== undefined,
   };
@@ -255,6 +294,20 @@ function parseTotals(raw: string, node: Node | undefined): { ok: true; totals: R
 }
 
 /**
+ * Top-level `pit_id` a snapshot search returns. Absent means the server did not send one; present
+ * but not a bounded printable token rejects the response, because the id is used verbatim in the
+ * next request.
+ */
+function parsePitId(node: Node | undefined): { ok: true; pitId: string | null } | { ok: false } {
+  if (node === undefined) return { ok: true, pitId: null };
+  const value = textOf(node);
+  if (!isValidPitId(value)) {
+    return { ok: false };
+  }
+  return { ok: true, pitId: value };
+}
+
+/**
  * Parse an `_search` response body without decoding data values.
  * Wrongly typed `hits`, `hits.hits`, `timed_out`, `_shards` or totals reject the body
  * instead of being read as a completed search.
@@ -280,12 +333,15 @@ export function parseQueryResult(raw: string): QueryResultParse {
   if (shards === null) return INVALID;
   const totals = parseTotals(raw, property(hitsNode, 'total'));
   if (!totals.ok) return INVALID;
+  const pit = parsePitId(property(root, 'pit_id'));
+  if (!pit.ok) return INVALID;
   return {
     ok: true,
     summary: {
       tookMs, timedOut: timedOut ?? false, terminatedEarly: terminatedEarly ?? false,
       totals: totals.totals,
       maxScore: rawTextOf(raw, property(hitsNode, 'max_score')),
+      pitId: pit.pitId,
       shards,
       hits: items(hitNodes).map((hit, position) => parseHit(raw, hit, position)),
     },

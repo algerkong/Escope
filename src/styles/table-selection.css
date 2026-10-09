@@ -1,0 +1,20 @@
+.table-selection-body {
+  --row-selected-bg: color-mix(in srgb, var(--accent) 16%, var(--app));
+  --row-selected-hover-bg: color-mix(in srgb, var(--accent) 22%, var(--app));
+}
+.table-selection-body > tr[data-selection-id] { cursor: default; outline-offset: -2px; }
+.table-selection-body > tr[data-selection-id]:hover { background: var(--subtle); }
+.table-selection-body > tr[aria-selected="true"] { background: var(--row-selected-bg); }
+.table-selection-body > tr[aria-selected="true"]:hover { background: var(--row-selected-hover-bg); }
+.table-selection-body > tr[aria-selected="true"] > td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.table-selection-body > tr:focus-visible { outline: 2px solid var(--focus-ring); }
+.table-selection-body[data-row-dragging="true"],
+.table-selection-body[data-row-dragging="true"] * { -webkit-user-select: none; user-select: none; }
+.table-selection-status { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: .78rem; white-space: nowrap; }
+.table-selection-status .icon-button { width: 24px; height: 24px; min-width: 24px; }
+@media (forced-colors: active) {
+  .table-selection-body > tr[aria-selected="true"],
+  .table-selection-body > tr[aria-selected="true"]:hover { background: Highlight; color: HighlightText; }
+  .table-selection-body > tr[aria-selected="true"] :where(td, span) { color: HighlightText; }
+  .table-selection-body > tr[aria-selected="true"] > td:first-child { outline: 1px solid HighlightText; outline-offset: -1px; }
+}

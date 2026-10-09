@@ -9,7 +9,7 @@ import { errorCode, type QueryBackend, type ResourceKind } from '../../services/
 export type Loadable<T> =
   | { readonly status: 'idle' }
   | { readonly status: 'loading' }
-  | { readonly status: 'ready'; readonly data: T }
+  | { readonly status: 'ready'; readonly data: T; readonly refreshing?: boolean; readonly refreshError?: string }
   | { readonly status: 'error'; readonly code: string };
 
 export interface MappingState {
@@ -94,8 +94,16 @@ export function useQueryResources(backend: QueryBackend) {
     if (previous) void backendRef.current.cancel(cancelRequestOf(previous)).catch(() => undefined);
     const requestId = crypto.randomUUID();
     inFlight.current.set(key, { requestId, connectionId, endpoint });
-    setCache((current) => ({ ...current, [key]: { status: 'loading' } }));
-    const settle = (state: Loadable<T>) => setCache((current) => ({ ...current, [key]: state }));
+    setCache((current) => ({
+      ...current,
+      [key]: current[key]?.status === 'ready'
+        ? { ...current[key], refreshing: true, refreshError: undefined } : { status: 'loading' },
+    }));
+    const settle = (state: Loadable<T>) => setCache((current) => ({
+      ...current,
+      [key]: state.status === 'error' && current[key]?.status === 'ready'
+        ? { ...current[key], refreshing: false, refreshError: state.code } : state,
+    }));
     try {
       const response = await backendRef.current.readResource({ requestId, connectionId, resource, index });
       if (!alive.current || inFlight.current.get(key)?.requestId !== requestId) return;

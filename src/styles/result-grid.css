@@ -1,0 +1,87 @@
+/*
+ * Read-only document grid: sortable headers, resizable columns, drag handles and the column chooser.
+ * Data cells stay single-line and selectable; oversized columns scroll inside their own wrapper.
+ */
+.rg-root { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 140px; overflow: hidden; }
+
+.rg-footer { display: flex; align-items: center; flex-wrap: wrap; flex-shrink: 0; gap: 6px 12px; padding-top: 6px; min-height: 36px; }
+.rg-toolbar-status { flex: 1 1 110px; color: var(--muted); font-size: .78rem; min-width: 0; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rg-toolbar-end { margin-left: auto; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; max-width: 100%; }
+.rg-footer .icon-button { width: 28px; height: 28px; min-width: 28px; }
+
+.rg-scroll {
+  min-width: 0; max-width: 100%; flex: 1; min-height: 0;
+  overflow: auto; border: 1px solid var(--border); border-radius: 4px; overscroll-behavior: contain;
+}
+
+.rg-table { border-collapse: collapse; table-layout: fixed; font-size: var(--table-size); }
+
+.rg-table th {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--app); color: var(--muted); font-weight: 500; text-align: left;
+  border-bottom: 1px solid var(--border); padding: 0; height: max(32px, calc(var(--table-size) * 1.8)); vertical-align: middle;
+}
+.rg-table th[data-dragging="true"] { z-index: 3; background: var(--subtle); opacity: .85; }
+
+.rg-th-inner { display: flex; align-items: center; gap: 2px; height: max(32px, calc(var(--table-size) * 1.8)); min-width: 0; padding: 0 4px 0 8px; }
+
+.rg-header-label { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.rg-sort-button {
+  flex: 1 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: 4px;
+  border: 0; background: transparent; color: inherit; font: inherit; text-align: left;
+  height: max(24px, calc(var(--table-size) * 1.4)); line-height: 1.2; padding: 0 4px; border-radius: 4px; cursor: pointer;
+}
+.rg-sort-button:not(:disabled):hover { background: var(--subtle); color: var(--text); }
+.rg-sort-button:disabled { cursor: default; opacity: 1; }
+.rg-sort-button .rg-sort-icon { flex: 0 0 auto; color: var(--muted); }
+.rg-sort-button[data-sort="asc"] .rg-sort-icon, .rg-sort-button[data-sort="desc"] .rg-sort-icon { color: var(--accent); }
+
+.rg-drag-handle {
+  flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px;
+  background: transparent; color: var(--muted); cursor: grab; opacity: .45; touch-action: none;
+}
+.rg-th-inner:hover .rg-drag-handle, .rg-drag-handle:focus-visible, .rg-drag-handle[aria-pressed="true"] { opacity: 1; }
+.rg-drag-handle:not(:disabled):hover { background: var(--subtle); color: var(--text); }
+.rg-drag-handle:active { cursor: grabbing; }
+.rg-drop-marker { border-left: 2px solid var(--accent); }
+
+.rg-resizer {
+  position: absolute; top: 0; right: -3px; bottom: 0; width: 7px; z-index: 2;
+  cursor: col-resize; touch-action: none; background: transparent; padding: 0;
+}
+.rg-resizer::after {
+  content: ""; position: absolute; top: 4px; bottom: 4px; left: 3px; width: 1px; background: var(--border);
+}
+.rg-resizer:hover::after, .rg-resizer:focus-visible::after { background: var(--accent); width: 2px; top: 0; bottom: 0; }
+
+.rg-table td { height: 30px; padding: 0 8px; border-bottom: 1px solid var(--border); vertical-align: middle; overflow: hidden; }
+.rg-table tbody tr:hover { background: var(--subtle); }
+.rg-table tbody tr:last-child td { border-bottom: 0; }
+.rg-table td.rg-number-cell { color: var(--muted); text-align: right; padding-right: 10px; }
+.rg-table td.rg-value-cell { font-family: var(--code-font); font-size: var(--table-size); }
+.rg-table td.rg-nested-cell .rg-cell { color: var(--muted); }
+
+.rg-cell { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
+.rg-cell, .rg-header-label { -webkit-user-select: text; user-select: text; }
+
+.rg-id-cell { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.rg-id-cell .rg-cell { flex: 1 1 auto; }
+.rg-id-cell .icon-button { width: 24px; height: 24px; min-width: 24px; flex: 0 0 auto; }
+
+.rg-empty-cell { color: var(--muted); text-align: center; padding: 14px; }
+
+.rg-pager { display: flex; align-items: center; flex-shrink: 0; gap: 6px; color: var(--muted); font-size: .78rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rg-pager .icon-button { width: 26px; height: 26px; min-width: 26px; }
+
+.rg-chooser { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 2px; max-height: 320px; overflow: auto; overscroll-behavior: contain; }
+.rg-chooser-row { display: flex; align-items: center; gap: 8px; padding: 2px 4px; border-radius: 4px; }
+.rg-chooser-row:hover { background: var(--subtle); }
+.rg-chooser-row label { display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0; cursor: pointer; }
+.rg-chooser-row input[type="checkbox"] { flex: 0 0 auto; }
+.rg-chooser-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rg-chooser-tag { flex: 0 0 auto; color: var(--muted); font-size: .72rem; }
+.rg-chooser-move { display: flex; align-items: center; gap: 2px; flex: 0 0 auto; }
+.rg-chooser-move .icon-button { width: 26px; height: 26px; min-width: 26px; }
+.rg-chooser-actions { display: flex; justify-content: flex-end; margin-top: 10px; }

@@ -6,12 +6,14 @@ import { enLive, zhLive } from './query-live';
 import { enCluster, zhCluster } from './cluster';
 import { enModels, zhModels } from './models';
 import { enAiChat, zhAiChat } from './ai-chat';
+import { enVisualQuery, zhVisualQuery } from './visual-query';
+import { enResultGrid, zhResultGrid } from './result-grid';
 
 export const i18n = i18next.createInstance();
 void i18n.use(initReactI18next).init({
   resources: {
-    'zh-CN': { ...zh, queryLive: zhLive, cluster: zhCluster, models: zhModels, aiChat: zhAiChat },
-    'en-US': { ...en, queryLive: enLive, cluster: enCluster, models: enModels, aiChat: enAiChat },
+    'zh-CN': { ...zh, queryLive: zhLive, cluster: zhCluster, models: zhModels, aiChat: zhAiChat, visualQuery: zhVisualQuery, resultGrid: zhResultGrid },
+    'en-US': { ...en, queryLive: enLive, cluster: enCluster, models: enModels, aiChat: enAiChat, visualQuery: enVisualQuery, resultGrid: enResultGrid },
   },
   lng: navigator.language.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US',
   fallbackLng: 'en-US',

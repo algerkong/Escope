@@ -1,4 +1,5 @@
 import { validateQueryDsl, type QueryDslErrorCode } from './query-dsl';
+import { DATA_PREVIEW_DSL } from './query-pagination';
 
 export interface QueryDocument {
   readonly id: string;
@@ -123,17 +124,85 @@ export function cancelExecution(state: ExecutionState): ExecutionState {
   return state.status === 'running' ? { status: 'cancelled', snapshot: state.snapshot } : state;
 }
 
-export interface WorkspaceState {
-  activeConnectionId: string | null;
-  activeQueryId: string;
-  queries: QueryDocument[];
+export interface WorkspaceTab {
+  readonly kind: 'query' | 'index';
+  readonly document: QueryDocument;
 }
 
-export function switchConnection(state: WorkspaceState, connectionId: string | null, view: QueryDocument['resultView']): WorkspaceState {
-  const existing = state.queries.find((query) => query.connectionId === connectionId);
-  const query = existing ?? createQuery(connectionId, view);
+export interface WorkspaceState {
+  activeConnectionId: string | null;
+  /** Null selects the index opener, which never owns an execution. */
+  activeTabId: string | null;
+  tabs: WorkspaceTab[];
+  lastTabByConnection: Record<string, string | null>;
+}
+
+export function createWorkspace(connectionId: string | null, view: QueryDocument['resultView'] = 'table'): WorkspaceState {
   return {
-    activeConnectionId: connectionId, activeQueryId: query.id,
-    queries: existing ? state.queries : [...state.queries, query],
+    activeConnectionId: connectionId, activeTabId: null,
+    tabs: [{ kind: 'query', document: createQuery(connectionId, view) }],
+    lastTabByConnection: {},
   };
+}
+
+export function selectWorkspaceTab(state: WorkspaceState, id: string | null): WorkspaceState {
+  const tab = state.tabs.find((item) => item.document.id === id);
+  if (id !== null && tab === undefined) return state;
+  const connectionId = tab ? tab.document.connectionId : state.activeConnectionId;
+  return {
+    ...state, activeTabId: id, activeConnectionId: tab?.document.connectionId ?? state.activeConnectionId,
+    lastTabByConnection: { ...state.lastTabByConnection, [connectionId ?? '']: id },
+  };
+}
+
+export function addWorkspaceTab(state: WorkspaceState, tab: WorkspaceTab): WorkspaceState {
+  // Index identity is the stable connection ID and exact trimmed target, not a display name.
+  const existing = tab.kind === 'index' ? state.tabs.find((item) => item.kind === 'index'
+    && item.document.connectionId === tab.document.connectionId && item.document.index === tab.document.index) : undefined;
+  if (existing) return selectWorkspaceTab(state, existing.document.id);
+  return selectWorkspaceTab({ ...state, tabs: [...state.tabs, tab] }, tab.document.id);
+}
+
+export function createIndexTab(connectionId: string, index: string, view: QueryDocument['resultView']): WorkspaceTab {
+  return {
+    kind: 'index',
+    document: { ...createQuery(connectionId, view), index: index.trim(), dsl: DATA_PREVIEW_DSL },
+  };
+}
+
+export function updateWorkspaceDocument(
+  state: WorkspaceState, id: string, patch: Partial<Pick<QueryDocument, 'name' | 'index' | 'dsl' | 'resultView'>>,
+): WorkspaceState {
+  return {
+    ...state,
+    tabs: state.tabs.map((tab) => {
+      if (tab.document.id !== id) return tab;
+      // An index tab cannot be rebound by a generic editor update.
+      const allowed = tab.kind === 'index' ? (patch.resultView ? { resultView: patch.resultView } : {}) : patch;
+      const changed = Object.entries(allowed).some(([key, value]) => tab.document[key as keyof QueryDocument] !== value);
+      if (!changed) return tab;
+      const revised = (allowed.dsl !== undefined && allowed.dsl !== tab.document.dsl)
+        || (allowed.index !== undefined && allowed.index !== tab.document.index)
+        || (allowed.name !== undefined && allowed.name !== tab.document.name);
+      return { ...tab, document: { ...tab.document, ...allowed, revision: tab.document.revision + (revised ? 1 : 0) } };
+    }),
+  };
+}
+
+export function closeWorkspaceTab(state: WorkspaceState, id: string): WorkspaceState {
+  const position = state.tabs.findIndex((tab) => tab.document.id === id);
+  if (position === -1) return state;
+  const tabs = state.tabs.filter((tab) => tab.document.id !== id);
+  const lastTabByConnection = Object.fromEntries(Object.entries(state.lastTabByConnection).filter(([, value]) => value !== id));
+  const remaining = { ...state, tabs, lastTabByConnection };
+  return state.activeTabId !== id ? remaining
+    : selectWorkspaceTab(remaining, (tabs[position] ?? tabs[position - 1])?.document.id ?? null);
+}
+
+export function switchConnection(state: WorkspaceState, connectionId: string | null): WorkspaceState {
+  if (state.activeConnectionId === connectionId) return state;
+  const remembered = state.lastTabByConnection[connectionId ?? ''];
+  const activeTabId = remembered && state.tabs.some((tab) => tab.document.id === remembered
+    && tab.document.connectionId === connectionId) ? remembered : null;
+  return { ...state, activeConnectionId: connectionId, activeTabId };
 }

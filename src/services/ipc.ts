@@ -1,4 +1,5 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
+import { isValidPitId } from '../domain/query-result';
 
 export type ErrorCode = 'invalidInput' | 'invalidName' | 'invalidEndpoint' | 'invalidEnvironment'
   | 'invalidIndex' | 'invalidQuery' | 'duplicateRequest'
@@ -51,6 +52,10 @@ export interface QueryRequest {
   connectionId: string;
   index: string;
   rawDsl: string;
+  /** Snapshot opened before the first page; continuations use the newest returned id. */
+  pitId?: string;
+  /** Continuation state: the previous page's last hit `sort` array as raw JSON text. */
+  searchAfter?: string;
 }
 
 export interface QueryResponse {
@@ -61,6 +66,8 @@ export interface QueryResponse {
   rawResponse: string;
   /** Backend-reported partial execution (timed out or lost shards). */
   partial: boolean;
+  /** Snapshot id returned with this page; the next continuation must use this value. */
+  pitId: string | null;
 }
 
 export interface CancelRequest {
@@ -103,16 +110,26 @@ export async function readResource(request: ResourceRequest): Promise<ResourceRe
 
 /** Execute one frozen `_search` snapshot. The verbatim response is kept for lossless display. */
 export async function executeQuery(request: QueryRequest): Promise<QueryResponse> {
-  const { requestId, connectionId, index, rawDsl } = request;
+  const { requestId, connectionId, index, rawDsl, pitId, searchAfter } = request;
   if (!isTauri()) return fail('unsupported', requestId);
+  if ((pitId !== undefined && !isValidPitId(pitId)) || (searchAfter !== undefined && pitId === undefined)) {
+    return fail('invalidQuery', requestId);
+  }
+  const payload: Record<string, string> = { requestId, connectionId, index, rawDsl };
+  if (pitId !== undefined) payload.pitId = pitId;
+  if (searchAfter !== undefined) payload.searchAfter = searchAfter;
   const record = boundRecord(
-    await invoke<unknown>('query_execute', { request: { requestId, connectionId, index, rawDsl } }),
+    await invoke<unknown>('query_execute', { request: payload }),
     requestId, connectionId,
   );
-  if (typeof record.rawResponse !== 'string' || typeof record.partial !== 'boolean' || typeof record.endpoint !== 'string') {
+  if (typeof record.rawResponse !== 'string' || typeof record.partial !== 'boolean' || typeof record.endpoint !== 'string'
+    || (record.pitId !== null && record.pitId !== undefined && !isValidPitId(record.pitId))) {
     return fail('invalidResponse', requestId);
   }
-  return { requestId, connectionId, endpoint: record.endpoint, rawResponse: record.rawResponse, partial: record.partial };
+  return {
+    requestId, connectionId, endpoint: record.endpoint, rawResponse: record.rawResponse,
+    partial: record.partial, pitId: typeof record.pitId === 'string' ? record.pitId : null,
+  };
 }
 
 /** Ask the backend to stop a request. `false` means the request had already finished. */
@@ -124,6 +141,52 @@ export async function cancelRequest(request: CancelRequest): Promise<boolean> {
   return cancelled;
 }
 
+export interface PitOpenRequest {
+  requestId: string;
+  connectionId: string;
+  index: string;
+}
+
+export interface PitOpenResponse {
+  requestId: string;
+  connectionId: string;
+  endpoint: string;
+  /** Opaque snapshot id; bounded printable text, never a document. */
+  pitId: string;
+}
+
+export interface PitCloseRequest {
+  requestId: string;
+  connectionId: string;
+  pitId: string;
+}
+
+/** Open one search snapshot before its first page. Returns an id, never a document. */
+export async function openPit(request: PitOpenRequest): Promise<PitOpenResponse> {
+  const { requestId, connectionId, index } = request;
+  if (!isTauri()) return fail('unsupported', requestId);
+  const record = boundRecord(
+    await invoke<unknown>('pit_open', { request: { requestId, connectionId, index } }),
+    requestId, connectionId,
+  );
+  if (typeof record.endpoint !== 'string' || !isValidPitId(record.pitId)) {
+    return fail('invalidResponse', requestId);
+  }
+  return { requestId, connectionId, endpoint: record.endpoint, pitId: record.pitId };
+}
+
+/**
+ * Close one snapshot. Best-effort cleanup of a server-side resource the cluster expires on its
+ * own; callers swallow failures because closing never invalidates a displayed result.
+ */
+export async function closePit(request: PitCloseRequest): Promise<void> {
+  const { requestId, connectionId, pitId } = request;
+  if (!isTauri()) return fail('unsupported', requestId);
+  boundRecord(
+    await invoke<unknown>('pit_close', { request: { requestId, connectionId, pitId } }),
+    requestId, connectionId,
+  );
+}
 /** Injectable seam for component tests; the default implementation is the desktop IPC above. */
 export interface QueryBackend {
   /**
@@ -134,6 +197,9 @@ export interface QueryBackend {
   readResource(request: ResourceRequest): Promise<ResourceResponse>;
   execute(request: QueryRequest): Promise<QueryResponse>;
   cancel(request: CancelRequest): Promise<boolean>;
+  /** Snapshot lifecycle for paginated continuations; both are read-only server calls. */
+  openPit(request: PitOpenRequest): Promise<PitOpenResponse>;
+  closePit(request: PitCloseRequest): Promise<void>;
 }
 
 export const desktopQueryBackend: QueryBackend = {
@@ -141,6 +207,8 @@ export const desktopQueryBackend: QueryBackend = {
   readResource,
   execute: executeQuery,
   cancel: cancelRequest,
+  openPit,
+  closePit,
 };
 
 export function errorCode(error: unknown, fallback = 'storageUnavailable'): string {

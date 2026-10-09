@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { invoke, isTauri } from '@tauri-apps/api/core';
-import {
+import { openPit, closePit,
   cancelRequest, errorCode, executeQuery, readResource, testConnection,
   type ConnectionIdentity, type ConnectionProbe, type QueryRequest, type ResourceRequest,
 } from '../../src/services/ipc';
@@ -96,7 +96,7 @@ describe('read-only resource and query IPC', () => {
   });
 
   it('executes a frozen snapshot and keeps the partial flag', async () => {
-    const response = { requestId: queryRequest.requestId, connectionId: probe.connectionId, endpoint: 'http://fixture.test', rawResponse: '{"hits":{}}', partial: true };
+    const response = { requestId: queryRequest.requestId, connectionId: probe.connectionId, endpoint: 'http://fixture.test', rawResponse: '{"hits":{}}', partial: true, pitId: null };
     vi.mocked(invoke).mockResolvedValue(response);
     await expect(executeQuery(queryRequest)).resolves.toEqual(response);
     expect(invoke).toHaveBeenCalledExactlyOnceWith('query_execute', { request: queryRequest });
@@ -121,6 +121,49 @@ describe('read-only resource and query IPC', () => {
     expect(invoke).toHaveBeenCalledExactlyOnceWith('request_cancel', { request });
     vi.mocked(invoke).mockResolvedValue('done');
     await expect(cancelRequest(request)).rejects.toMatchObject({ code: 'invalidResponse' });
+  });
+
+  it('forwards the continuation cursor and keeps the newest snapshot id', async () => {
+    const continued = { ...queryRequest, pitId: 'pit-1', searchAfter: '[1]' };
+    vi.mocked(invoke).mockResolvedValue({
+      requestId: continued.requestId, connectionId: probe.connectionId, endpoint: 'http://fixture.test',
+      rawResponse: '{"hits":{}}', partial: false, pitId: 'pit-2',
+    });
+    await expect(executeQuery(continued)).resolves.toMatchObject({ pitId: 'pit-2' });
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('query_execute', { request: continued });
+    // A malformed snapshot id is refused instead of being echoed back.
+    vi.mocked(invoke).mockResolvedValue({
+      requestId: queryRequest.requestId, connectionId: probe.connectionId, endpoint: 'http://fixture.test',
+      rawResponse: '{"hits":{}}', partial: false, pitId: 42,
+    });
+    await expect(executeQuery(queryRequest)).rejects.toMatchObject({ code: 'invalidResponse' });
+  });
+
+  it('supports the first PIT page and never silently drops a cursor without its snapshot', async () => {
+    const first = { ...queryRequest, pitId: 'p'.repeat(608) };
+    vi.mocked(invoke).mockResolvedValue({
+      requestId: first.requestId, connectionId: first.connectionId, endpoint: 'http://fixture.test',
+      rawResponse: '{"hits":{}}', partial: false, pitId: first.pitId,
+    });
+    await executeQuery(first);
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('query_execute', { request: first });
+    vi.mocked(invoke).mockClear();
+    await expect(executeQuery({ ...queryRequest, searchAfter: '[9007199254740993]' })).rejects.toMatchObject({ code: 'invalidQuery' });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('opens and closes snapshots through the typed commands', async () => {
+    const open = { requestId: 'p-1', connectionId: probe.connectionId, index: 'orders-*' };
+    vi.mocked(invoke).mockResolvedValue({ ...open, endpoint: 'http://fixture.test', pitId: 'pit-9' });
+    await expect(openPit(open)).resolves.toMatchObject({ pitId: 'pit-9' });
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('pit_open', { request: open });
+    const close = { requestId: 'p-2', connectionId: probe.connectionId, pitId: 'pit-9' };
+    vi.mocked(invoke).mockResolvedValue({ requestId: close.requestId, connectionId: close.connectionId });
+    await expect(closePit(close)).resolves.toBeUndefined();
+    expect(invoke).toHaveBeenLastCalledWith('pit_close', { request: close });
+    // An empty id must not be handed back as a usable snapshot.
+    vi.mocked(invoke).mockResolvedValue({ ...open, endpoint: 'http://fixture.test', pitId: '' });
+    await expect(openPit(open)).rejects.toMatchObject({ code: 'invalidResponse' });
   });
 
   it('keeps every live call unsupported in the browser preview', async () => {

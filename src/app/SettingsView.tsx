@@ -4,12 +4,14 @@ import { useTranslation } from 'react-i18next';
 import { settingsGroups, type SettingsRoute } from './routes';
 import type { ConnectionInput, ConnectionProfile } from '../domain/connection';
 import type { Preferences } from '../domain/preferences';
-import { EmptyState } from '../components/controls';
+import type { AiChatBackend } from '../domain/ai-chat';
 import { ConnectionPanel } from '../features/connections/ConnectionPanel';
 import { connectionTestLabel, type ConnectionTestState } from '../features/connections/useConnectionTests';
 import { ClusterResource } from '../features/cluster/ClusterResource';
+import { ModelPanel } from '../features/models/ModelPanel';
 import { PreferencesPanel } from '../features/settings/PreferencesPanel';
 import type { ClusterBackend } from '../services/cluster';
+import type { ModelService } from '../services/models';
 
 const icons = { general: Globe, appearance: Monitor, typography: Type, shortcuts: Keyboard,
   connections: Cable, models: Sparkles, cluster: Database, nodes: Server, shards: Boxes, indices: Layers };
@@ -31,13 +33,16 @@ interface Props {
   deleteConnection: (id: string) => Promise<void>;
   /** Injectable read-only metadata backend; component tests pass a fake, the app uses the IPC. */
   clusterBackend?: ClusterBackend;
+  /** Model profile persistence; the app passes the desktop/session service created once at startup. */
+  modelService?: ModelService;
+  aiBackend?: AiChatBackend;
 }
 
 export function SettingsView(props: Props) {
   const { t } = useTranslation();
   const [search, setSearch] = useState('');
   const { route } = props;
-  const isManagement = ['connections', 'cluster', 'nodes', 'shards', 'indices'].includes(route);
+  const isManagement = ['connections', 'models', 'cluster', 'nodes', 'shards', 'indices'].includes(route);
   const activeProfile = props.connections.find((item) => item.id === props.activeId) ?? null;
   const Icon = icons[route];
   return <div className="settings-layout">
@@ -69,9 +74,7 @@ export function SettingsView(props: Props) {
         route === 'connections' ? <ConnectionPanel connections={props.connections} activeId={props.activeId} busy={props.busy}
           canTest={props.canTest} testResults={props.testResults} timeZone={props.preferences.timeZone} onTest={props.testConnection}
           onSelect={props.selectConnection} onSave={props.saveConnection} onDelete={props.deleteConnection} /> :
-        route === 'models' ? <div className="resource-placeholder">
-          <EmptyState icon={Sparkles} title={t('settings:noModel')} description={t('settings:modelPending')} />
-        </div> :
+        route === 'models' ? <ModelPanel service={props.modelService} backend={props.aiBackend} /> :
         <ClusterResource route={route} profile={activeProfile} desktop={props.canTest}
           testLabel={t(props.activeId ? connectionTestLabel(props.testResults[props.activeId]) : 'notConnected')}
           backend={props.clusterBackend} onAddConnection={() => props.navigate('connections')} />}

@@ -3,41 +3,97 @@ import {
   acceptResponse, cancelExecution, createValidatedSnapshot,
   type ExecutionState, type QueryDocument, type SnapshotRejection,
 } from '../../domain/query';
-import { isIncomplete, parseQueryResult, type QueryResultParse } from '../../domain/query-result';
-import { errorCode, type QueryBackend } from '../../services/ipc';
+import {
+  isIncomplete, isValidPitId, parseQueryResult, sliceRaw,
+  type QueryResultParse, type QuerySummary,
+} from '../../domain/query-result';
+import { supportsSnapshotPaging } from '../../domain/query-pagination';
+import { errorCode, type QueryBackend, type QueryResponse } from '../../services/ipc';
+
+/** One successfully received page: verbatim body, parsed summary and its continuation cursor. */
+export interface ExecutionPage {
+  readonly rawResponse: string;
+  readonly summary: QuerySummary;
+  readonly partial: boolean;
+  /** Verbatim `sort` array of this page's last hit; `null` when the page cannot continue. */
+  readonly cursor: string | null;
+}
 
 export interface ExecutionEntry {
   readonly state: ExecutionState;
-  /** Parsed summary of the received body; `null` while idle/running or when parsing failed. */
+  /** Parsed summary of the latest page; `null` while idle/running or when parsing failed. */
   readonly parsed: QueryResultParse | null;
   /** Endpoint captured when the request started; compared with the current connection endpoint. */
   readonly endpoint: string | null;
-  /** Verbatim body when one was received, kept even when it could not be parsed. */
+  /** Verbatim body of the latest page, kept even when it could not be parsed. */
   readonly rawResponse: string | null;
+  /** Every page received for this execution, oldest first; empty until a page arrives. */
+  readonly pages: readonly ExecutionPage[];
+  /** Current snapshot id, refreshed from every page the cluster returns. */
+  readonly pitId: string | null;
+  /** A continuation request is in flight; the rows already shown stay visible. */
+  readonly continuing: boolean;
+  /** Last continuation failure code, kept beside the rows it could not extend. */
+  readonly continuationError: string | null;
 }
 
-type InFlight = { readonly requestId: string; readonly connectionId: string; readonly endpoint: string };
+type InFlight = {
+  requestId: string;
+  pitId: string | null;
+  readonly connectionId: string;
+  readonly endpoint: string;
+  readonly backend: QueryBackend;
+};
 
 /** The cancel contract carries only the request and connection identity. */
 function cancelRequestOf(request: InFlight) {
   return { requestId: request.requestId, connectionId: request.connectionId };
 }
 
-/**
- * Per-query execution state.
- *
- * Each run freezes a validated snapshot, records the connection endpoint it was sent to and
- * applies the response only when the request, connection and endpoint still match. A late or
- * foreign response is never accepted, a body that cannot be parsed becomes a failure instead
- * of a success, and cancelling, closing a tab, removing a connection or changing its endpoint
- * both stops the request and moves the query out of `running`.
- */
+/** Verbatim cursor of the last hit; `null` when the request produced no sort values. */
+function cursorOf(raw: string, summary: QuerySummary): string | null {
+  const last = summary.hits[summary.hits.length - 1];
+  return last?.sort ? sliceRaw(raw, last.sort) : null;
+}
+
+const EMPTY_PAGES: readonly ExecutionPage[] = [];
+
+function isBound(response: QueryResponse, operation: InFlight): boolean {
+  return response.requestId === operation.requestId && response.connectionId === operation.connectionId
+    && response.endpoint === operation.endpoint;
+}
+
+/** Per-document execution isolation; a managed PIT starts before page one and is never reopened for an old cursor. */
 export function useQueryExecutions(backend: QueryBackend) {
-  const [entries, setEntries] = useState<Record<string, ExecutionEntry>>({});
+  const [entries, renderEntries] = useState<Record<string, ExecutionEntry>>({});
   const inFlight = useRef(new Map<string, InFlight>());
   const alive = useRef(true);
   const backendRef = useRef(backend);
-  useEffect(() => { backendRef.current = backend; }, [backend]);
+  backendRef.current = backend;
+  const entriesRef = useRef<Record<string, ExecutionEntry>>({});
+
+  // Event handlers need the new state before React commits (cancel -> rerun, duplicate clicks).
+  const setEntries = useCallback((change: (current: Record<string, ExecutionEntry>) => Record<string, ExecutionEntry>) => {
+    const next = change(entriesRef.current);
+    if (next === entriesRef.current) return;
+    entriesRef.current = next;
+    if (alive.current) renderEntries(next);
+  }, []);
+
+  /** Close one snapshot without waiting; the cluster expires it on its own if this fails. */
+  const closePit = useCallback((pitId: string, connectionId: string, owner = backendRef.current) => {
+    if (!isValidPitId(pitId)) return;
+    void owner
+      .closePit({ requestId: crypto.randomUUID(), connectionId, pitId })
+      .catch(() => undefined);
+  }, []);
+
+  /** The snapshot an entry currently holds, if any, with the connection that owns it. */
+  const snapshotOf = (entry: ExecutionEntry | undefined) => {
+    const snapshot = entry && 'snapshot' in entry.state ? entry.state.snapshot : null;
+    return entry?.pitId && snapshot ? { pitId: entry.pitId, connectionId: snapshot.connectionId } : null;
+  };
+
   useEffect(() => {
     alive.current = true;
     const requests = inFlight.current;
@@ -45,24 +101,38 @@ export function useQueryExecutions(backend: QueryBackend) {
       alive.current = false;
       const pending = [...requests.values()];
       requests.clear();
-      for (const request of pending) void backendRef.current.cancel(cancelRequestOf(request)).catch(() => undefined);
+      for (const request of pending) {
+        void request.backend.cancel(cancelRequestOf(request)).catch(() => undefined);
+        if (request.pitId) closePit(request.pitId, request.connectionId, request.backend);
+      }
+      // Snapshots are server-side resources; closing them on unmount is best effort.
+      for (const entry of Object.values(entriesRef.current)) {
+        const open = snapshotOf(entry);
+        if (open) closePit(open.pitId, open.connectionId);
+      }
     };
-  }, []);
+  }, [closePit]);
 
-  /** Stop the request for a query and leave it cancelled instead of running forever. */
+  /** Stop the request for a query, release its snapshot and leave it cancelled instead of running forever. */
   const stop = useCallback((queryId: string) => {
     const active = inFlight.current.get(queryId);
     if (active) {
       inFlight.current.delete(queryId);
-      void backendRef.current.cancel(cancelRequestOf(active)).catch(() => undefined);
+      void active.backend.cancel(cancelRequestOf(active)).catch(() => undefined);
     }
+    const open = snapshotOf(entriesRef.current[queryId]);
+    if (active?.pitId) closePit(active.pitId, active.connectionId, active.backend);
+    if (open && open.pitId !== active?.pitId) closePit(open.pitId, open.connectionId);
     setEntries((current) => {
       const entry = current[queryId];
       if (!entry) return current;
       const state = cancelExecution(entry.state);
-      return state === entry.state ? current : { ...current, [queryId]: { ...entry, state } };
+      return {
+        ...current,
+        [queryId]: { ...entry, state, continuing: false, continuationError: entry.continuing ? 'cancelled' : null, pitId: null },
+      };
     });
-  }, []);
+  }, [closePit, setEntries]);
 
   /** Freeze and execute one snapshot. Returns a structured rejection when the draft is unusable. */
   const run = useCallback(async (query: QueryDocument, endpoint: string | null): Promise<SnapshotRejection | null> => {
@@ -71,74 +141,229 @@ export function useQueryExecutions(backend: QueryBackend) {
     if (!validated.ok) return validated.error;
     const snapshot = validated.snapshot;
     const target = endpoint ?? '';
-    inFlight.current.set(query.id, { requestId: snapshot.requestId, connectionId: snapshot.connectionId, endpoint: target });
+    // A new execution replaces the old snapshot; release the previous one first.
+    const previous = snapshotOf(entriesRef.current[query.id]);
+    if (previous) closePit(previous.pitId, previous.connectionId);
+    const paging = supportsSnapshotPaging(snapshot.rawDsl);
+    const operation: InFlight = {
+      requestId: paging ? crypto.randomUUID() : snapshot.requestId,
+      connectionId: snapshot.connectionId, endpoint: target, pitId: null, backend: backendRef.current,
+    };
+    inFlight.current.set(query.id, operation);
+    const owns = () => alive.current && inFlight.current.get(query.id) === operation;
     setEntries((current) => ({
       ...current,
-      [query.id]: { state: { status: 'running', snapshot }, parsed: null, endpoint, rawResponse: null },
+      [query.id]: {
+        state: { status: 'running', snapshot }, parsed: null, endpoint, rawResponse: null,
+        pages: EMPTY_PAGES, pitId: null, continuing: false, continuationError: null,
+      },
     }));
     const fail = (code: string, rawResponse: string | null) => {
-      if (!alive.current) return;
+      if (!owns()) return;
+      inFlight.current.delete(query.id);
+      if (operation.pitId) closePit(operation.pitId, operation.connectionId, operation.backend);
       setEntries((current) => ({
         ...current,
-        [query.id]: { state: { status: 'failed', snapshot, code }, parsed: null, endpoint, rawResponse },
+        [query.id]: {
+          state: { status: 'failed', snapshot, code }, parsed: null, endpoint, rawResponse,
+          pages: EMPTY_PAGES, pitId: null, continuing: false, continuationError: null,
+        },
       }));
     };
     try {
-      const response = await backendRef.current.execute({
+      if (paging) {
+        const opened = await operation.backend.openPit({
+          requestId: operation.requestId, connectionId: snapshot.connectionId, index: snapshot.index,
+        });
+        const bound = opened.requestId === operation.requestId && opened.connectionId === snapshot.connectionId
+          && opened.endpoint === target && isValidPitId(opened.pitId);
+        if (!owns()) {
+          if (bound) closePit(opened.pitId, snapshot.connectionId, operation.backend);
+          return null;
+        }
+        if (!bound) { fail('invalidResponse', null); return null; }
+        operation.pitId = opened.pitId;
+        operation.requestId = snapshot.requestId;
+      }
+      const response = await operation.backend.execute({
         requestId: snapshot.requestId, connectionId: snapshot.connectionId,
         index: snapshot.index, rawDsl: snapshot.rawDsl,
+        ...(operation.pitId ? { pitId: operation.pitId } : {}),
       });
-      if (inFlight.current.get(query.id)?.requestId !== snapshot.requestId) return null;
-      inFlight.current.delete(query.id);
-      if (!alive.current) return null;
-      // The backend must echo the frozen request; a mismatched identity is not rewritten here.
-      if (response.requestId !== snapshot.requestId || response.connectionId !== snapshot.connectionId
-        || response.endpoint !== target) {
+      if (!owns()) {
+        if (isBound(response, operation) && isValidPitId(response.pitId)) {
+          closePit(response.pitId, operation.connectionId, operation.backend);
+        }
+        return null;
+      }
+      if (!isBound(response, operation) || (response.pitId !== null && !isValidPitId(response.pitId))) {
         fail('invalidResponse', null);
         return null;
       }
       const parsed = parseQueryResult(response.rawResponse);
-      if (!parsed.ok) {
+      if (!parsed.ok || (response.pitId !== null && parsed.summary.pitId !== null && response.pitId !== parsed.summary.pitId)) {
         fail('invalidResponse', response.rawResponse);
         return null;
       }
+      operation.pitId = response.pitId ?? parsed.summary.pitId ?? operation.pitId;
       const partial = isIncomplete(parsed.summary, response.partial);
+      const page: ExecutionPage = {
+        rawResponse: response.rawResponse, summary: parsed.summary, partial,
+        cursor: cursorOf(response.rawResponse, parsed.summary),
+      };
       setEntries((current) => {
-        const previous = current[query.id]?.state ?? { status: 'idle' as const };
-        const state = acceptResponse(previous, {
+        const previousState = current[query.id]?.state ?? { status: 'idle' as const };
+        const state = acceptResponse(previousState, {
           requestId: snapshot.requestId, connectionId: snapshot.connectionId, rawResponse: response.rawResponse, partial,
         });
-        return { ...current, [query.id]: { state, parsed, endpoint, rawResponse: response.rawResponse } };
+        return {
+          ...current,
+          [query.id]: {
+            state, parsed, endpoint, rawResponse: response.rawResponse,
+            pages: [page], pitId: operation.pitId, continuing: false, continuationError: null,
+          },
+        };
       });
-    } catch (error) {
-      if (inFlight.current.get(query.id)?.requestId !== snapshot.requestId) return null;
       inFlight.current.delete(query.id);
+    } catch (error) {
       fail(errorCode(error, 'unexpected'), null);
     }
     return null;
-  }, []);
+  }, [closePit, setEntries]);
 
   const cancel = stop;
 
-  /** Forget queries that no longer exist (closed tab) and stop their requests. */
+  /**
+   * Continue only the original snapshot, using its frozen DSL, not the current draft. A failed
+   * page keeps the received rows; an expired PIT requires a new run starting from page one.
+   */
+  const loadMore = useCallback(async (query: QueryDocument) => {
+    if (!alive.current) return;
+    const entry = entriesRef.current[query.id];
+    if (!entry || entry.continuing || !['success', 'partial'].includes(entry.state.status)
+      || inFlight.current.has(query.id) || !isValidPitId(entry.pitId)) return;
+    const snapshot = 'snapshot' in entry.state ? entry.state.snapshot : null;
+    const lastPage = entry.pages[entry.pages.length - 1];
+    const cursor = lastPage?.cursor ?? null;
+    if (!snapshot || !lastPage || cursor === null) return;
+    const { connectionId } = snapshot;
+    const endpoint = entry.endpoint ?? '';
+    const operation: InFlight = {
+      requestId: crypto.randomUUID(), connectionId, endpoint, pitId: entry.pitId, backend: backendRef.current,
+    };
+    inFlight.current.set(query.id, operation);
+    const owns = () => alive.current && inFlight.current.get(query.id) === operation;
+    setEntries((current) => {
+      const existing = current[query.id];
+      return existing ? { ...current, [query.id]: { ...existing, continuing: true, continuationError: null } } : current;
+    });
+    // A continuation that was superseded (re-run, stop, release) must not touch the new entry.
+    const settleError = (code: string) => {
+      if (!owns()) return;
+      inFlight.current.delete(query.id);
+      const dead = code === 'notFound' || code === 'invalidResponse' || code === 'cancelled';
+      if (dead && operation.pitId) closePit(operation.pitId, connectionId, operation.backend);
+      setEntries((current) => {
+        const existing = current[query.id];
+        if (!existing || existing.pages !== entry.pages) return current;
+        return {
+          ...current,
+          [query.id]: {
+            ...existing, continuing: false, continuationError: code,
+            pitId: dead ? null : operation.pitId,
+          },
+        };
+      });
+    };
+    try {
+      const response = await operation.backend.execute({
+        requestId: operation.requestId, connectionId, index: snapshot.index, rawDsl: snapshot.rawDsl,
+        pitId: entry.pitId, searchAfter: cursor,
+      });
+      if (!owns()) {
+        if (isBound(response, operation) && isValidPitId(response.pitId)) {
+          closePit(response.pitId, connectionId, operation.backend);
+        }
+        return;
+      }
+      if (!isBound(response, operation) || (response.pitId !== null && !isValidPitId(response.pitId))) {
+        settleError('invalidResponse');
+        return;
+      }
+      const parsed = parseQueryResult(response.rawResponse);
+      if (!parsed.ok || (response.pitId !== null && parsed.summary.pitId !== null && response.pitId !== parsed.summary.pitId)) {
+        settleError('invalidResponse');
+        return;
+      }
+      operation.pitId = response.pitId ?? parsed.summary.pitId ?? operation.pitId;
+      const page: ExecutionPage = {
+        rawResponse: response.rawResponse, summary: parsed.summary,
+        partial: isIncomplete(parsed.summary, response.partial),
+        cursor: cursorOf(response.rawResponse, parsed.summary),
+      };
+      if (page.cursor !== null && page.cursor === cursor) {
+        settleError('invalidResponse');
+        return;
+      }
+      setEntries((current) => {
+        const existing = current[query.id];
+        if (!existing || existing.pages !== entry.pages) return current;
+        return {
+          ...current,
+          [query.id]: {
+            ...existing,
+            state: {
+              status: page.partial || existing.pages.some((page) => page.partial) ? 'partial' : 'success',
+              snapshot, rawResponse: response.rawResponse,
+            },
+            parsed, rawResponse: response.rawResponse,
+            pages: [...existing.pages, page],
+            // Always continue with the newest id the cluster returned.
+            pitId: operation.pitId,
+            continuing: false,
+            continuationError: null,
+          },
+        };
+      });
+      inFlight.current.delete(query.id);
+    } catch (error) {
+      settleError(errorCode(error, 'unexpected'));
+    }
+  }, [closePit, setEntries]);
+
+  /** Forget queries that no longer exist (closed tab) and release their requests and snapshots. */
   const release = useCallback((liveIds: ReadonlySet<string>) => {
-    for (const queryId of [...inFlight.current.keys()]) if (!liveIds.has(queryId)) stop(queryId);
+    for (const queryId of new Set([...inFlight.current.keys(), ...Object.keys(entriesRef.current)])) {
+      if (!liveIds.has(queryId)) stop(queryId);
+    }
     setEntries((current) => {
       const kept = Object.entries(current).filter(([id]) => liveIds.has(id));
       return kept.length === Object.keys(current).length ? current : Object.fromEntries(kept);
     });
-  }, [stop]);
+  }, [stop, setEntries]);
 
   /**
-   * Stop requests whose connection was removed or now points at a different endpoint, so a
-   * response from the previous cluster can never update the workspace.
+   * Stop requests whose connection was removed or now points at a different endpoint, and release
+   * the snapshots of entries that no longer have a valid target.
    */
   const reconcile = useCallback((valid: ReadonlyMap<string, string>) => {
     for (const [queryId, active] of [...inFlight.current]) {
       if (valid.get(active.connectionId) === active.endpoint) continue;
       stop(queryId);
     }
-  }, [stop]);
+    const orphaned = Object.entries(entriesRef.current).filter(([, entry]) => {
+      const open = snapshotOf(entry);
+      return open !== null && valid.get(open.connectionId) !== entry.endpoint;
+    });
+    if (orphaned.length === 0) return;
+    for (const [, entry] of orphaned) {
+      const open = snapshotOf(entry);
+      if (open) closePit(open.pitId, open.connectionId);
+    }
+    const ids = new Set(orphaned.map(([id]) => id));
+    setEntries((current) => Object.fromEntries(Object.entries(current).map(([id, entry]) =>
+      ids.has(id) ? [id, { ...entry, pitId: null }] : [id, entry])));
+  }, [stop, closePit, setEntries]);
 
-  return { entries, run, cancel, release, reconcile };
+  return { entries, run, cancel, release, reconcile, loadMore };
 }

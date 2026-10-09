@@ -1,0 +1,25 @@
+/*
+ * Visual query editor: compact condition rows built on the existing semantic tokens.
+ * All selectors are `.vq-`-scoped so the global tokens and layout stay untouched.
+ * Rows wrap instead of overflowing, so the editor stays usable at compact panel widths.
+ */
+
+.vq-editor { display: flex; flex-direction: column; gap: 8px; padding: 2px 0 12px; min-width: 0; }
+.vq-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.vq-inline { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: .8rem; color: var(--muted); }
+.vq-inline > span { white-space: nowrap; }
+.vq-inline input, .vq-inline select { font-size: .82rem; padding: 5px 8px; }
+.vq-size { width: 92px; }
+.vq-conditions { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.vq-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--subtle); }
+.vq-row input, .vq-row select { font-size: .82rem; padding: 5px 8px; }
+.vq-row input[aria-invalid="true"] { border-color: var(--error); }
+.vq-field { flex: 1 1 150px; min-width: 104px; }
+.vq-value { flex: 1 1 150px; min-width: 104px; }
+.vq-value:disabled { background: var(--subtle); }
+.vq-remove { width: 28px; height: 28px; min-width: 28px; }
+.vq-add { align-self: flex-start; min-height: 28px; padding: 4px 9px; font-size: .82rem; border: 1px dashed var(--control-border); border-radius: 6px; background: transparent; color: var(--muted); }
+.vq-add:hover { color: var(--text); border-color: color-mix(in srgb, var(--muted) 44%, var(--border)); }
+.vq-problems { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; font-size: .8rem; color: var(--error); }
+.vq-state { display: flex; align-items: flex-start; gap: 8px; margin: 10px 0 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); font-size: .82rem; }
+.vq-state svg { margin-top: 1px; }

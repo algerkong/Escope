@@ -15,8 +15,11 @@ mod storage;
 
 use connection::{ConnectionIdentity, ConnectionProbe, ReadOnlyClient};
 use error::AppError;
-use query::{QueryExecuteRequest, QueryExecuteResponse};
-use read_only::{CancelRequest, RequestRegistry};
+use query::{
+    PitCloseRequest, PitCloseResponse, PitOpenRequest, PitOpenResponse, QueryExecuteRequest,
+    QueryExecuteResponse,
+};
+use read_only::{CancelRequest, Cancellation, RequestRegistry};
 use resources::{ResourceReadRequest, ResourceReadResponse};
 use std::sync::Mutex;
 use storage::{ConnectionInput, ConnectionProfile, Database, Preferences, StoredState};
@@ -138,9 +141,15 @@ async fn query_execute(
             .register(&request.request_id, &request.connection_id)?;
         let profile = with_database(&state, |db| db.connection(&request.connection_id))?;
         let client = network.0.as_ref().map_err(Clone::clone)?;
-        let plan = query::search_plan(&profile, &prepared.index, prepared.body)?;
+        // A continuation searches inside the snapshot with the composed body; a first page
+        // targets the index the draft names.
+        let plan = if prepared.continuation {
+            query::paginated_search_plan(&profile, prepared.body)?
+        } else {
+            query::search_plan(&profile, &prepared.index, prepared.body)?
+        };
         let raw = client.execute(plan, guard.cancellation()).await?;
-        QueryExecuteResponse::new(&request, &profile, raw)
+        QueryExecuteResponse::new(&request, &profile, raw, request.pit_id.as_deref())
     }
     .await;
     result.map_err(|mut error: AppError| {
@@ -149,6 +158,61 @@ async fn query_execute(
     })
 }
 
+/// Open one search snapshot for a query's paginated continuation.
+///
+/// The target is validated before the plan is built and the connection is looked up by saved ID,
+/// exactly like `query_execute`. The returned snapshot id is the cluster's own token; the
+/// response never carries a document.
+#[tauri::command]
+async fn pit_open(
+    state: State<'_, StorageState>,
+    network: State<'_, NetworkState>,
+    requests: State<'_, RequestState>,
+    request: PitOpenRequest,
+) -> Result<PitOpenResponse, AppError> {
+    request.validate_ids()?;
+    let request_id = request.request_id.clone();
+    let result = async {
+        let target = request.target()?;
+        let mut guard = requests
+            .0
+            .register(&request.request_id, &request.connection_id)?;
+        let profile = with_database(&state, |db| db.connection(&request.connection_id))?;
+        let client = network.0.as_ref().map_err(Clone::clone)?;
+        let plan = query::pit_open_plan(&profile, &target)?;
+        let raw = client.execute(plan, guard.cancellation()).await?;
+        PitOpenResponse::new(&request, &profile, raw)
+    }
+    .await;
+    result.map_err(|mut error: AppError| {
+        error.request_id = Some(request_id);
+        error
+    })
+}
+
+/// Close one snapshot. This is best-effort cleanup of a resource the server expires on its own;
+/// it is deliberately not cancellable, and a failure never invalidates a result the user has.
+#[tauri::command]
+async fn pit_close(
+    state: State<'_, StorageState>,
+    network: State<'_, NetworkState>,
+    request: PitCloseRequest,
+) -> Result<PitCloseResponse, AppError> {
+    request.validate()?;
+    let request_id = request.request_id.clone();
+    let result: Result<PitCloseResponse, AppError> = async {
+        let profile = with_database(&state, |db| db.connection(&request.connection_id))?;
+        let client = network.0.as_ref().map_err(Clone::clone)?;
+        let plan = query::pit_close_plan(&profile, &request.pit_id)?;
+        client.execute(plan, &mut Cancellation::never()).await?;
+        Ok(PitCloseResponse::new(&request))
+    }
+    .await;
+    result.map_err(|mut error: AppError| {
+        error.request_id = Some(request_id);
+        error
+    })
+}
 /// Cancel the request identified by this exact `(requestId, connectionId)` pair.
 ///
 /// Returns `true` when the cancellation took effect: an in-flight request is signalled, or a
@@ -227,6 +291,8 @@ pub fn run() {
             delete_connection,
             resource_read,
             query_execute,
+            pit_open,
+            pit_close,
             request_cancel,
             connection_test,
             ai::ai_chat,

@@ -33,6 +33,14 @@ pub enum ReadOnlyOperation {
     Shards,
     /// `POST {base}/{target}/_search` — one strictly validated search body.
     Search,
+    /// `POST {base}/{target}/_pit?keep_alive=1m` — open one search snapshot for pagination.
+    PitOpen,
+    /// `POST {base}/_search` — continuation inside an open snapshot. The snapshot already fixes
+    /// the index list, so this form never carries a target.
+    PitSearch,
+    /// `DELETE {base}/_pit` — close a snapshot. The body is composed here from an already
+    /// validated id; it is never caller input.
+    PitClose,
 }
 
 impl ReadOnlyOperation {
@@ -48,6 +56,8 @@ impl ReadOnlyOperation {
             "resource.nodesStats" => Ok(Self::NodesStats),
             "resource.shards" => Ok(Self::Shards),
             "query.execute" => Ok(Self::Search),
+            "resource.pitOpen" => Ok(Self::PitOpen),
+            "resource.pitClose" => Ok(Self::PitClose),
             _ => Err(AppError::new("permissionDenied")),
         }
     }
@@ -55,7 +65,8 @@ impl ReadOnlyOperation {
     /// The method is a property of the operation; a caller can never choose it.
     pub const fn method(self) -> Method {
         match self {
-            Self::Search => Method::POST,
+            Self::Search | Self::PitOpen | Self::PitSearch => Method::POST,
+            Self::PitClose => Method::DELETE,
             Self::ClusterIdentity
             | Self::ClusterHealth
             | Self::IndexDiscovery
@@ -77,7 +88,14 @@ impl ReadOnlyOperation {
                 | Self::Mapping
                 | Self::FieldCaps
                 | Self::Search
+                | Self::PitOpen
         )
+    }
+
+    /// Whether this operation carries a JSON body. Only the search family and the snapshot
+    /// close — whose body is composed here from an already validated id — ever do.
+    pub const fn carries_body(self) -> bool {
+        matches!(self, Self::Search | Self::PitSearch | Self::PitClose)
     }
 }
 
@@ -175,7 +193,9 @@ pub(crate) fn resource_request(
     operation: ReadOnlyOperation,
     target: Option<&IndexTarget>,
 ) -> Result<RequestPlan, AppError> {
-    if operation == ReadOnlyOperation::Search {
+    // The resource planner serves metadata reads only: the search family and the snapshot
+    // lifecycle are planned by the query and PIT paths, never here.
+    if operation.carries_body() || operation == ReadOnlyOperation::PitOpen {
         return Err(AppError::new("permissionDenied"));
     }
     plan(profile, operation, target, None)
@@ -193,6 +213,34 @@ pub(crate) fn search_request(
         Some(target),
         Some(body),
     )
+}
+/// Open one snapshot for pagination. The keep-alive is fixed here; the caller supplies only the
+/// already validated target.
+pub(crate) fn pit_open_request(
+    profile: &ConnectionProfile,
+    target: &IndexTarget,
+) -> Result<RequestPlan, AppError> {
+    plan(profile, ReadOnlyOperation::PitOpen, Some(target), None)
+}
+
+/// Plan one continuation search inside an open snapshot. The body was composed and validated by
+/// the query layer; this only fixes the endpoint.
+pub(crate) fn pit_search_request(
+    profile: &ConnectionProfile,
+    body: Vec<u8>,
+) -> Result<RequestPlan, AppError> {
+    plan(profile, ReadOnlyOperation::PitSearch, None, Some(body))
+}
+
+/// Plan the snapshot close. The body is `{"id": …}` built here from an id that was already
+/// checked to be a bounded printable token, so it cannot inject anything into the JSON.
+pub(crate) fn pit_close_request(
+    profile: &ConnectionProfile,
+    pit_id: &str,
+) -> Result<RequestPlan, AppError> {
+    let body = serde_json::to_vec(&serde_json::json!({ "id": pit_id }))
+        .map_err(|_| AppError::new("invalidInput"))?;
+    plan(profile, ReadOnlyOperation::PitClose, None, Some(body))
 }
 
 /// The only place a relative API path is produced. It is a closed match on the registered
@@ -224,6 +272,11 @@ fn relative(
                 .to_owned(),
         ),
         ReadOnlyOperation::Search => Ok(format!("{}/_search", target()?)),
+        // The keep-alive is part of this operation, never caller input.
+        ReadOnlyOperation::PitOpen => Ok(format!("{}/_pit?keep_alive=1m", target()?)),
+        // A continuation names no target: the snapshot already fixes the index list.
+        ReadOnlyOperation::PitSearch => Ok("_search".to_owned()),
+        ReadOnlyOperation::PitClose => Ok("_pit".to_owned()),
     }
 }
 
@@ -234,8 +287,9 @@ fn plan(
     target: Option<&IndexTarget>,
     body: Option<Vec<u8>>,
 ) -> Result<RequestPlan, AppError> {
-    // Only the search operation may carry a body; a read can never smuggle one in.
-    if body.is_some() != (operation == ReadOnlyOperation::Search) {
+    // Only the body-carrying operations may have one: a plain read can never smuggle a body in,
+    // and an operation whose body is part of its contract must not be planned without it.
+    if body.is_some() != operation.carries_body() {
         return Err(AppError::new("permissionDenied"));
     }
     // A target is present exactly when the operation reads one.
@@ -323,6 +377,10 @@ mod tests {
             "_cluster/state",
             "capability.read",
             "cluster.health",
+            "resource.pitSearch",
+            "query.executePage",
+            "pit.open",
+            "resource.pitCloseAll",
         ] {
             assert_eq!(authorize(operation).unwrap_err().code, "permissionDenied");
         }
@@ -340,6 +398,8 @@ mod tests {
             ("resource.nodesStats", Method::GET),
             ("resource.shards", Method::GET),
             ("query.execute", Method::POST),
+            ("resource.pitOpen", Method::POST),
+            ("resource.pitClose", Method::DELETE),
         ] {
             assert_eq!(authorize(name).unwrap().method(), method, "{name}");
         }
@@ -607,6 +667,76 @@ mod tests {
         assert_eq!(
             IndexTarget::parse(&too_many).unwrap_err().code,
             "invalidIndex"
+        );
+    }
+
+    #[test]
+    fn the_snapshot_lifecycle_keeps_its_fixed_shape_and_own_body() {
+        let profile = profile("https://example.test/proxy/es");
+        let target = IndexTarget::parse("logs-*").unwrap();
+        // Opening a snapshot is a POST against the validated target with a fixed keep-alive and
+        // no body at all.
+        let request = pit_open_request(&profile, &target)
+            .unwrap()
+            .build(&Client::new())
+            .build()
+            .unwrap();
+        assert_eq!(request.method(), Method::POST);
+        assert_eq!(
+            request.url().as_str(),
+            "https://example.test/proxy/es/logs-*/_pit?keep_alive=1m"
+        );
+        assert!(request.body().is_none());
+        // The continuation search names no target: the snapshot already fixes the index list.
+        let request = pit_search_request(&profile, b"{\"size\":1}".to_vec())
+            .unwrap()
+            .build(&Client::new())
+            .build()
+            .unwrap();
+        assert_eq!(request.method(), Method::POST);
+        assert_eq!(
+            request.url().as_str(),
+            "https://example.test/proxy/es/_search"
+        );
+        assert_eq!(request.body().unwrap().as_bytes().unwrap(), b"{\"size\":1}");
+        // Closing composes our own body and can never be planned without one.
+        let request = pit_close_request(&profile, "pit-abc123")
+            .unwrap()
+            .build(&Client::new())
+            .build()
+            .unwrap();
+        assert_eq!(request.method(), Method::DELETE);
+        assert_eq!(request.url().as_str(), "https://example.test/proxy/es/_pit");
+        assert_eq!(
+            request.body().unwrap().as_bytes().unwrap(),
+            b"{\"id\":\"pit-abc123\"}"
+        );
+        assert_eq!(
+            plan(&profile, ReadOnlyOperation::PitClose, None, None)
+                .err()
+                .unwrap()
+                .code,
+            "permissionDenied"
+        );
+        // The snapshot lifecycle is not reachable through the metadata-read planner.
+        assert_eq!(
+            resource_request(&profile, ReadOnlyOperation::PitOpen, Some(&target))
+                .err()
+                .unwrap()
+                .code,
+            "permissionDenied"
+        );
+        assert!(resource_request(&profile, ReadOnlyOperation::PitSearch, None).is_err());
+        assert!(resource_request(&profile, ReadOnlyOperation::PitClose, None).is_err());
+        // A stored credential still refuses every snapshot plan.
+        let mut secured = profile;
+        secured.auth_state = ConnectionAuth {
+            kind: AuthKind::ApiKey,
+            credential_ref: Some(CredentialRef::generate()),
+        };
+        assert_eq!(
+            pit_open_request(&secured, &target).err().unwrap().code,
+            "unsupported"
         );
     }
 }

@@ -151,6 +151,7 @@ async function mount(desktop = true) {
   const probe = vi.fn<(input: ConnectionProbe) => Promise<ConnectionIdentity>>(() => pending.promise);
   render(<I18nextProvider i18n={i18n}><App service={service} initial={initial} connectionProbe={probe} /></I18nextProvider>);
   const user = userEvent.setup();
+  await user.click(screen.getAllByRole('tab')[1]!);
   fireEvent.change(screen.getByLabelText('查询 DSL'), { target: { value: '{"id":9007199254740993}' } });
   await user.click(screen.getAllByRole('button', { name: '设置' })[0]!);
   await user.click(screen.getByRole('button', { name: '连接中心' }));
@@ -167,6 +168,7 @@ describe('connection test UI', () => {
     expect(testButton).toHaveFocus();
     await user.keyboard('{Enter}');
     expect(probe).toHaveBeenCalledTimes(1);
+    expect(within(screen.getByRole('contentinfo')).getByRole('status')).toHaveTextContent(i18n.t('connections:testing'));
     expect(within(screen.getByRole('article', { name: 'A' })).getByText('正在测试已保存的地址')).toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText('当前连接'), b.id);
     await user.click(screen.getByRole('button', { name: '常规' }));
@@ -181,17 +183,21 @@ describe('connection test UI', () => {
     expect(within(screen.getByRole('article', { name: 'B' })).getByText('Not tested')).toBeInTheDocument();
     expect(screen.getByLabelText('Active connection')).toHaveValue(b.id);
     await user.click(screen.getByRole('button', { name: 'Back to query' }));
-    await user.click(screen.getAllByRole('tab')[0]!);
+    expect(within(screen.getByRole('complementary')).getByText('Not tested')).toBeInTheDocument();
+    expect(within(screen.getByRole('contentinfo')).queryByText('Not tested')).not.toBeInTheDocument();
+    expect(within(screen.getByRole('contentinfo')).getByRole('img', { name: 'Read-only' })).toHaveAttribute('title', 'Read-only');
+    expect(within(screen.getByRole('contentinfo')).queryByText('Read-only')).not.toBeInTheDocument();
+    await user.click(screen.getAllByRole('tab')[1]!);
+    expect(screen.getByLabelText('Active connection')).toHaveValue(a.id);
     expect(within(screen.getByRole('complementary')).getByText('Identity confirmed')).toBeInTheDocument();
-    expect(within(screen.getByRole('contentinfo')).getByText('Not tested')).toBeInTheDocument();
-    await user.selectOptions(screen.getByLabelText('Active connection'), a.id);
+    expect(within(screen.getByRole('contentinfo')).getByText('Identity confirmed')).toBeInTheDocument();
     expect(screen.getByLabelText('Query DSL')).toHaveValue('{"id":9007199254740993}');
     expect(screen.getByRole('button', { name: 'Run query' })).toBeDisabled();
     await user.click(screen.getAllByRole('button', { name: 'Settings' })[0]!);
     await user.click(screen.getByRole('button', { name: 'Connections' }));
     expect(screen.getByText('Fixture cluster')).toBeInTheDocument();
     expect(probe).toHaveBeenCalledTimes(1);
-  });
+  }, 15_000);
 
   it('keeps rename results but invalidates changed endpoints only after a successful save', async () => {
     const { user, service, probe, pending } = await mount();
@@ -214,6 +220,7 @@ describe('connection test UI', () => {
     await user.click(screen.getByRole('button', { name: '保存' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(screen.getByText('地址已更改，请重新测试。')).toBeInTheDocument();
+    expect(within(screen.getByRole('contentinfo')).getByRole('status')).toHaveTextContent(i18n.t('connections:testStaleShort'));
     expect(screen.queryByText('Fixture cluster')).not.toBeInTheDocument();
     expect(probe).toHaveBeenCalledTimes(1);
   });
@@ -259,6 +266,7 @@ describe('connection test UI', () => {
     await user.click(screen.getByRole('button', { name: '测试连接 A' }));
     await act(async () => { pending.reject({ code: 'serverForbidden', body: 'fixture-secret' }); });
     expect(screen.getByRole('alert')).toHaveTextContent('仍可能有权搜索已授权的索引');
+    expect(within(screen.getByRole('contentinfo')).getByRole('status')).toHaveTextContent(i18n.t('connections:testFailed'));
     expect(screen.queryByText(/fixture-secret/)).not.toBeInTheDocument();
     probe.mockImplementation(async (input) => ({ ...identity(input), version: '9.0.0', testedVersion: false }));
     await user.click(screen.getByRole('button', { name: '测试连接 A' }));

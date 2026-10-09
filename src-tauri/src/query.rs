@@ -11,9 +11,10 @@ use crate::read_only::validate_uuid;
 use crate::storage::ConnectionProfile;
 use serde::de::{self, DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
+use serde_json::value::{to_raw_value, RawValue};
 use serde_json::Value;
 use std::cell::Cell;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 /// One request body may not exceed this size, matching the response bound: both directions are
 /// bounded so a single call cannot turn into an unbounded allocation.
@@ -22,6 +23,11 @@ pub const MAX_BODY_BYTES: usize = 1024 * 1024;
 /// work a hostile body can cause before Elasticsearch ever sees it.
 const MAX_DEPTH: usize = 64;
 const MAX_NODES: usize = 200_000;
+/// PIT tokens encode shard contexts and grow with the queried indices; keep a bounded payload
+/// without assuming that a multi-index snapshot fits in a few hundred bytes.
+const MAX_PIT_ID_BYTES: usize = 64 * 1024;
+const MAX_SEARCH_AFTER_BYTES: usize = 4096;
+const MAX_SEARCH_AFTER_ITEMS: usize = 16;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -30,13 +36,23 @@ pub struct QueryExecuteRequest {
     pub connection_id: String,
     pub index: String,
     pub raw_dsl: String,
+    /// Snapshot opened before page one. Later pages use its most recently returned id.
+    #[serde(default)]
+    pub pit_id: Option<String>,
+    /// Continuation state: the raw JSON text of the previous page's last hit `sort` array. It is
+    /// validated as a bounded array of scalars and inserted verbatim; number literals are never
+    /// re-serialized.
+    #[serde(default)]
+    pub search_after: Option<String>,
 }
 
-/// The validated execution target: a checked index expression plus the exact body bytes.
+/// The validated execution target: a checked index expression, the exact body bytes and whether
+/// this execution searches inside an open snapshot, including its first page.
 #[derive(Debug)]
 pub struct PreparedQuery {
     pub index: IndexTarget,
     pub body: Vec<u8>,
+    pub continuation: bool,
 }
 
 impl QueryExecuteRequest {
@@ -47,12 +63,30 @@ impl QueryExecuteRequest {
         validate_uuid(&self.connection_id)
     }
 
-    /// Validate the target and the body.
+    /// Validate the target, the body and the optional continuation state.
     pub fn prepare(&self) -> Result<PreparedQuery, AppError> {
         self.validate_ids()?;
+        let index = IndexTarget::parse(&self.index)?;
+        let (body, continues) = match self.pit_id.as_deref() {
+            Some(pit_id) => {
+                let pit_id = validate_pit_id(pit_id)?;
+                let after = self
+                    .search_after
+                    .as_deref()
+                    .map(validate_search_after)
+                    .transpose()?;
+                (
+                    compose_paginated_body(&self.raw_dsl, &pit_id, after.as_deref())?,
+                    true,
+                )
+            }
+            None if self.search_after.is_some() => return Err(AppError::new("invalidQuery")),
+            None => (validate_search_body(&self.raw_dsl)?, false),
+        };
         Ok(PreparedQuery {
-            index: IndexTarget::parse(&self.index)?,
-            body: validate_search_body(&self.raw_dsl)?,
+            index,
+            body,
+            continuation: continues,
         })
     }
 }
@@ -67,6 +101,9 @@ pub struct QueryExecuteResponse {
     /// True when the cluster reported a timeout, a failed shard or an early termination, so the
     /// UI never presents a partial result as a complete success.
     pub partial: bool,
+    /// The snapshot id this page returns; the next continuation must use this value (falling back
+    /// to the request's own id only when the server did not return one).
+    pub pit_id: Option<String>,
 }
 
 impl QueryExecuteResponse {
@@ -74,14 +111,17 @@ impl QueryExecuteResponse {
         request: &QueryExecuteRequest,
         profile: &ConnectionProfile,
         raw: Vec<u8>,
+        fallback_pit_id: Option<&str>,
     ) -> Result<Self, AppError> {
         let partial = is_partial(&raw)?;
+        let pit_id = extract_pit_id(&raw)?.or_else(|| fallback_pit_id.map(str::to_owned));
         Ok(Self {
             request_id: request.request_id.clone(),
             connection_id: request.connection_id.clone(),
             endpoint: profile.endpoint.clone(),
             raw_response: decode_response(raw)?,
             partial,
+            pit_id,
         })
     }
 }
@@ -93,6 +133,187 @@ pub fn search_plan(
     body: Vec<u8>,
 ) -> Result<RequestPlan, AppError> {
     operation::search_request(profile, index, body)
+}
+/// Build the continuation plan: one `_search` inside the snapshot the request continues.
+pub fn paginated_search_plan(
+    profile: &ConnectionProfile,
+    body: Vec<u8>,
+) -> Result<RequestPlan, AppError> {
+    operation::pit_search_request(profile, body)
+}
+
+/// Plan the snapshot open for one already validated target.
+pub fn pit_open_plan(
+    profile: &ConnectionProfile,
+    index: &IndexTarget,
+) -> Result<RequestPlan, AppError> {
+    operation::pit_open_request(profile, index)
+}
+
+/// Plan the snapshot close for one already validated id.
+pub fn pit_close_plan(profile: &ConnectionProfile, pit_id: &str) -> Result<RequestPlan, AppError> {
+    operation::pit_close_request(profile, pit_id)
+}
+
+/// A snapshot id is an opaque token: bounded, non-empty and printable, so it can be embedded in
+/// a later request without escaping surprises.
+pub(crate) fn validate_pit_id(value: &str) -> Result<String, AppError> {
+    if value.is_empty()
+        || value.len() > MAX_PIT_ID_BYTES
+        || !value.bytes().all(|byte| byte.is_ascii_graphic())
+    {
+        return Err(AppError::new("invalidQuery"));
+    }
+    Ok(value.to_owned())
+}
+
+/// A bounded scalar cursor; shape validation never replaces the raw numeric/escape tokens.
+fn validate_search_after(raw: &str) -> Result<Box<RawValue>, AppError> {
+    if raw.is_empty() || raw.len() > MAX_SEARCH_AFTER_BYTES {
+        return Err(AppError::new("invalidQuery"));
+    }
+    let value: Value = serde_json::from_str(raw).map_err(|_| AppError::new("invalidQuery"))?;
+    let items = value
+        .as_array()
+        .ok_or_else(|| AppError::new("invalidQuery"))?;
+    if items.is_empty() || items.len() > MAX_SEARCH_AFTER_ITEMS {
+        return Err(AppError::new("invalidQuery"));
+    }
+    if items
+        .iter()
+        .any(|item| !(item.is_string() || item.is_number() || item.is_boolean() || item.is_null()))
+    {
+        return Err(AppError::new("invalidQuery"));
+    }
+    serde_json::from_str(raw).map_err(|_| AppError::new("invalidQuery"))
+}
+/// Compose a PIT search: the user's draft plus our own snapshot id and optional cursor. The
+/// draft must pass the full body validation and must not pin its own `pit` or `search_after`, so
+/// the composed request is never ambiguous about what it continues. Raw values preserve every
+/// numeric/escape token, including negative zero and exponent spelling.
+fn compose_paginated_body(
+    raw: &str,
+    pit_id: &str,
+    search_after: Option<&RawValue>,
+) -> Result<Vec<u8>, AppError> {
+    validate_search_body(raw)?;
+    let mut body: BTreeMap<String, Box<RawValue>> =
+        serde_json::from_str(raw).map_err(|_| AppError::new("invalidQuery"))?;
+    if body.contains_key("pit") || body.contains_key("search_after") {
+        return Err(AppError::new("invalidQuery"));
+    }
+    let pit = to_raw_value(&serde_json::json!({ "id": pit_id, "keep_alive": "1m" }))
+        .map_err(|_| AppError::new("invalidQuery"))?;
+    body.insert("pit".to_owned(), pit);
+    if let Some(search_after) = search_after {
+        body.insert("search_after".to_owned(), search_after.to_owned());
+    }
+    let encoded = serde_json::to_vec(&body).map_err(|_| AppError::new("invalidQuery"))?;
+    if encoded.len() > MAX_BODY_BYTES {
+        return Err(AppError::new("invalidQuery"));
+    }
+    Ok(encoded)
+}
+
+/// Read the snapshot id a search response returns. A present but unusable value fails closed:
+/// the next page must never run against an id this build could not read.
+fn extract_pit_id(raw: &[u8]) -> Result<Option<String>, AppError> {
+    let value: Value = serde_json::from_slice(raw).map_err(|_| AppError::new("invalidResponse"))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| AppError::new("invalidResponse"))?;
+    match object.get("pit_id") {
+        Some(Value::String(id)) => validate_pit_id(id)
+            .map(Some)
+            .map_err(|_| AppError::new("invalidResponse")),
+        Some(_) => Err(AppError::new("invalidResponse")),
+        None => Ok(None),
+    }
+}
+/// `pit_open` payload: open one snapshot before its first search page.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PitOpenRequest {
+    pub request_id: String,
+    pub connection_id: String,
+    pub index: String,
+}
+
+impl PitOpenRequest {
+    pub fn validate_ids(&self) -> Result<(), AppError> {
+        validate_uuid(&self.request_id)?;
+        validate_uuid(&self.connection_id)
+    }
+
+    /// Validate the identifiers and the index expression.
+    pub fn target(&self) -> Result<IndexTarget, AppError> {
+        self.validate_ids()?;
+        IndexTarget::parse(&self.index)
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PitOpenResponse {
+    pub request_id: String,
+    pub connection_id: String,
+    pub endpoint: String,
+    pub pit_id: String,
+}
+
+impl PitOpenResponse {
+    pub fn new(
+        request: &PitOpenRequest,
+        profile: &ConnectionProfile,
+        raw: Vec<u8>,
+    ) -> Result<Self, AppError> {
+        let value: Value =
+            serde_json::from_slice(&raw).map_err(|_| AppError::new("invalidResponse"))?;
+        let id = value
+            .as_object()
+            .and_then(|object| object.get("id"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| AppError::new("invalidResponse"))?;
+        Ok(Self {
+            request_id: request.request_id.clone(),
+            connection_id: request.connection_id.clone(),
+            endpoint: profile.endpoint.clone(),
+            pit_id: validate_pit_id(id).map_err(|_| AppError::new("invalidResponse"))?,
+        })
+    }
+}
+
+/// `pit_close` payload. Closing is best-effort cleanup and carries no result.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PitCloseRequest {
+    pub request_id: String,
+    pub connection_id: String,
+    pub pit_id: String,
+}
+
+impl PitCloseRequest {
+    pub fn validate(&self) -> Result<(), AppError> {
+        validate_uuid(&self.request_id)?;
+        validate_uuid(&self.connection_id)?;
+        validate_pit_id(&self.pit_id).map(|_| ())
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PitCloseResponse {
+    pub request_id: String,
+    pub connection_id: String,
+}
+
+impl PitCloseResponse {
+    pub fn new(request: &PitCloseRequest) -> Self {
+        Self {
+            request_id: request.request_id.clone(),
+            connection_id: request.connection_id.clone(),
+        }
+    }
 }
 
 /// Read the execution state from a `_search` response without rewriting it.
@@ -331,6 +552,8 @@ mod tests {
             connection_id: CONNECTION.into(),
             index: index.into(),
             raw_dsl: raw_dsl.into(),
+            pit_id: None,
+            search_after: None,
         }
     }
 
@@ -622,16 +845,18 @@ mod tests {
             endpoint: "https://example.test/proxy/es".into(),
             raw_response: "{}".into(),
             partial: true,
+            pit_id: Some("pit-abc123".into()),
         })
         .unwrap();
         let object = value.as_object().unwrap();
-        assert_eq!(object.len(), 5);
+        assert_eq!(object.len(), 6);
         for key in [
             "requestId",
             "connectionId",
             "endpoint",
             "rawResponse",
             "partial",
+            "pitId",
         ] {
             assert!(object.contains_key(key), "{key} is missing");
         }
@@ -667,5 +892,156 @@ mod tests {
                 "{payload} should be refused"
             );
         }
+    }
+
+    #[test]
+    fn a_cursor_without_a_snapshot_is_refused_but_a_snapshot_has_a_first_page() {
+        let mut invalid = request("logs-*", r#"{"size":1}"#);
+        invalid.search_after = Some("[1]".into());
+        assert_eq!(invalid.prepare().unwrap_err().code, "invalidQuery");
+
+        let raw = r#"{"size":1,"sort":["_shard_doc"],"query":{"term":{"n":-0}},"min_score":1E+003,"boost":1.1000000000000000001}"#;
+        let mut first = request("logs-*", raw);
+        first.pit_id = Some("pit-first".into());
+        let prepared = first.prepare().unwrap();
+        assert!(prepared.continuation);
+        let encoded = String::from_utf8(prepared.body).unwrap();
+        for literal in ["-0", "1E+003", "1.1000000000000000001"] {
+            assert!(encoded.contains(literal));
+        }
+        let body: Value = serde_json::from_str(&encoded).unwrap();
+        assert!(body.get("search_after").is_none());
+        assert_eq!(body["pit"]["id"], "pit-first");
+        assert_eq!(body["pit"]["keep_alive"], "1m");
+    }
+
+    #[test]
+    fn a_continuation_composes_the_body_without_rewriting_numbers_or_overriding_the_draft() {
+        let sentinel = "123456789012345678901234567890";
+        let mut continued = request(
+            "logs-*",
+            r#"{"query":{"match_all":{}},"size":2,"sort":[{"n":"asc"}]}"#,
+        );
+        continued.pit_id = Some("pit-abc123".into());
+        // A 30-digit integer and a long decimal must survive byte-for-byte in the composed body.
+        continued.search_after = Some(format!("[{sentinel}, 1.1000000000000000001]"));
+        let prepared = continued.prepare().unwrap();
+        assert!(prepared.continuation);
+        let body: Value = serde_json::from_slice(&prepared.body).unwrap();
+        assert_eq!(body["pit"]["id"], "pit-abc123");
+        assert_eq!(body["query"]["match_all"], serde_json::json!({}));
+        let text = String::from_utf8(prepared.body.clone()).unwrap();
+        assert!(text.contains(sentinel), "{text}");
+        assert!(text.contains("1.1000000000000000001"), "{text}");
+
+        // A draft that pins its own snapshot or cursor is refused instead of being overridden.
+        for raw in [r#"{"pit":{"id":"mine"}}"#, r#"{"search_after":[1]}"#] {
+            let mut conflicting = request("logs-*", raw);
+            conflicting.pit_id = Some("pit-abc123".into());
+            conflicting.search_after = Some("[1]".into());
+            assert_eq!(conflicting.prepare().unwrap_err().code, "invalidQuery");
+        }
+
+        // Malformed cursors fail closed before any plan exists.
+        let too_many = format!(
+            "[{}]",
+            (1..=17)
+                .map(|index| index.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        for after in ["", "1", "{\"a\":1}", "[[1]]", "[]", too_many.as_str()] {
+            let mut invalid = request("logs-*", r#"{"size":1}"#);
+            invalid.pit_id = Some("pit-abc123".into());
+            invalid.search_after = Some(after.to_owned());
+            assert_eq!(
+                invalid.prepare().unwrap_err().code,
+                "invalidQuery",
+                "{after}"
+            );
+        }
+        for pit in ["", "pit with space", "pit\nnewline"] {
+            let mut invalid = request("logs-*", r#"{"size":1}"#);
+            invalid.pit_id = Some(pit.to_owned());
+            invalid.search_after = Some("[1]".into());
+            assert_eq!(invalid.prepare().unwrap_err().code, "invalidQuery", "{pit}");
+        }
+    }
+
+    #[test]
+    fn the_snapshot_id_of_a_response_is_read_back_or_falls_back_to_the_request() {
+        let profile = profile();
+        let mut continued = request("logs-*", r#"{"size":1}"#);
+        continued.pit_id = Some("pit-request".into());
+        continued.search_after = Some("[1]".into());
+        let with_id = OK_RESPONSE.replace(r#""took":1"#, r#""took":1,"pit_id":"pit-response""#);
+        let response = QueryExecuteResponse::new(
+            &continued,
+            &profile,
+            with_id.into_bytes(),
+            continued.pit_id.as_deref(),
+        )
+        .unwrap();
+        // The newest id must win: the next continuation uses the id from this response.
+        assert_eq!(response.pit_id.as_deref(), Some("pit-response"));
+        let without_id = QueryExecuteResponse::new(
+            &continued,
+            &profile,
+            OK_RESPONSE.as_bytes().to_vec(),
+            continued.pit_id.as_deref(),
+        )
+        .unwrap();
+        assert_eq!(without_id.pit_id.as_deref(), Some("pit-request"));
+        // A malformed id fails closed instead of being handed to the next request.
+        let malformed = OK_RESPONSE.replace(r#""took":1"#, r#""took":1,"pit_id":42"#);
+        assert_eq!(
+            QueryExecuteResponse::new(&continued, &profile, malformed.into_bytes(), None)
+                .err()
+                .unwrap()
+                .code,
+            "invalidResponse"
+        );
+        // A first page with no snapshot fields stays without an id.
+        let plain = QueryExecuteResponse::new(
+            &request("logs-*", r#"{"size":1}"#),
+            &profile,
+            OK_RESPONSE.as_bytes().to_vec(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(plain.pit_id, None);
+    }
+
+    #[test]
+    fn multi_index_snapshot_tokens_remain_bounded_but_can_exceed_512_bytes() {
+        let profile = profile();
+        let open = PitOpenRequest {
+            request_id: REQUEST.into(),
+            connection_id: CONNECTION.into(),
+            index: "logs-*".into(),
+        };
+        let token = "p".repeat(608);
+        let raw = serde_json::json!({ "id": token }).to_string().into_bytes();
+        let opened = PitOpenResponse::new(&open, &profile, raw).unwrap();
+        assert_eq!(opened.pit_id.len(), 608);
+        let mut continued = request("logs-*", r#"{"size":0,"sort":["_shard_doc"]}"#);
+        continued.pit_id = Some(opened.pit_id);
+        continued.search_after = Some("[0]".into());
+        assert!(continued.prepare().is_ok());
+        assert!(validate_pit_id(&"p".repeat(MAX_PIT_ID_BYTES)).is_ok());
+        assert!(validate_pit_id(&"p".repeat(MAX_PIT_ID_BYTES + 1)).is_err());
+    }
+
+    #[test]
+    fn adding_a_snapshot_cannot_exceed_the_total_request_body_limit() {
+        let raw = serde_json::json!({
+            "query": { "term": { "field": "a".repeat(MAX_BODY_BYTES - 1024) } }
+        })
+        .to_string();
+        assert!(raw.len() < MAX_BODY_BYTES);
+        let mut continued = request("logs-*", &raw);
+        continued.pit_id = Some("p".repeat(2048));
+        continued.search_after = Some("[0]".into());
+        assert_eq!(continued.prepare().unwrap_err().code, "invalidQuery");
     }
 }

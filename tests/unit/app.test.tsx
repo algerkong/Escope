@@ -22,14 +22,16 @@ async function settings(user: ReturnType<typeof userEvent.setup>, name = '常规
 describe('workbench', () => {
   it('starts empty, keeps AI closed and never sends a request', async () => {
     await mount();
-    expect((screen.getByLabelText('查询 DSL') as HTMLTextAreaElement).value).toContain('match_all');
-    expect(screen.getByRole('button', { name: '执行查询' })).toBeDisabled();
+    expect(screen.getByRole('tab', { name: '数据预览' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByRole('textbox', { name: '查询 DSL' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '打开索引' })).toBeDisabled();
     expect(screen.queryByRole('complementary', { name: 'AI 助手' })).not.toBeInTheDocument();
     expect(screen.getByText('浏览器预览 · 仅本次会话', { selector: '.session-banner' })).toBeInTheDocument();
     expect(screen.queryByLabelText('当前连接')).not.toBeInTheDocument();
   });
   it('retains query text, target, result view and AI state across settings', async () => {
     const user = await mount();
+    await user.click(screen.getAllByRole('tab')[1]!);
     const editor = screen.getByLabelText('查询 DSL');
     fireEvent.change(editor, { target: { value: '{"id":9007199254740993}' } });
     await user.type(screen.getByLabelText('索引或匹配模式'), 'orders-*');
@@ -73,10 +75,11 @@ describe('workbench', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(screen.getByLabelText('当前连接')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '返回查询' }));
+    await user.click(screen.getByRole('button', { name: '新建查询' }));
     fireEvent.change(screen.getByLabelText('查询 DSL'), { target: { value: '{"first":true}' } });
     const secondId = (await service.load()).connections[1]!.id;
     await user.selectOptions(screen.getByLabelText('当前连接'), secondId);
-    expect(screen.getByLabelText('查询 DSL')).not.toHaveValue('{"first":true}');
+    expect(screen.queryByLabelText('查询 DSL')).not.toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText('当前连接'), id);
     expect(screen.getByLabelText('查询 DSL')).toHaveValue('{"first":true}');
   });
@@ -120,6 +123,7 @@ describe('workbench', () => {
     const a = await service.saveConnection({ displayName: 'A', endpoint: 'https://a.test', environment: 'development' });
     const b = await service.saveConnection({ displayName: 'B', endpoint: 'https://b.test', environment: 'development' });
     const user = await mount(service);
+    await user.click(screen.getAllByRole('tab')[1]!);
     fireEvent.change(screen.getByLabelText('查询 DSL'), { target: { value: '{"retained":true}' } });
     const realSelect = service.selectConnection;
     service.selectConnection = vi.fn().mockRejectedValue({ code: 'storageUnavailable' });
@@ -138,6 +142,7 @@ describe('workbench', () => {
     const a = await service.saveConnection({ displayName: 'A', endpoint: 'https://a.test', environment: 'development' });
     await service.saveConnection({ displayName: 'B', endpoint: 'https://b.test', environment: 'development' });
     const user = await mount(service);
+    await user.click(screen.getAllByRole('tab')[1]!);
     fireEvent.change(screen.getByLabelText('查询 DSL'), { target: { value: '{"beforeDelete":true}' } });
     await settings(user, '连接中心');
     await user.click(screen.getByRole('button', { name: '删除 A' }));
@@ -147,11 +152,31 @@ describe('workbench', () => {
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: '删除' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     await user.click(screen.getByRole('button', { name: '返回查询' }));
-    await user.click(screen.getAllByRole('tab')[0]!);
+    await user.click(screen.getAllByRole('tab')[1]!);
     expect(screen.getByLabelText('查询 DSL')).toHaveValue('{"beforeDelete":true}');
     expect(screen.getByText('原连接已移除，此草稿未被重新绑定。')).toBeInTheDocument();
     expect(screen.queryByLabelText('当前连接')).not.toBeInTheDocument();
   });
+  it('renders the model settings panel and keeps a stored profile across settings round trips', async () => {
+    const user = await mount();
+    await settings(user, 'AI 模型');
+    expect(await screen.findByText('尚未配置模型')).toBeInTheDocument();
+    expect(screen.queryByText('当前构建尚未接入模型服务。')).not.toBeInTheDocument();
+    await user.click(screen.getAllByRole('button', { name: '添加模型' })[0]!);
+    const dialog = screen.getByRole('dialog');
+    await user.type(within(dialog).getByLabelText('名称'), '本地模型');
+    await user.selectOptions(within(dialog).getByLabelText('协议'), 'ollama');
+    await user.type(within(dialog).getByLabelText('端点'), 'http://127.0.0.1:11434');
+    await user.type(within(dialog).getByLabelText('模型 ID'), 'llama3');
+    await user.click(within(dialog).getByRole('button', { name: '保存' }));
+    expect(await screen.findByText('本地模型')).toBeInTheDocument();
+    expect(screen.getByText('尚未验证')).toBeInTheDocument();
+    // The app owns one model service, so the profile survives a settings round trip.
+    await user.click(screen.getByRole('button', { name: '返回查询' }));
+    await settings(user, 'AI 模型');
+    expect(await screen.findByText('本地模型')).toBeInTheDocument();
+  });
+
   it('keeps startup defaults unchanged until next launch and supports keyboard tabs', async () => {
     const user = await mount();
     await settings(user);

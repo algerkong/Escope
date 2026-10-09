@@ -805,9 +805,12 @@ mod tests {
                 connection_id: search_profile.id.clone(),
                 index: "logs-*".into(),
                 raw_dsl: SEARCH_BODY.into(),
+                pit_id: None,
+                search_after: None,
             },
             &search_profile,
             raw,
+            None,
         )
         .unwrap();
         assert!(decoded.partial);
@@ -1159,5 +1162,101 @@ mod tests {
             .iter()
             .filter_map(|entry| entry.get("name")?.as_str())
             .find(|name| !name.starts_with('.'))
+    }
+    #[tokio::test]
+    #[ignore = "Explicit local ES 7.17.25 authorization and running service required"]
+    async fn local_elasticsearch_71725_pit_pagination_round_trip() {
+        assert_eq!(std::env::var("ESCOPE_TEST_ES_71725").as_deref(), Ok("1"));
+        let profile = profile("http://127.0.0.1:9200".into());
+        let client = ReadOnlyClient::new().unwrap();
+        // Open a snapshot over the authorized indices.
+        let opened = crate::query::PitOpenRequest {
+            request_id: Uuid::new_v4().to_string(),
+            connection_id: profile.id.clone(),
+            index: "*".into(),
+        };
+        let target = opened.target().unwrap();
+        let raw = client
+            .execute(
+                crate::query::pit_open_plan(&profile, &target).unwrap(),
+                &mut Cancellation::never(),
+            )
+            .await
+            .unwrap();
+        let pit = crate::query::PitOpenResponse::new(&opened, &profile, raw).unwrap();
+        assert!(!pit.pit_id.is_empty());
+        // Read only hit metadata, never _source. Page one must already belong to this PIT.
+        let first = crate::query::QueryExecuteRequest {
+            request_id: Uuid::new_v4().to_string(),
+            connection_id: profile.id.clone(),
+            index: "*".into(),
+            raw_dsl: r#"{"size":1,"_source":false,"sort":["_shard_doc"],"track_total_hits":true}"#
+                .into(),
+            pit_id: Some(pit.pit_id.clone()),
+            search_after: None,
+        };
+        let prepared = first.prepare().unwrap();
+        assert!(prepared.continuation);
+        let raw = client
+            .execute(
+                crate::query::paginated_search_plan(&profile, prepared.body).unwrap(),
+                &mut Cancellation::never(),
+            )
+            .await
+            .unwrap();
+        let first_response =
+            crate::query::QueryExecuteResponse::new(&first, &profile, raw, first.pit_id.as_deref())
+                .unwrap();
+        let body: serde_json::Value = serde_json::from_str(&first_response.raw_response).unwrap();
+        let hits = body["hits"]["hits"].as_array().unwrap();
+        assert!(
+            !hits.is_empty(),
+            "The authorized PIT test needs at least one existing hit"
+        );
+        assert!(hits.iter().all(|hit| hit.get("_source").is_none()));
+        let cursor = serde_json::to_string(hits[0].get("sort").unwrap()).unwrap();
+        let continued = crate::query::QueryExecuteRequest {
+            request_id: Uuid::new_v4().to_string(),
+            connection_id: profile.id.clone(),
+            index: "*".into(),
+            raw_dsl: first.raw_dsl.clone(),
+            pit_id: first_response.pit_id,
+            search_after: Some(cursor),
+        };
+        let prepared = continued.prepare().unwrap();
+        let raw = client
+            .execute(
+                crate::query::paginated_search_plan(&profile, prepared.body).unwrap(),
+                &mut Cancellation::never(),
+            )
+            .await
+            .unwrap();
+        let response = crate::query::QueryExecuteResponse::new(
+            &continued,
+            &profile,
+            raw,
+            continued.pit_id.as_deref(),
+        )
+        .unwrap();
+        assert!(response.pit_id.is_some());
+        let next: serde_json::Value = serde_json::from_str(&response.raw_response).unwrap();
+        assert!(next["hits"]["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|hit| hit.get("_source").is_none()));
+        // Close the snapshot so the cluster does not have to expire it.
+        client
+            .execute(
+                crate::query::pit_close_plan(
+                    &profile,
+                    response.pit_id.as_deref().unwrap_or(&pit.pit_id),
+                )
+                .unwrap(),
+                &mut Cancellation::never(),
+            )
+            .await
+            .unwrap();
+        // Never print index names, documents, addresses or response bodies.
     }
 }

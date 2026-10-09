@@ -26,7 +26,14 @@ export function CommandPalette({ kind, commands, onClose }:
     if (!command || command.disabledReason) return;
     executed.current = true;
     onClose();
-    requestAnimationFrame(command.run);
+    requestAnimationFrame(() => {
+      command.run();
+      requestAnimationFrame(() => {
+        if (document.activeElement !== document.body && document.activeElement !== null) return;
+        if (previousFocus.current?.isConnected) previousFocus.current.focus();
+        else document.querySelector<HTMLElement>('.query-tab [aria-selected="true"]')?.focus();
+      });
+    });
   };
   return <Dialog.Root open onOpenChange={(value) => { if (!value) onClose(); }}>
     <Dialog.Portal><Dialog.Overlay className="dialog-overlay" />

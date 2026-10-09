@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isIncomplete, parseQueryResult, sliceRaw } from '../../src/domain/query-result';
+import { formatRawJson, isIncomplete, MAX_PIT_ID_LENGTH, parseQueryResult, sliceRaw } from '../../src/domain/query-result';
 
 /** Built as text so the unsafe integer never passes through `JSON.parse`. */
 const response = `{
@@ -43,15 +43,31 @@ describe('lossless _search response parsing', () => {
     expect(first?.index).toBe('orders-1');
     expect(first?.score).toBe('null');
     expect(first?.hasSource).toBe(true);
-    expect(first?.columns).toEqual([
+    expect(first?.columns.map(({ name, preview, nested }) => ({ name, preview, nested }))).toEqual([
       { name: 'id', preview: '9007199254740993', nested: false },
       { name: 'price', preview: '1.1000000000000001', nested: false },
-      { name: 'nested', preview: '{ "a": 1 }', nested: true },
-      { name: 'tags', preview: '["x", "y"]', nested: true },
+      { name: 'nested', preview: '{"a":1}', nested: true },
+      { name: 'tags', preview: '["x","y"]', nested: true },
     ]);
     expect(second?.hasSource).toBe(false);
     expect(second?.source).toBeNull();
-    expect(second?.columns).toEqual([{ name: 'amount', preview: '[12.5]', nested: true }]);
+    expect(second?.columns.map(({ name, preview, nested }) => ({ name, preview, nested }))).toEqual([{ name: 'amount', preview: '[12.5]', nested: true }]);
+  });
+
+  it('keeps whitespace inside nested strings and discovers every source column', () => {
+    const properties = Array.from({ length: 40 }, (_, index) => `"field_${index}":${index}`).join(',');
+    const parsed = parseQueryResult(`{"hits":{"hits":[{"_source":{${properties},"nested":{"value":"a  b\\t c","n":9007199254740993}}}]}}`);
+    if (!parsed.ok) throw new Error('expected a parsed response');
+    expect(parsed.summary.hits[0]?.columns).toHaveLength(41);
+    expect(parsed.summary.hits[0]?.columns.at(-1)?.preview).toBe('{"value":"a  b\\t c","n":9007199254740993}');
+  });
+
+  it('indents JSON with whitespace edits only and leaves malformed responses untouched', () => {
+    const raw = '{"n":9007199254740993,"price":1.1000000000000000001,"exponent":1E+400,"text":"a  b","escape":"\\u0061"}';
+    expect(formatRawJson(raw)).toBe('{\n  "n": 9007199254740993,\n  "price": 1.1000000000000000001,\n  "exponent": 1E+400,\n  "text": "a  b",\n  "escape": "\\u0061"\n}');
+    expect(formatRawJson('[1,9007199254740993]')).toBe('[\n  1,\n  9007199254740993\n]');
+    expect(formatRawJson('{"n": 1,')).toBe('{"n": 1,');
+    expect(formatRawJson('{"n":1,"n":2}')).toBe('{"n":1,"n":2}');
   });
 
   it('slices the verbatim document source for the detail view', () => {
@@ -110,5 +126,48 @@ describe('lossless _search response parsing', () => {
     if (!parsed.ok) throw new Error('expected a parsed response');
     expect(isIncomplete(parsed.summary, false)).toBe(false);
     expect(isIncomplete(parsed.summary, true)).toBe(true);
+  });
+});
+
+describe('snapshot continuation parsing', () => {
+  it('accepts multi-index PIT ids up to the same 64 KiB bound as Rust', () => {
+    for (const length of [608, MAX_PIT_ID_LENGTH]) {
+      const parsed = parseQueryResult(`{"pit_id":"${'p'.repeat(length)}","hits":{"hits":[]}}`);
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) expect(parsed.summary.pitId).toHaveLength(length);
+    }
+    expect(parseQueryResult(`{"pit_id":"${'p'.repeat(MAX_PIT_ID_LENGTH + 1)}","hits":{"hits":[]}}`).ok).toBe(false);
+  });
+  it('reads the snapshot id and per-hit sort cursors verbatim', () => {
+    const withPit = `{
+      "pit_id": "pit-abc-123",
+      "took": 1, "timed_out": false,
+      "_shards": { "total": 1, "successful": 1, "failed": 0 },
+      "hits": { "total": { "value": 2, "relation": "eq" }, "hits": [
+        { "_index": "orders-1", "_id": "a", "_source": { "n": 1 }, "sort": [9007199254740993, "tie"] },
+        { "_index": "orders-1", "_id": "b", "_source": { "n": 2 }, "sort": [1.1000000000000000001] }
+      ] }
+    }`;
+    const parsed = parseQueryResult(withPit);
+    if (!parsed.ok) throw new Error('expected a parsed response');
+    expect(parsed.summary.pitId).toBe('pit-abc-123');
+    const [first, second] = parsed.summary.hits;
+    expect(first?.sort).not.toBeNull();
+    expect(sliceRaw(withPit, first!.sort!)).toBe('[9007199254740993, "tie"]');
+    expect(sliceRaw(withPit, second!.sort!)).toBe('[1.1000000000000000001]');
+  });
+
+  it('stays null without a snapshot and rejects an unusable snapshot id', () => {
+    const plain = '{"took":1,"timed_out":false,"_shards":{"total":1,"successful":1,"failed":0},'
+      + '"hits":{"hits":[{"_index":"i","_id":"x","_source":{}}]}}';
+    const parsed = parseQueryResult(plain);
+    if (!parsed.ok) throw new Error('expected a parsed response');
+    expect(parsed.summary.pitId).toBeNull();
+    expect(parsed.summary.hits[0]?.sort).toBeNull();
+    // A present but unusable id rejects the body: it would be used verbatim in the next request.
+    for (const pit of ['42', '""', '"pit with space"']) {
+      const raw = `{"pit_id": ${pit}, "took":1, "timed_out":false, "_shards":{"total":1,"successful":1,"failed":0}, "hits":{"hits":[]}}`;
+      expect(parseQueryResult(raw).ok, pit).toBe(false);
+    }
   });
 });

@@ -1,19 +1,26 @@
-import { FileSearch, LoaderCircle, MonitorX, Search, TriangleAlert, XCircle } from 'lucide-react';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Check, CheckCheck, ChevronDown, Copy, Info, LoaderCircle, MonitorX, Search, TriangleAlert, XCircle } from 'lucide-react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { EmptyState, IconButton, Modal } from '../../components/controls';
 import type { ExecutionState, QueryDocument } from '../../domain/query';
-import { sliceRaw, type ResultHit } from '../../domain/query-result';
-import type { ExecutionEntry } from './useQueryExecutions';
+import { formatRawJson, sliceRaw, type ResultHit } from '../../domain/query-result';
+import { supportsSnapshotPaging } from '../../domain/query-pagination';
+import { INITIAL_RESULT_GRID_STATE, type ResultGridState } from '../../domain/result-grid';
+import { QueryResultGrid, type GridScrollPosition } from './QueryResultGrid';
+import type { ExecutionEntry, ExecutionPage } from './useQueryExecutions';
 import { executionErrorKey } from './error-message';
 import { useCopyText } from './useCopyText';
 
-/** Bounded page size: a large response never renders every row into the DOM at once. */
-const PAGE_SIZE = 50;
-const MAX_COLUMNS = 8;
 const IDLE: ExecutionState = { status: 'idle' };
+const EMPTY_PAGES: readonly ExecutionPage[] = [];
 
 interface Props {
+  kind?: 'preview' | 'query';
+  active?: boolean;
+  documentIds?: readonly string[];
+  wrapJson?: boolean;
+  grouping?: boolean;
+  renderToolbar?: (summary: ReactNode, controls: ReactNode) => ReactNode;
   query: QueryDocument;
   entry: ExecutionEntry | undefined;
   available: boolean;
@@ -21,7 +28,10 @@ interface Props {
   endpointChanged: boolean;
   onCancel: () => void;
   onRun: () => void;
+  canRun?: boolean;
   onViewChange: (view: QueryDocument['resultView']) => void;
+  /** Continue the execution inside its snapshot; only offered when a cursor exists. */
+  onLoadMore: () => void;
 }
 
 /**
@@ -30,71 +40,124 @@ interface Props {
  * number. Failed, cancelled and partial executions stay visually distinct from success, and
  * an unavailable (browser) workspace offers neither a request nor a retry.
  */
-export function QueryResults({ query, entry, available, stale, endpointChanged, onCancel, onRun, onViewChange }: Props) {
+export function QueryResults({ kind = 'query', active = true, documentIds, wrapJson = false, grouping = true, renderToolbar, query, entry, available, stale, endpointChanged, onCancel, onRun, canRun = true, onViewChange, onLoadMore }: Props) {
   const { t, i18n } = useTranslation();
-  const copy = useCopyText();
-  const [page, setPage] = useState(0);
-  const [detail, setDetail] = useState<ResultHit | null>(null);
+  const copy = useCopyText(query.id);
+  const [gridStates, setGridStates] = useState<Record<string, { executionKey: string; value: ResultGridState }>>({});
+  const [selectedDetail, setDetail] = useState<{ hit: ResultHit; page: number; queryId: string; requestKey: string | null } | null>(null);
+  const scroll = useRef(new Map<string, { executionKey: string; table?: GridScrollPosition; json?: GridScrollPosition }>());
+  const jsonViewport = useRef<HTMLPreElement>(null);
   const state = entry?.state ?? IDLE;
   const parsed = entry?.parsed ?? null;
+  const pages = entry?.pages ?? EMPTY_PAGES;
+  const continuing = entry?.continuing ?? false;
+  const continuationError = entry?.continuationError ?? null;
   const requestKey = 'snapshot' in state ? state.snapshot.requestId : null;
-  useEffect(() => { setPage(0); setDetail(null); }, [requestKey]);
-  // A body that failed to parse is still shown verbatim; only a transport failure has none.
-  const raw = state.status === 'success' || state.status === 'partial' ? state.rawResponse : entry?.rawResponse ?? null;
-  const summary = parsed?.ok ? parsed.summary : null;
-  const columns = useMemo(() => {
-    const names: string[] = [];
-    for (const hit of summary?.hits ?? []) {
-      for (const column of hit.columns) if (!names.includes(column.name)) names.push(column.name);
-      if (names.length >= MAX_COLUMNS) break;
+  const detail = selectedDetail?.queryId === query.id && selectedDetail.requestKey === requestKey && active ? selectedDetail : null;
+  useEffect(() => { setDetail(null); }, [query.id, requestKey, active]);
+  const executionKey = requestKey ?? query.id;
+  const savedGrid = gridStates[query.id];
+  const gridState = savedGrid?.executionKey === executionKey ? savedGrid.value
+    : savedGrid ? { ...savedGrid.value, pageIndex: 0, rowSelection: {} } : INITIAL_RESULT_GRID_STATE;
+  const lastPage = pages[pages.length - 1];
+  const savedScroll = scroll.current.get(query.id);
+  const positions = savedScroll?.executionKey === executionKey ? savedScroll : undefined;
+  const recordScroll = (view: 'table' | 'json', position: GridScrollPosition) => {
+    const previous = scroll.current.get(query.id);
+    scroll.current.set(query.id, { ...(previous?.executionKey === executionKey ? previous : {}), executionKey, [view]: position });
+  };
+  useLayoutEffect(() => {
+    const saved = scroll.current.get(query.id);
+    const position = saved?.executionKey === executionKey ? saved.json : undefined;
+    if (jsonViewport.current) {
+      jsonViewport.current.scrollTop = position?.top ?? 0;
+      jsonViewport.current.scrollLeft = position?.left ?? 0;
     }
-    return names;
-  }, [summary]);
-  const hits = summary?.hits ?? [];
-  const pageCount = Math.max(1, Math.ceil(hits.length / PAGE_SIZE));
-  const currentPage = Math.min(page, pageCount - 1);
-  const rows = hits.slice(currentPage * PAGE_SIZE, currentPage * PAGE_SIZE + PAGE_SIZE);
+  }, [query.id, query.resultView, executionKey]);
+  useEffect(() => {
+    if (!documentIds) return;
+    const live = new Set(documentIds);
+    for (const id of scroll.current.keys()) if (!live.has(id)) scroll.current.delete(id);
+    setGridStates((current) => {
+      const kept = Object.entries(current).filter(([id]) => live.has(id));
+      return kept.length === Object.keys(current).length ? current : Object.fromEntries(kept);
+    });
+  }, [documentIds]);
+  // A body that failed to parse is still shown verbatim; only a transport failure has none.
+  const raw = lastPage?.rawResponse ?? entry?.rawResponse
+    ?? (state.status === 'success' || state.status === 'partial' ? state.rawResponse : null);
+  const formattedRaw = useMemo(() => raw === null ? null : formatRawJson(raw), [raw]);
+  const summary = parsed?.ok ? parsed.summary : null;
+  // Every received page contributes rows; each row remembers the page it came from, so the detail
+  // view slices that page's verbatim body and never an offset into a newer one.
+  const displayHits = useMemo(() => pages.flatMap((page, pageIndex) =>
+    page.summary.hits.map((hit, position) => ({ hit, pageIndex, position }))), [pages]);
+  const columns = useMemo(() => {
+    const names = new Set<string>();
+    for (const { hit } of displayHits) {
+      for (const column of hit.columns) names.add(column.name);
+    }
+    return [...names];
+  }, [displayHits]);
+  const hits = displayHits;
   const totals = summary?.totals ?? null;
-  const documentText = detail && raw
-    ? detail.source ? sliceRaw(raw, detail.source) : detail.fields ? sliceRaw(raw, detail.fields) : ''
+  const totalText = totals === null ? '' : new Intl.NumberFormat(i18n.language, { useGrouping: grouping }).format(BigInt(totals.text));
+  const hitsText = totals === null ? t('queryLive:hitsUnknown')
+    : t(totals.relation === 'gte' ? 'queryLive:hitsGte' : 'queryLive:hitsEq', { value: totalText });
+  const canContinue = (state.status === 'success' || state.status === 'partial') && lastPage !== undefined;
+  const allLoaded = lastPage?.summary.hits.length === 0 || (totals?.relation === 'eq' && totals.text === String(hits.length));
+  const hasSnapshot = entry?.pitId != null && continuationError !== 'notFound' && !endpointChanged;
+  const managedPaging = useMemo(() => 'snapshot' in state && supportsSnapshotPaging(state.snapshot.rawDsl), [state]);
+  const detailRaw = detail ? pages[detail.page]?.rawResponse ?? null : null;
+  const documentText = detail && detailRaw
+    ? detail.hit.source ? sliceRaw(detailRaw, detail.hit.source) : detail.hit.fields ? sliceRaw(detailRaw, detail.hit.fields) : ''
     : '';
+  const sourceText = detail?.hit.source && detailRaw ? sliceRaw(detailRaw, detail.hit.source) : null;
+  const fieldsText = detail?.hit.fields && detailRaw ? sliceRaw(detailRaw, detail.hit.fields) : null;
+  const formattedSource = useMemo(() => sourceText === null ? null : formatRawJson(sourceText), [sourceText]);
+  const formattedFields = useMemo(() => fieldsText === null ? null : formatRawJson(fieldsText), [fieldsText]);
+  const title = t(kind === 'preview' ? 'queryLive:dataPreview' : 'query:results');
   const errorKey = (code: string) => executionErrorKey(code, (key) => i18n.exists(key));
 
   const copyNote = copy.status === 'idle' ? null
     : <span className={`ql-copy-note ${copy.status === 'failed' ? 'failed' : 'done'}`} role="status">
       {copy.status === 'failed' ? t('queryLive:copyFailed') : t('queryLive:copied')}</span>;
 
-  const table = <div className="ql-table-wrap"><table className="ql-table">
-    <thead><tr><th>#</th><th>_index</th><th>_id</th>{columns.map((name) => <th key={name}>{name}</th>)}</tr></thead>
-    <tbody>{rows.map((hit, offset) => {
-      const position = currentPage * PAGE_SIZE + offset;
-      return <tr key={`${hit.id}-${position}`}>
-        <td className="muted">{position + 1}</td>
-        <td>{hit.index ?? '—'}</td>
-        <td><span className="ql-document-id">{hit.id}<IconButton icon={FileSearch}
-          label={t('queryLive:documentDetail', { id: hit.id })} onClick={() => setDetail(hit)} /></span></td>
-        {columns.map((name) => {
-          const column = hit.columns.find((entryColumn) => entryColumn.name === name);
-          return <td key={name} className={column?.nested ? 'ql-cell-nested' : undefined}>{column?.preview ?? '—'}</td>;
-        })}
-      </tr>;
-    })}</tbody>
-  </table></div>;
-
-  const pager = hits.length > PAGE_SIZE ? <div className="ql-page">
-    <span>{t('queryLive:rowsCapped', { shown: rows.length, total: hits.length })}</span>
-    <button type="button" className="secondary compact-button" disabled={currentPage === 0}
-      onClick={() => setPage(currentPage - 1)}>{t('queryLive:prevPage')}</button>
-    <span>{t('queryLive:pageLabel', { page: currentPage + 1, total: pageCount })}</span>
-    <button type="button" className="secondary compact-button" disabled={currentPage >= pageCount - 1}
-      onClick={() => setPage(currentPage + 1)}>{t('queryLive:nextPage')}</button>
+  // The footer distinguishes local pages from fetching another page of the same snapshot.
+  const pagingHint = [t('queryLive:loadMoreHint'), pages.length > 1 ? t('queryLive:loadedPages', { count: pages.length }) : null]
+    .filter(Boolean).join('\n');
+  const pagingNote = (text: string, complete = false) => <span className="ql-paging-note" role="img" tabIndex={0}
+    aria-label={text} title={text}>{complete ? <CheckCheck size={15} aria-hidden="true" /> : <Info size={15} aria-hidden="true" />}</span>;
+  const continuation = canContinue ? <div className="ql-continuation">
+    {allLoaded ? pagingNote(t('queryLive:allRowsLoaded'), true)
+      : (lastPage?.cursor ?? null) !== null && hasSnapshot
+      ? <button type="button" className="secondary compact-button ql-load-more" disabled={continuing} onClick={onLoadMore} title={pagingHint}>
+        {continuing ? <LoaderCircle size={13} className="spin" aria-hidden="true" /> : <ChevronDown size={13} aria-hidden="true" />}
+        {t(continuing ? 'queryLive:loadingMore' : 'queryLive:loadMore')}
+      </button>
+      : (lastPage?.cursor ?? null) !== null && managedPaging
+        ? <button type="button" className="secondary compact-button" disabled={!canRun} onClick={onRun}>{t('queryLive:rerun')}</button>
+      : (lastPage?.cursor ?? null) !== null ? pagingNote(t('queryLive:unmanagedCursor'))
+      : pagingNote(t('queryLive:loadMoreNeedsSort'))}
   </div> : null;
 
+  const table = <QueryResultGrid key={query.id} rows={displayHits} fieldNames={columns} state={gridState} executionKey={executionKey}
+    active={active} scrollPosition={positions?.table} onScrollPositionChange={(position) => recordScroll('table', position)}
+    onStateChange={(value) => setGridStates((current) => ({ ...current, [query.id]: { executionKey, value } }))}
+    onDocument={({ hit, pageIndex }) => setDetail({ hit, page: pageIndex, queryId: query.id, requestKey })}
+    footerActions={continuation} />;
+
   const rawBlock = raw === null ? null : <>
-    <pre className="ql-pre">{raw}</pre>
-    <div className="ql-detail-actions">
-      <button type="button" className="secondary compact-button" onClick={() => copy.copy(raw)}>{t('queryLive:copyResponse')}</button>
-      {copyNote}
+    <pre ref={jsonViewport} className="ql-pre" data-wrap={wrapJson}
+      onScroll={(event) => recordScroll('json', { top: event.currentTarget.scrollTop, left: event.currentTarget.scrollLeft })}>{formattedRaw}</pre>
+    <div className="ql-result-footer">
+      {summary ? <span className="ql-status">{t('resultGrid:rowsLoaded', { count: hits.length })}</span> : null}
+      {pages.length > 1 ? <span className="ql-status">{t('queryLive:rawLatestPage')}</span> : null}
+      <div className="ql-footer-actions">
+        {copyNote}
+        <IconButton icon={Copy} label={t('queryLive:copyResponse')} onClick={() => copy.copy(raw)} />
+        {continuation}
+      </div>
     </div>
   </>;
 
@@ -102,16 +165,18 @@ export function QueryResults({ query, entry, available, stale, endpointChanged, 
   if (!available) {
     content = <EmptyState icon={MonitorX} title={t('queryLive:desktopOnly')} description={t('queryLive:desktopOnlyDetail')} />;
   } else if (state.status === 'idle') {
-    content = <EmptyState icon={Search} title={t('query:noResults')} description={t('query:noResultsDetail')} />;
+    content = <EmptyState icon={Search}
+      title={t(kind === 'preview' ? 'queryLive:previewEmpty' : 'query:noResults')}
+      description={t(kind === 'preview' ? 'queryLive:previewEmptyDetail' : 'query:noResultsDetail')} />;
   } else if (state.status === 'running') {
     content = <div className="empty-state"><LoaderCircle className="empty-icon spin" size={28} /><p>{t('queryLive:running')}</p></div>;
   } else if (state.status === 'cancelled') {
     content = <EmptyState icon={XCircle} title={t('queryLive:cancelledTitle')} description={t('queryLive:cancelledDetail')}>
-      <button type="button" className="secondary" onClick={onRun}>{t('queryLive:rerun')}</button></EmptyState>;
+      <button type="button" className="secondary" disabled={!canRun} onClick={onRun}>{t('queryLive:rerun')}</button></EmptyState>;
   } else if (state.status === 'failed') {
     content = <>
       <EmptyState icon={TriangleAlert} title={t('queryLive:failedTitle')} description={t(errorKey(state.code))}>
-        <button type="button" className="secondary" onClick={onRun}>{t('queryLive:rerun')}</button>
+        <button type="button" className="secondary" disabled={!canRun} onClick={onRun}>{t('queryLive:rerun')}</button>
       </EmptyState>
       {query.resultView === 'json' ? rawBlock : null}
     </>;
@@ -122,38 +187,49 @@ export function QueryResults({ query, entry, available, stale, endpointChanged, 
   } else if (hits.length === 0) {
     content = <EmptyState icon={Search} title={t('queryLive:noHits')} description={t('queryLive:noHitsDetail')} />;
   } else {
-    content = <>{table}{pager}</>;
+    content = table;
   }
 
-  return <section className="results-section" aria-label={t('query:results')}>
-    <div className="results-toolbar">
-      <h2>{t('query:results')}</h2>
+  const toolbarSummary = <div className="ql-summary">
       {state.status === 'running' ? <span className="ql-status" role="status"><LoaderCircle size={13} className="spin" />{t('queryLive:running')}</span> : null}
       {state.status === 'failed' ? <span className="ql-status-chip failed">{t('queryLive:failedTitle')}</span> : null}
       {state.status === 'cancelled' ? <span className="ql-status-chip cancelled">{t('queryLive:cancelledTitle')}</span> : null}
       {state.status === 'success' || state.status === 'partial' ? <>
-        <span className={`ql-status-chip ${state.status === 'partial' ? 'partial' : 'success'}`}>
-          {state.status === 'partial' ? t('queryLive:statusPartial') : t('queryLive:statusSuccess')}</span>
-        <span className="ql-status">{totals === null ? t('queryLive:hitsUnknown')
-          : totals.relation === 'gte' ? t('queryLive:hitsGte', { value: totals.text })
-          : t('queryLive:hitsEq', { value: totals.text })}</span>
-        {summary?.tookMs != null ? <span className="ql-status">{t('queryLive:took', { value: summary.tookMs })}</span> : null}
-        <span className="ql-status">{t('queryLive:returnedRows', { count: hits.length })}</span>
+        {kind === 'preview' && state.status === 'success'
+          ? <span className="ql-status-indicator success" role="img" aria-label={t('queryLive:statusSuccess')} title={t('queryLive:statusSuccess')}>
+            <Check size={15} aria-hidden="true" /></span>
+          : <span className={`ql-status-chip ${state.status === 'partial' ? 'partial' : 'success'}`}>
+            {state.status === 'partial' ? t('queryLive:statusPartial') : t('queryLive:statusSuccess')}</span>}
+        <span className="ql-status ql-hit-count" title={hitsText}>{hitsText}</span>
+        {summary?.tookMs != null ? <span className="ql-status ql-timing">
+          {t(kind === 'preview' ? 'queryLive:tookCompact' : 'queryLive:took', { value: summary.tookMs })}</span> : null}
       </> : null}
-      <div className="ql-toolbar-end">
-        {state.status === 'running' ? <button type="button" className="secondary compact-button" onClick={onCancel}>{t('queryLive:cancel')}</button> : null}
+    </div>;
+  const toolbarControls = <div className="ql-toolbar-end">
+        {state.status === 'running' || continuing ? <button type="button" className="secondary compact-button" onClick={onCancel}>{t('queryLive:cancel')}</button> : null}
         <div className="segment" role="group" aria-label={t('query:resultView')}>
           {(['table', 'json'] as const).map((view) => <button key={view} type="button"
             aria-pressed={query.resultView === view} onClick={() => onViewChange(view)}>{t(`query:${view}`)}</button>)}
         </div>
-      </div>
-    </div>
-    {'snapshot' in state ? <div className="ql-result-origin" aria-label={t('queryLive:executionTarget')}>
+      </div>;
+
+  return <section className="results-section" data-kind={kind} aria-label={title}>
+    {renderToolbar ? renderToolbar(toolbarSummary, toolbarControls) : <div className="results-toolbar">
+      {kind === 'query' ? <h2>{title}</h2> : null}
+      {toolbarSummary}{toolbarControls}
+    </div>}
+    {kind === 'query' && 'snapshot' in state ? <div className="ql-result-origin" aria-label={t('queryLive:executionTarget')}>
       <span>{entry?.endpoint}</span><span>{state.snapshot.index}</span>
     </div> : null}
-    {stale || endpointChanged || state.status === 'partial' ? <div className="ql-notices">
+    {stale || endpointChanged || state.status === 'partial' || continuationError !== null ? <div className="ql-notices">
       {stale ? <div className="notice warning" role="status"><span>{t('queryLive:staleResult')}</span></div> : null}
       {endpointChanged ? <div className="notice warning" role="status"><span>{t('queryLive:endpointChanged')}</span></div> : null}
+      {continuationError !== null ? <div className={`notice ${continuationError === 'cancelled' ? 'neutral' : 'warning'}`} role="status">
+        {continuationError !== 'cancelled' ? <TriangleAlert size={16} /> : null}<div>
+        {continuationError === 'cancelled' ? t('queryLive:loadMoreCancelled')
+          : continuationError === 'notFound' ? t('queryLive:pitExpired')
+          : `${t('queryLive:loadMoreFailed')} ${t(errorKey(continuationError))}`}
+      </div></div> : null}
       {state.status === 'partial' ? <div className="notice warning" role="status"><TriangleAlert size={16} /><div>
         <div>{t('queryLive:partialDetail')}</div>
         {summary?.timedOut ? <div>{t('queryLive:timedOut')}</div> : null}
@@ -166,26 +242,26 @@ export function QueryResults({ query, entry, available, stale, endpointChanged, 
     </div> : null}
     <div className="ql-results-body">{content}</div>
     <Modal open={detail !== null} onClose={() => setDetail(null)}
-      title={t('queryLive:documentDetail', { id: detail?.id ?? '' })} description={t('queryLive:detailHint')}>
+      title={t('queryLive:documentDetail', { id: detail?.hit.id ?? '' })} description={t('queryLive:detailHint')}>
       {detail ? <>
         <dl className="ql-detail-meta">
-          <dt>_index</dt><dd>{detail.index ?? '—'}</dd>
-          <dt>_id</dt><dd>{detail.id}</dd>
-          <dt>_score</dt><dd>{detail.score ?? '—'}</dd>
+          <dt>_index</dt><dd>{detail.hit.index ?? '—'}</dd>
+          <dt>_id</dt><dd>{detail.hit.id}</dd>
+          <dt>_score</dt><dd>{detail.hit.score ?? '—'}</dd>
         </dl>
-        {detail.hasSource && detail.source && raw ? <>
+        {detail.hit.hasSource && detail.hit.source && detailRaw ? <>
           <h3 className="subheading">{t('queryLive:detailSource')}</h3>
-          <pre className="ql-pre">{sliceRaw(raw, detail.source)}</pre>
+          <pre className="ql-pre" data-wrap={wrapJson}>{formattedSource}</pre>
         </> : <p className="muted small">{t('queryLive:noSource')}</p>}
-        {detail.fields && raw ? <>
+        {detail.hit.fields && detailRaw ? <>
           <h3 className="subheading">{t('queryLive:detailFields')}</h3>
-          <pre className="ql-pre">{sliceRaw(raw, detail.fields)}</pre>
+          <pre className="ql-pre" data-wrap={wrapJson}>{formattedFields}</pre>
         </> : null}
         <div className="ql-detail-actions">
           <button type="button" className="secondary compact-button" disabled={documentText === ''}
             onClick={() => copy.copy(documentText)}>{t('queryLive:copyDocument')}</button>
-          <button type="button" className="secondary compact-button" disabled={raw === null}
-            onClick={() => { if (raw !== null) copy.copy(raw); }}>{t('queryLive:copyResponse')}</button>
+          <button type="button" className="secondary compact-button" disabled={detailRaw === null}
+            onClick={() => { if (detailRaw !== null) copy.copy(detailRaw); }}>{t('queryLive:copyResponse')}</button>
           {copyNote}
         </div>
       </> : null}

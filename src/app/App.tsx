@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Command as CommandIcon, Database, LoaderCircle, ScanLine, Search, Settings, ShieldCheck, TriangleAlert } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { createQuery, switchConnection, type QueryDocument, type WorkspaceState } from '../domain/query';
+import {
+  addWorkspaceTab, closeWorkspaceTab, createIndexTab, createQuery, createWorkspace,
+  selectWorkspaceTab, switchConnection, updateWorkspaceDocument, type QueryDocument, type WorkspaceState,
+} from '../domain/query';
 import { selectConnection, type ConnectionInput } from '../domain/connection';
 import { parsePreferences, resolveLocale, type Preferences } from '../domain/preferences';
+import type { AiChatBackend } from '../domain/ai-chat';
 import type { StorageService, StoredState } from '../services/storage';
 import { errorCode, testConnection, type QueryBackend } from '../services/ipc';
+import { createModelService, type ModelService } from '../services/models';
 import { connectionTestLabel, useConnectionTests } from '../features/connections/useConnectionTests';
-import { IconButton } from '../components/controls';
+import { IconButton, SelectControl } from '../components/controls';
 import { WindowTitleBar } from '../components/window/WindowTitleBar';
 import { QueryWorkspace, type QueryCommand } from '../features/query/QueryWorkspace';
 import { SettingsView } from './SettingsView';
@@ -32,8 +37,9 @@ export function applyPreferences(p: Preferences) {
   if (i18n.language !== locale) void i18n.changeLanguage(locale);
 }
 
-export function App({ service, initial, connectionProbe = testConnection, queryBackend }:
-  { service: StorageService; initial: StoredState; connectionProbe?: typeof testConnection; queryBackend?: QueryBackend }) {
+export function App({ service, initial, connectionProbe = testConnection, queryBackend, aiBackend, modelService: suppliedModelService }:
+  { service: StorageService; initial: StoredState; connectionProbe?: typeof testConnection; queryBackend?: QueryBackend;
+    aiBackend?: AiChatBackend; modelService?: ModelService }) {
   const { t } = useTranslation();
   const [preferences, setPreferences] = useState(initial.preferences);
   const preferencesRef = useRef(preferences);
@@ -41,11 +47,17 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
   const preferenceQueue = useRef(Promise.resolve());
   const [profiles, setProfiles] = useState(initial.connections);
   const connectionTests = useConnectionTests(connectionProbe);
-  const [state, setState] = useState<WorkspaceState>(() => {
+  const [state, renderWorkspace] = useState<WorkspaceState>(() => {
     const activeConnectionId = selectConnection(initial.connections, initial.activeConnectionId);
-    const query = createQuery(activeConnectionId, initial.preferences.startView);
-    return { activeConnectionId, activeQueryId: query.id, queries: [query] };
+    return createWorkspace(activeConnectionId, initial.preferences.startView);
   });
+  const workspaceRef = useRef(state);
+  // Reserve new tabs synchronously so repeated activation cannot start duplicate previews.
+  const setState = useCallback((change: (current: WorkspaceState) => WorkspaceState) => {
+    const next = change(workspaceRef.current);
+    workspaceRef.current = next;
+    renderWorkspace(next);
+  }, []);
   const [view, setView] = useState<'query' | 'settings'>('query');
   const [route, setRoute] = useState<SettingsRoute>('general');
   const [aiOpen, setAI] = useState(initial.preferences.startAI);
@@ -55,7 +67,13 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
   const mutationLock = useRef(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [selectionError, setSelectionError] = useState<{ id: string; code: string } | null>(null);
+  const selectionQueue = useRef(Promise.resolve());
+  const selectionVersion = useRef(0);
+  const selectionPending = useRef(0);
   const [savingPreferences, setSavingPreferences] = useState(false);
+  // Created once: the desktop adapter uses typed IPC, the browser preview keeps an explicit
+  // session store. A failed desktop call is never answered from memory.
+  const [modelService] = useState(() => suppliedModelService ?? createModelService());
   const preferenceVersion = useRef(0);
 
   useEffect(() => {
@@ -92,23 +110,66 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
   }, []);
   const backToQuery = useCallback(() => {
     setView('query');
-    requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('.dsl-editor textarea')?.focus());
+    requestAnimationFrame(() => document.querySelector<HTMLElement>('.query-tab button[aria-selected="true"]')?.focus());
   }, []);
-  const addQuery = useCallback(() => {
-    setState((current) => {
-      const query = createQuery(current.activeConnectionId, startupView.current);
-      return { ...current, activeQueryId: query.id, queries: [...current.queries, query] };
+  const queueSelection = useCallback((id: string) => {
+    const version = ++selectionVersion.current;
+    selectionPending.current++;
+    const write = selectionQueue.current.then(() => service.selectConnection(id))
+      .finally(() => { selectionPending.current--; });
+    selectionQueue.current = write.catch(() => undefined);
+    return { version, write };
+  }, [service]);
+  const navigateWorkspace = useCallback((change: (current: WorkspaceState) => WorkspaceState) => {
+    const previous = workspaceRef.current;
+    let next = change(previous);
+    // Historical tabs may outlive a deleted connection; never select that deleted ID in the explorer.
+    if (!profiles.some((profile) => profile.id === next.activeConnectionId)) {
+      next = { ...next, activeConnectionId: selectConnection(profiles, previous.activeConnectionId) };
+    }
+    setState(() => next);
+    const id = next.activeConnectionId;
+    if (id !== null && (id !== previous.activeConnectionId || selectionPending.current > 0)) {
+      const { version, write } = queueSelection(id);
+      void write.then(() => {
+        if (version === selectionVersion.current) setSelectionError(null);
+      }).catch((error: unknown) => {
+        if (version === selectionVersion.current) setSelectionError({ id, code: errorCode(error) });
+      });
+    } else selectionVersion.current++;
+  }, [profiles, queueSelection, setState]);
+  const addQuery = useCallback((source?: QueryDocument) => {
+    navigateWorkspace((current) => {
+      const query = createQuery(source ? source.connectionId : current.activeConnectionId, startupView.current);
+      if (source) query.index = source.index;
+      return addWorkspaceTab(current, { kind: 'query', document: query });
     });
     setView('query');
-  }, []);
+    requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('.query-editor-section textarea')?.focus());
+  }, [navigateWorkspace]);
+  const selectTab = useCallback((id: string | null) => {
+    navigateWorkspace((current) => selectWorkspaceTab(current, id));
+  }, [navigateWorkspace]);
+  const openIndex = useCallback((connectionId: string, index: string) => {
+    const existing = workspaceRef.current.tabs.find((tab) => tab.kind === 'index'
+      && tab.document.connectionId === connectionId && tab.document.index === index.trim());
+    const tab = existing ?? createIndexTab(connectionId, index, startupView.current);
+    navigateWorkspace((current) => addWorkspaceTab(current, tab));
+    return { document: tab.document, created: existing === undefined };
+  }, [navigateWorkspace]);
   const mutate = async (action: () => Promise<void>) => {
     if (mutationLock.current) throw { code: 'busy' };
     mutationLock.current = true; setBusy(true);
     try { await action(); } finally { mutationLock.current = false; setBusy(false); }
   };
   const chooseConnection = (id: string) => mutate(async () => {
-    await service.selectConnection(id);
-    setState((current) => switchConnection(current, id, startupView.current));
+    const { version, write } = queueSelection(id);
+    try { await write; } catch (error) {
+      if (version === selectionVersion.current) throw error;
+      return;
+    }
+    if (version !== selectionVersion.current) return;
+    setState((current) => switchConnection(current, id));
     setSelectionError(null);
   });
   const saveConnection = (input: ConnectionInput, id?: string) => mutate(async () => {
@@ -118,30 +179,23 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
     setProfiles(next);
     setState((current) => {
       const active = selectConnection(next, current.activeConnectionId);
-      return active === current.activeConnectionId ? current : switchConnection(current, active, startupView.current);
+      return active === current.activeConnectionId ? current : switchConnection(current, active);
     });
   });
   const removeConnection = (id: string) => mutate(async () => {
+    selectionVersion.current++;
     await service.deleteConnection(id);
     connectionTests.invalidate(id, true);
     const next = profiles.filter((profile) => profile.id !== id);
     setProfiles(next);
     setState((current) => {
       const active = selectConnection(next, current.activeConnectionId);
-      return active === current.activeConnectionId ? current : switchConnection(current, active, startupView.current);
+      return active === current.activeConnectionId ? current : switchConnection(current, active);
     });
   });
   const updateQuery = (id: string, patch: Partial<Pick<QueryDocument, 'name' | 'index' | 'dsl' | 'resultView'>>) =>
-    setState((current) => ({
-      ...current, queries: current.queries.map((query) => query.id === id
-        ? { ...query, ...patch, revision: patch.resultView ? query.revision : query.revision + 1 }
-        : query),
-    }));
-  const closeQuery = (id: string) => setState((current) => {
-    const remaining = current.queries.filter((query) => query.id !== id);
-    if (!remaining.length) remaining.push(createQuery(current.activeConnectionId, startupView.current));
-    return { ...current, queries: remaining, activeQueryId: current.activeQueryId === id ? remaining[0]!.id : current.activeQueryId };
-  });
+    setState((current) => updateWorkspaceDocument(current, id, patch));
+  const closeTab = (id: string) => navigateWorkspace((current) => closeWorkspaceTab(current, id));
 
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
@@ -160,9 +214,13 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
   const active = profiles.find((profile) => profile.id === state.activeConnectionId);
   const commands: Command[] = palette === 'jump'
     ? [
-      ...state.queries.map((query, position) => ({
-        id: query.id, title: query.name || `${t('query:title')} ${position + 1}`, keywords: 'query 查询',
-        run: () => { setState((current) => ({ ...current, activeQueryId: query.id })); backToQuery(); },
+      ...state.tabs.map((tab, position) => ({
+        id: tab.document.id,
+        title: tab.kind === 'index'
+          ? `${tab.document.index} (${profiles.find((profile) => profile.id === tab.document.connectionId)?.displayName ?? t('removedConnection')})`
+          : tab.document.name || `${t('query:title')} ${state.tabs.slice(0, position + 1).filter((item) => item.kind === 'query').length}`,
+        keywords: tab.kind === 'index' ? 'index data 索引 数据' : 'query 查询',
+        run: () => { selectTab(tab.document.id); backToQuery(); },
       })),
       ...settingsRoutes.map((item) => ({
         id: item, title: t(`settings:${item}`), keywords: `settings 设置 ${item}`,
@@ -184,13 +242,13 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
         <span className="workspace-title">{t('workspace')}</span></div>
       <div className="header-actions">
         <div className="active-connection"><Database size={15} />
-          {profiles.length > 1 ? <select aria-label={t('connections:target')} value={state.activeConnectionId ?? ''} disabled={busy}
+          {profiles.length > 1 ? <SelectControl aria-label={t('connections:target')} value={state.activeConnectionId ?? ''} disabled={busy}
             onChange={(event) => {
               const id = event.target.value;
               void chooseConnection(id).catch((error: unknown) => setSelectionError({ id, code: errorCode(error) }));
             }}>
             {profiles.map((profile) => <option value={profile.id} key={profile.id}>{profile.displayName}</option>)}
-          </select> : <span>{active?.displayName ?? t('noConnection')}</span>}
+          </SelectControl> : <span>{active?.displayName ?? t('noConnection')}</span>}
         </div>
         <IconButton icon={Search} label={t('jump')} onClick={() => setPalette('jump')} />
         <IconButton icon={CommandIcon} label={t('command')} onClick={() => setPalette('command')} />
@@ -208,10 +266,12 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
     <div className="view-container" hidden={view !== 'query'}>
       <QueryWorkspace state={state} profiles={profiles} preferences={preferences} aiOpen={aiOpen} testResults={connectionTests.results}
         backend={queryBackend} canQuery={service.kind === 'desktop'} active={view === 'query'} onCommandReady={setQueryCommand}
+        modelService={modelService} aiBackend={aiBackend}
         toggleAI={() => setAI((value) => !value)} onSettings={openSettings} updateQuery={updateQuery}
-        selectQuery={(id) => setState((current) => ({ ...current, activeQueryId: id }))} addQuery={addQuery} closeQuery={closeQuery} />
+        selectTab={selectTab} openIndex={openIndex} addQuery={addQuery} closeTab={closeTab} />
     </div>
     {view === 'settings' ? <SettingsView route={route} navigate={openSettings} back={backToQuery} preferences={preferences}
+      modelService={modelService} aiBackend={aiBackend}
       updatePreferences={updatePreferences} connections={profiles} activeId={state.activeConnectionId} busy={busy}
       canTest={service.kind === 'desktop'} testResults={connectionTests.results}
       testConnection={(id) => {
@@ -219,8 +279,11 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
         if (service.kind === 'desktop' && profile && !mutationLock.current) void connectionTests.run(profile);
       }}
       selectConnection={chooseConnection} saveConnection={saveConnection} deleteConnection={removeConnection} /> : null}
-    <footer className="app-footer"><span><ShieldCheck size={13} />{t('readOnly')}</span><span title={active?.displayName}><span className="status-dot" />
-      {t(active ? connectionTestLabel(connectionTests.results[active.id]) : 'notConnected')}</span>
+    <footer className="app-footer">
+      <span className="app-footer-mode" role="img" aria-label={t('readOnly')} title={t('readOnly')}><ShieldCheck size={14} aria-hidden="true" /></span>
+      {!active || connectionTests.results[active.id] ? <span className="app-footer-connection" title={active?.displayName} role="status">
+        <span className="status-dot" />
+        {t(active ? connectionTestLabel(connectionTests.results[active.id]) : 'notConnected')}</span> : null}
       <span className="footer-spacer" /><span>{savingPreferences ? <LoaderCircle size={13} className="spin" /> : null}
         {t(service.kind === 'desktop' ? 'desktop' : 'session')}</span><span>v0.1.0</span></footer>
     {palette ? <CommandPalette key={palette} kind={palette} commands={commands} onClose={() => setPalette(null)} /> : null}

@@ -539,6 +539,12 @@ pub struct ExecutionSnapshot {
     pub raw_dsl: String,
     pub revision: u64,
     pub started_at: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::data_views::optional_selection"
+    )]
+    pub data_view: Option<crate::data_views::DataViewSelection>,
 }
 
 /// Debug output must never leak a frozen request body: the DSL is a byte length only.
@@ -865,6 +871,9 @@ impl VisualOriginal {
 impl ExecutionHistoryEntry {
     fn validate(&self) -> Result<(), AppError> {
         self.snapshot.validate()?;
+        if matches!(self.kind, HistoryKind::Index) && self.snapshot.data_view.is_some() {
+            return Err(invalid());
+        }
         validate_name(&self.name)?;
         let pending = matches!(
             self.status,
@@ -927,6 +936,9 @@ impl ExecutionSnapshot {
         }
         if !valid_timestamp(&self.started_at) {
             return Err(invalid());
+        }
+        if let Some(selection) = &self.data_view {
+            selection.validate(Some(&self.connection_id), &self.index)?;
         }
         Ok(())
     }
@@ -1206,6 +1218,7 @@ mod tests {
             raw_dsl: dsl.to_owned(),
             revision: 2,
             started_at: START.to_owned(),
+            data_view: None,
         }
     }
 
@@ -2326,5 +2339,78 @@ mod tests {
         let mut invalid = encoded(&document);
         invalid["workspace"]["tabs"][0]["kind"] = serde_json::json!("index");
         refused(&invalid, "data view on index tab");
+    }
+
+    #[test]
+    fn execution_format_copies_survive_reopen_and_stay_independent_of_the_draft() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("history-formats.sqlite");
+        let mut database = Database::open(&path).unwrap();
+        let formats: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/data-view-field-formats-v1.json"
+        ))
+        .unwrap();
+        let mut history = entry("formatted-request", "{\"n\":9007199254740993}");
+        let selection = serde_json::json!({
+            "version": 1,
+            "definition": {
+                "id": "removed-view", "name": "Original format",
+                "connectionId": CONNECTION, "index": "orders", "defaultTimeField": null,
+                "fieldFormats": formats["entries"][0]["fieldFormats"]
+            }
+        });
+        history.snapshot.data_view = Some(serde_json::from_value(selection).unwrap());
+        let mut tab = query_tab("formatted-query", "{ changed").with_index("orders");
+        tab.document.data_view = history.snapshot.data_view.clone();
+        tab.document
+            .data_view
+            .as_mut()
+            .unwrap()
+            .definition
+            .field_formats = None;
+        let document = base_document(vec![tab], vec![history]);
+        save(&mut database, 0, document.clone()).unwrap();
+        drop(database);
+        let database = Database::open(&path).unwrap();
+        let restored = load(&database).unwrap().document;
+        assert_eq!(restored, document);
+        assert!(restored.history[0]
+            .snapshot
+            .data_view
+            .as_ref()
+            .unwrap()
+            .definition
+            .field_formats
+            .is_some());
+        assert!(restored.workspace.0.as_ref().unwrap().tabs[0]
+            .document
+            .data_view
+            .as_ref()
+            .unwrap()
+            .definition
+            .field_formats
+            .is_none());
+        assert!(database.data_views().unwrap().library.entries.is_empty());
+
+        for (key, value) in [
+            ("dataView", serde_json::Value::Null),
+            ("connectionId", serde_json::json!("other")),
+            ("index", serde_json::json!("other")),
+        ] {
+            let mut invalid = encoded(&document);
+            invalid["history"][0]["snapshot"][key] = value;
+            refused(&invalid, "invalid execution selection");
+        }
+        let mut invalid = encoded(&document);
+        invalid["history"][0]["kind"] = serde_json::json!("index");
+        refused(&invalid, "format copy on index execution");
+        let mut invalid = encoded(&document);
+        invalid["history"][0]["snapshot"]["dataView"]["definition"]["fieldFormats"]["version"] =
+            serde_json::json!(2);
+        refused(&invalid, "future format version in history");
+        let mut invalid = encoded(&document);
+        invalid["history"][0]["snapshot"]["dataView"]["definition"]["fieldFormats"]["entries"][0]
+            ["format"]["html"] = serde_json::json!("<b>fixture</b>");
+        refused(&invalid, "unknown format option in history");
     }
 }

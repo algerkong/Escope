@@ -65,6 +65,8 @@
 
 .rg-cell { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: pre; }
 .rg-cell, .rg-header-label { -webkit-user-select: text; user-select: text; }
+.rg-cell[data-field-format="formatted"] { text-decoration: underline dotted var(--border); text-underline-offset: 3px; }
+.rg-toolbar-end .icon-button[aria-pressed="true"] { color: var(--accent); background: var(--subtle); }
 
 .rg-id-cell { display: flex; align-items: center; gap: 2px; min-width: 0; }
 .rg-id-cell .rg-cell { flex: 1 1 auto; }

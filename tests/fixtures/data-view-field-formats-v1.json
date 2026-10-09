@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "formatted-view",
+      "name": "Formatted events",
+      "connectionId": "connection-a",
+      "index": "events-*",
+      "defaultTimeField": "@timestamp",
+      "fieldFormats": {
+        "version": 1,
+        "entries": [
+          { "field": "sequence", "format": { "kind": "number", "grouping": true } },
+          { "field": "ratio", "format": { "kind": "percent", "grouping": false } },
+          { "field": "size", "format": { "kind": "bytes", "grouping": true } },
+          { "field": "@timestamp", "format": { "kind": "date", "input": "iso" } },
+          { "field": "epoch", "format": { "kind": "date", "input": "epoch_millis" } }
+        ]
+      }
+    }
+  ]
+}

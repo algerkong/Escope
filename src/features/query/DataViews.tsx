@@ -1,4 +1,4 @@
-import { Clock3, Database, FilePlus2, LoaderCircle, Pencil, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
+import { ALargeSmall, Clock3, Database, FilePlus2, LoaderCircle, Pencil, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
 import { useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { IconButton, Modal, SelectControl } from '../../components/controls';
@@ -12,6 +12,7 @@ import type { FieldCatalog } from '../../domain/resource';
 import type { DataViewsController } from './useDataViews';
 import type { Loadable } from './useQueryResources';
 import { resourceErrorKey } from './error-message';
+import { EMPTY_FIELD_FORMATS, FieldFormatsEditor } from './FieldFormatsEditor';
 import '../../styles/data-views.css';
 
 function currentCatalog(fields: Loadable<FieldCatalog>): FieldCatalog | undefined {
@@ -50,6 +51,9 @@ export function DataViewTarget({ query, library, fields, disabled, onSelect, onI
           {t(`dataViews:time_${fieldStatus}`)}</span></span>
       <IconButton icon={RefreshCw} label={t('dataViews:inspectFields')} disabled={!canInspect}
         onClick={onInspect} />
+      {selected.fieldFormats?.entries.length ? <span className="data-view-time">
+        <ALargeSmall size={14} aria-hidden="true" />{t('dataViews:formatCount', { count: selected.fieldFormats.entries.length })}
+      </span> : null}
       {changed && ready ? <span className="data-view-warning" role="status">
         {t(stored ? 'dataViews:definitionChanged' : 'dataViews:definitionRemoved')}</span> : null}
     </> : null}
@@ -119,6 +123,7 @@ export function DataViewsDialog({ library, kind, profiles, initialConnectionId, 
                 <strong>{entry.name}</strong>
                 <span>{connection?.displayName ?? t('removedConnection')}: {entry.index}</span>
                 <span><Clock3 size={12} aria-hidden="true" />{entry.defaultTimeField ?? t('dataViews:noTimeField')}</span>
+                {entry.fieldFormats?.entries.length ? <span>{t('dataViews:formatCount', { count: entry.fieldFormats.entries.length })}</span> : null}
               </div>
               <IconButton icon={FilePlus2} label={t('dataViews:openQuery')} disabled={!canEdit || !connection || !onOpenQuery}
                 onClick={() => { onOpenQuery?.(entry); onClose(); }} />
@@ -203,6 +208,8 @@ function DataViewEditor({ source, profiles, initialConnectionId, available, disa
     {readError ? <span className="data-view-warning" role="alert">{t(resourceErrorKey(readError, i18n.exists.bind(i18n)))}</span> : null}
     {catalog ? <span className="muted">{catalog.fields.length === 0 ? t('dataViews:emptyFields')
       : t('dataViews:fieldCount', { count: catalog.fields.length })}</span> : null}
+    <FieldFormatsEditor value={draft.fieldFormats ?? EMPTY_FIELD_FORMATS} catalog={catalog} disabled={disabled}
+      onChange={(fieldFormats) => setDraft({ ...draft, fieldFormats })} />
     <div className="dialog-actions">
       <button type="button" className="secondary" onClick={onCancel}>{t('cancel')}</button>
       <button type="submit" className="primary" disabled={saveDisabled}><Save size={14} />{t('save')}</button>

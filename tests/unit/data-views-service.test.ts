@@ -6,10 +6,21 @@ import { createDataViewService, createSessionDataViewService, desktopDataViewSer
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(), isTauri: vi.fn() }));
 beforeEach(() => { vi.resetAllMocks(); vi.mocked(isTauri).mockReturnValue(true); });
 const library: DataViewLibrary = { version: 1, entries: [
-  { id: 'view', connectionId: 'connection', name: 'Events', index: 'events-*', defaultTimeField: '@timestamp' },
+  { id: 'view', connectionId: 'connection', name: 'Events', index: 'events-*', defaultTimeField: '@timestamp',
+    fieldFormats: { version: 1, entries: [{ field: 'n', format: { kind: 'number', grouping: true } }] } },
 ] };
 
 describe('Data View IPC', () => {
+  it('refuses unsupported nested format options on reads and before writes without stripping them silently', async () => {
+    const invalid = structuredClone(library);
+    Object.assign(invalid.entries[0]!.fieldFormats!.entries[0]!.format, { html: '<b>fixture</b>' });
+    await expect(desktop.save(0, invalid)).rejects.toMatchObject({ code: 'invalidInput' });
+    expect(invoke).not.toHaveBeenCalled();
+    vi.mocked(invoke).mockResolvedValue({ revision: 1, library: invalid });
+    await expect(desktop.load()).rejects.toMatchObject({ code: 'invalidResponse' });
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('data_views_load');
+  });
+
   it('loads strict typed records and saves only a bounded library plus CAS revision', async () => {
     vi.mocked(invoke).mockResolvedValue({ revision: 0, library: emptyDataViews() });
     await expect(desktop.load()).resolves.toEqual({ revision: 0, library: emptyDataViews() });
@@ -53,6 +64,7 @@ describe('session Data Views', () => {
       .rejects.toMatchObject({ code: 'invalidInput' });
     const copy = await service.load();
     Object.assign(copy.library.entries[0]!, { name: 'mutated' });
+    Object.assign(copy.library.entries[0]!.fieldFormats!.entries[0]!.format, { grouping: false });
     expect((await service.load()).library).toEqual(library);
     expect((await createSessionDataViewService().load()).library.entries).toEqual([]);
     expect(invoke).not.toHaveBeenCalled();

@@ -7,6 +7,13 @@ fn fixture() -> DataViewLibrary {
     serde_json::from_str(include_str!("../../../tests/fixtures/data-views-v1.json")).unwrap()
 }
 
+fn formatted_fixture() -> DataViewLibrary {
+    serde_json::from_str(include_str!(
+        "../../../tests/fixtures/data-view-field-formats-v1.json"
+    ))
+    .unwrap()
+}
+
 fn populated(database: &mut Database) -> DataViewLibrary {
     let profile = database
         .save_connection(
@@ -369,4 +376,148 @@ fn selections_round_trip_through_saved_queries_but_never_cross_targets_or_accept
         changed["entries"][0][key] = json!("other");
         assert!(crate::saved_queries::decode_library(&changed.to_string()).is_err());
     }
+}
+
+#[test]
+fn field_format_fixture_round_trips_without_changing_legacy_definitions() {
+    let formatted = formatted_fixture();
+    formatted.validate().unwrap();
+    let raw: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/data-view-field-formats-v1.json"
+    ))
+    .unwrap();
+    assert_eq!(serde_json::to_value(&formatted).unwrap(), raw);
+    assert!(fixture().entries[0].field_formats.is_none());
+    let serialized = serde_json::to_value(fixture()).unwrap();
+    assert!(serialized["entries"][0].get("fieldFormats").is_none());
+}
+
+#[test]
+fn field_formats_refuse_unknown_executable_or_ambiguous_options() {
+    let base = serde_json::to_value(formatted_fixture()).unwrap();
+    for format in [
+        json!(null),
+        json!({"kind": "number"}),
+        json!({"kind": "number", "grouping": "true"}),
+        json!({"kind": "number", "grouping": true, "decimals": 2}),
+        json!({"kind": "date", "input": "local"}),
+        json!({"kind": "date", "input": "iso", "timezone": "auto"}),
+        json!({"kind": "html", "template": "<b>value</b>"}),
+        json!({"kind": "script", "source": "fetch('/')"}),
+        json!({"kind": "url", "url": "https://fixture.test"}),
+    ] {
+        let mut value = base.clone();
+        value["entries"][0]["fieldFormats"]["entries"][0]["format"] = format;
+        assert!(decode_stored(&value.to_string()).is_err());
+    }
+    for formats in [
+        json!(null),
+        json!({"version": 2, "entries": []}),
+        json!({"version": 1, "entries": [], "headers": {}}),
+    ] {
+        let mut value = base.clone();
+        value["entries"][0]["fieldFormats"] = formats;
+        assert!(decode_stored(&value.to_string()).is_err());
+    }
+    let duplicate_option = r#"{"version":1,"entries":[{"id":"v","name":"V","connectionId":"c","index":"a","defaultTimeField":null,"fieldFormats":{"version":1,"entries":[{"field":"n","format":{"kind":"number","grouping":true,"grouping":false}}]}}]}"#;
+    assert!(decode_stored(duplicate_option).is_err());
+    let duplicate_version = r#"{"version":1,"entries":[{"id":"v","name":"V","connectionId":"c","index":"a","defaultTimeField":null,"fieldFormats":{"version":1,"version":1,"entries":[]}}]}"#;
+    assert!(decode_stored(duplicate_version).is_err());
+}
+
+#[test]
+fn field_formats_bound_field_names_count_and_serialized_bytes() {
+    let base = serde_json::to_value(formatted_fixture()).unwrap();
+    for field in ["", " n", "n ", "\u{7f}", "\u{85}", &"x".repeat(1025)] {
+        let mut value = base.clone();
+        value["entries"][0]["fieldFormats"]["entries"][0]["field"] = json!(field);
+        assert!(decode_stored(&value.to_string()).is_err());
+    }
+    let mut value = base.clone();
+    let entries: Vec<Value> = (0..32)
+        .map(|index| json!({"field": format!("n{index}"), "format": {"kind":"number","grouping":true}}))
+        .collect();
+    value["entries"][0]["fieldFormats"]["entries"] = json!(entries);
+    decode_stored(&value.to_string()).unwrap();
+    value["entries"][0]["fieldFormats"]["entries"][1]["field"] = json!("n0");
+    assert!(decode_stored(&value.to_string()).is_err());
+    let mut too_many = entries.clone();
+    too_many.push(json!({"field":"extra","format":{"kind":"number","grouping":true}}));
+    value["entries"][0]["fieldFormats"]["entries"] = json!(too_many);
+    assert!(decode_stored(&value.to_string()).is_err());
+    let large: Vec<Value> = entries
+        .into_iter()
+        .enumerate()
+        .map(|(index, mut entry)| {
+            entry["field"] = json!(format!("{index}{}", "x".repeat(600)));
+            entry
+        })
+        .collect();
+    value["entries"][0]["fieldFormats"]["entries"] = json!(large);
+    assert!(value["entries"][0]["fieldFormats"].to_string().len() > 16 * 1024);
+    assert!(decode_stored(&value.to_string()).is_err());
+}
+
+#[test]
+fn formatted_definitions_survive_cas_reopen_and_do_not_overwrite_invalid_stored_options() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("formats.sqlite");
+    let mut database = Database::open(&path).unwrap();
+    let mut library = populated(&mut database);
+    library.entries[0].field_formats = formatted_fixture().entries[0].field_formats.clone();
+    database.save_data_views(0, &library).unwrap();
+    drop(database);
+    let mut database = Database::open(&path).unwrap();
+    assert_eq!(database.data_views().unwrap().library, library);
+    assert_eq!(
+        database.save_data_views(0, &library).unwrap_err().code,
+        "dataViewConflict"
+    );
+    let raw = Connection::open(&path).unwrap();
+    let mut invalid = serde_json::to_value(&library).unwrap();
+    invalid["entries"][0]["fieldFormats"]["entries"][0]["format"]["script"] = json!("fixture");
+    let invalid = invalid.to_string();
+    raw.execute("UPDATE data_view_library SET json=?1", [&invalid])
+        .unwrap();
+    assert_eq!(database.data_views().unwrap_err().code, "invalidResponse");
+    assert_eq!(
+        database.save_data_views(1, &library).unwrap_err().code,
+        "invalidResponse"
+    );
+    assert_eq!(
+        raw.query_row("SELECT json FROM data_view_library", [], |row| row
+            .get::<_, String>(0))
+            .unwrap(),
+        invalid
+    );
+}
+
+#[test]
+fn saved_query_copies_validate_format_options_and_preserve_exact_dsl() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut database = Database::open(&directory.path().join("saved-formats.sqlite")).unwrap();
+    let definition = formatted_fixture().entries[0].clone();
+    let base = json!({
+        "version": 1, "entries": [{
+            "id": "query", "name": "Draft", "connectionId": definition.connection_id,
+            "index": definition.index, "dsl": "{\"query\":{\"term\":{\"sequence\":9007199254740993}}}",
+            "resultView": "table", "favorite": false, "updatedAt": "2026-10-10T00:00:00.000Z",
+            "dataView": {"version": 1, "definition": definition}
+        }]
+    });
+    let library = crate::saved_queries::decode_library(&base.to_string()).unwrap();
+    crate::saved_queries::save_checked(
+        &mut database,
+        library.clone(),
+        crate::saved_queries::SavedQueryLibrary::empty(),
+        &[],
+    )
+    .unwrap();
+    assert_eq!(
+        crate::saved_queries::load_library(&mut database).unwrap(),
+        library
+    );
+    let mut invalid = base.clone();
+    invalid["entries"][0]["dataView"]["definition"]["fieldFormats"]["version"] = json!(2);
+    assert!(crate::saved_queries::decode_library(&invalid.to_string()).is_err());
 }

@@ -7,15 +7,16 @@ import {
   type ColumnDef, type Header,
 } from '@tanstack/react-table';
 import {
-  ArrowLeft, ArrowRight, ChevronDown, ChevronLeft, ChevronRight, ChevronsUpDown, ChevronUp, Columns3,
+  ALargeSmall, ArrowLeft, ArrowRight, ChevronDown, ChevronLeft, ChevronRight, ChevronsUpDown, ChevronUp, Columns3,
   FileSearch, GripVertical, ListRestart, RotateCcw,
 } from 'lucide-react';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { IconButton, Modal } from '../../components/controls';
 import { TableSelectionStatus } from '../../components/TableSelectionStatus';
 import { useTableRowSelection } from '../../components/useTableRowSelection';
 import type { ResultColumn } from '../../domain/query-result';
+import { formatFieldValue, type DataViewFieldFormats } from '../../domain/field-formats';
 import {
   ID_COLUMN_ID, INDEX_COLUMN_ID, LOCKED_COLUMN_IDS, MAX_COLUMN_WIDTH, MIN_COLUMN_WIDTH, NULL_GRID_VALUE,
   RESULT_GRID_PAGE_SIZE, ROW_COLUMN_ID, ROW_COLUMN_WIDTH, WIDTH_SAMPLE_ROWS,
@@ -45,6 +46,7 @@ interface Props {
   onStateChange: (next: ResultGridState) => void;
   onDocument: (row: ResultGridRow) => void;
   executionKey: string;
+  fieldFormats?: DataViewFieldFormats;
   footerActions?: ReactNode;
 }
 
@@ -148,9 +150,12 @@ function GridHeaderCell({ header, label, chromeLabel, sortDirection, sortable, m
   </th>;
 }
 
-export function QueryResultGrid({ active = true, scrollPosition, onScrollPositionChange, rows, fieldNames, state, onStateChange, onDocument, executionKey, footerActions }: Props) {
+export function QueryResultGrid({ active = true, scrollPosition, onScrollPositionChange, rows, fieldNames, state, onStateChange, onDocument, executionKey, fieldFormats, footerActions }: Props) {
   const { t } = useTranslation();
   const [chooserOpen, setChooserOpen] = useState(false);
+  const [rawExecution, setRawExecution] = useState<string | null>(null);
+  const formatsEnabled = rawExecution !== executionKey;
+  const formats = useMemo(() => new Map(fieldFormats?.entries.map(({ field, format }) => [field, format])), [fieldFormats]);
   const viewport = useRef<HTMLDivElement>(null);
   const initialScroll = useRef(scrollPosition);
   const previousPage = useRef(state.pageIndex);
@@ -193,11 +198,15 @@ export function QueryResultGrid({ active = true, scrollPosition, onScrollPositio
         if (stat === undefined) continue;
         const kind = column.value.kind;
         if (!stat.sortable && (kind === 'number' || kind === 'string' || kind === 'boolean')) stat.sortable = true;
-        if (stat.samples.length < WIDTH_SAMPLE_ROWS) stat.samples.push(column.preview);
+        if (stat.samples.length < WIDTH_SAMPLE_ROWS) {
+          const format = formats.get(column.name);
+          const display = format ? formatFieldValue(column.value, format) : null;
+          stat.samples.push(display?.status === 'formatted' ? display.text : column.preview);
+        }
       }
     }
     return stats;
-  }, [rows, fieldNames]);
+  }, [rows, fieldNames, formats]);
   const sortableIds = useMemo(() => discovered.filter((id) => id === ID_COLUMN_ID || id === INDEX_COLUMN_ID
     || fieldStats.get(fieldNameOfColumnId(id) ?? '')?.sortable === true), [discovered, fieldStats]);
   const sorting = useMemo(() => activeSorting(state.sorting, sortableIds), [state.sorting, sortableIds]);
@@ -431,7 +440,45 @@ export function QueryResultGrid({ active = true, scrollPosition, onScrollPositio
     </span>;
     const field = fieldNameOfColumnId(columnId) ?? '';
     const column = columnsByRowKey.get(`${row.pageIndex}:${row.position}`)?.get(field);
-    return <span className="rg-cell" title={cellTitle(column)}>{column?.preview.replace(/\r/g, '\\r').replace(/\n/g, '\\n').replace(/\t/g, '\\t') ?? '—'}</span>;
+    const format = formatsEnabled ? formats.get(field) : undefined;
+    const display = column && format ? formatFieldValue(column.value, format) : null;
+    const text = display?.status === 'formatted' ? display.text : column?.preview;
+    const original = cellTitle(column);
+    const title = display?.status === 'formatted' ? t('dataViews:formattedValue', { value: original })
+      : display?.status === 'raw' ? t('dataViews:rawFormatValue', { value: original, reason: t(`dataViews:rawReason_${display.reason}`) }) : original;
+    return <span className="rg-cell" data-field-format={display?.status} title={title}>
+      {text?.replace(/\r/g, '\\r').replace(/\n/g, '\\n').replace(/\t/g, '\\t') ?? '—'}
+    </span>;
+  };
+
+  const copyOriginalCells = (event: ClipboardEvent<HTMLTableElement>) => {
+    const element = event.currentTarget;
+    const selection = element.ownerDocument.getSelection();
+    if (!selection || selection.isCollapsed || selection.rangeCount !== 1) return;
+    const range = selection.getRangeAt(0);
+    if (!element.contains(range.startContainer) || !element.contains(range.endContainer)) return;
+    const selectedRows: string[][] = [];
+    let includesFormatted = false;
+    const visibleRows = new Map(rowsModel.map((row) => [row.id, row.original]));
+    for (const row of element.rows) {
+      const cells: string[] = [];
+      const original = visibleRows.get(row.dataset.selectionId ?? '');
+      for (const cell of row.cells) {
+        const text = cell.querySelector('.rg-cell, .rg-header-label');
+        const columnId = cell.dataset.columnId;
+        if (!text || !columnId || !range.intersectsNode(text)) continue;
+        includesFormatted ||= text.getAttribute('data-field-format') === 'formatted';
+        cells.push(!original ? headerLabelOf(columnId) : columnId === ROW_COLUMN_ID ? text.textContent ?? ''
+          : columnId === INDEX_COLUMN_ID ? original.hit.index ?? '' : columnId === ID_COLUMN_ID ? original.hit.id
+            : columnsByRowKey.get(row.dataset.selectionId!)?.get(fieldNameOfColumnId(columnId) ?? '')?.value.text ?? '');
+      }
+      if (cells.length) selectedRows.push(cells);
+    }
+    // A partial selection of a formatted token has no lossless inverse. Copy whole original cells.
+    if (includesFormatted) {
+      event.preventDefault();
+      event.clipboardData.setData('text/plain', selectedRows.map((cells) => cells.join('\t')).join('\n'));
+    }
   };
 
   return <div className="rg-root">
@@ -439,7 +486,7 @@ export function QueryResultGrid({ active = true, scrollPosition, onScrollPositio
       <SortableContext items={movableIds} strategy={horizontalListSortingStrategy}>
         <div ref={viewport} className="rg-scroll" role="region" aria-label={t('queryLive:resultGrid')} tabIndex={0}
           onScroll={(event) => onScrollPositionChange?.({ top: event.currentTarget.scrollTop, left: event.currentTarget.scrollLeft })}>
-          <table className="rg-table" style={{ width: table.getTotalSize() }}>
+          <table className="rg-table" style={{ width: table.getTotalSize() }} onCopy={copyOriginalCells}>
             <thead>
               {table.getHeaderGroups().map((headerGroup) => <tr key={headerGroup.id}>
                 {headerGroup.headers.map((header) => {
@@ -461,7 +508,7 @@ export function QueryResultGrid({ active = true, scrollPosition, onScrollPositio
                   const isNumber = columnId === ROW_COLUMN_ID;
                   const isNested = !isNumber && columnId !== INDEX_COLUMN_ID && columnId !== ID_COLUMN_ID
                     && columnsByRowKey.get(row.id)?.get(fieldNameOfColumnId(columnId) ?? '')?.nested === true;
-                  return <td key={cell.id}
+                  return <td key={cell.id} data-column-id={columnId}
                     className={isNumber ? 'rg-number-cell' : isNested ? 'rg-value-cell rg-nested-cell' : 'rg-value-cell'}>
                     {renderCell(columnId, row.original, pageIndex * pageSize + indexInPage + 1)}
                   </td>;
@@ -490,6 +537,8 @@ export function QueryResultGrid({ active = true, scrollPosition, onScrollPositio
         <TableSelectionStatus count={rowSelection.selectedCount} onClear={rowSelection.clear} />
         {sorting.length > 0 ? <IconButton icon={ListRestart} label={t('resultGrid:clearSort')}
           onClick={() => emit({ sorting: [], pageIndex: 0 })} /> : null}
+        {formats.size > 0 ? <IconButton icon={ALargeSmall} label={t('dataViews:toggleFormats')} aria-pressed={formatsEnabled}
+          onClick={() => setRawExecution(formatsEnabled ? executionKey : null)} /> : null}
         <IconButton icon={Columns3} label={t('resultGrid:columnsButton')} aria-haspopup="dialog"
           aria-expanded={chooserOpen} onClick={() => setChooserOpen(true)} />
         {footerActions}

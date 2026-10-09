@@ -18,7 +18,8 @@ async function fixture(selected = false, removed = false) {
   const a = await storage.saveConnection({ displayName: 'Alpha', endpoint: 'https://a.test', environment: 'development' });
   const b = await storage.saveConnection({ displayName: 'Beta', endpoint: 'https://b.test', environment: 'development' });
   await storage.selectConnection(a.id);
-  const definition: DataViewDefinition = { id: 'view-a', connectionId: a.id, name: 'Events', index: 'events-*', defaultTimeField: '@timestamp' };
+  const definition: DataViewDefinition = { id: 'view-a', connectionId: a.id, name: 'Events', index: 'events-*', defaultTimeField: '@timestamp',
+    fieldFormats: { version: 1, entries: [{ field: 'n', format: { kind: 'number', grouping: true } }] } };
   const other: DataViewDefinition = { id: 'view-b', connectionId: b.id, name: 'Audit', index: 'audit', defaultTimeField: null };
   const dataViews = createSessionDataViewService();
   await dataViews.save(0, { version: 1, entries: [definition, other] });
@@ -59,6 +60,50 @@ async function fixture(selected = false, removed = false) {
 }
 
 describe('Data Views in the query workspace', () => {
+  it('freezes field formats for results/history until a new explicit execution, including raw view and clipboard', async () => {
+    const f = await fixture(true);
+    f.mount();
+    await f.saved();
+    fireEvent.click(screen.getByRole('button', { name: 'Run query' }));
+    const formatted = await screen.findByText('9,007,199,254,740,993');
+    expect(formatted).toHaveAttribute('title', 'Formatted value; original: 9007199254740993');
+    const range = document.createRange();
+    range.selectNodeContents(formatted);
+    document.getSelection()!.removeAllRanges();
+    document.getSelection()!.addRange(range);
+    const clipboardData = { setData: vi.fn() };
+    fireEvent.copy(formatted, { clipboardData });
+    expect(clipboardData.setData).toHaveBeenCalledWith('text/plain', '9007199254740993');
+    document.getSelection()!.removeAllRanges();
+    fireEvent.click(screen.getByRole('button', { name: 'Manage data views' }));
+    const row = screen.getByText('Events', { selector: 'strong' }).closest('li')!;
+    fireEvent.click(within(row).getByRole('button', { name: 'Edit data view' }));
+    await f.user.selectOptions(screen.getByLabelText('Format'), 'percent');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await screen.findByRole('dialog', { name: 'Data Views' });
+    await f.user.keyboard('{Escape}');
+    await f.user.selectOptions(screen.getByLabelText('Data view'), f.definition.id);
+    expect(screen.getByText('9,007,199,254,740,993')).toBeVisible();
+    expect(screen.getByLabelText('Query DSL')).toHaveValue(f.query.dsl);
+    await f.saved();
+    const stored = (await f.recovery.load()).document;
+    expect(stored.history[0]!.snapshot.dataView?.definition.fieldFormats?.entries[0]?.format.kind).toBe('number');
+    expect(stored.workspace!.tabs[0]!.document.dataView?.definition.fieldFormats?.entries[0]?.format.kind).toBe('percent');
+    const toggle = screen.getByRole('button', { name: 'Execution field formats' });
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByText('9007199254740993')).toBeVisible();
+    expect(f.backend.execute).toHaveBeenCalledTimes(1);
+    expect(f.backend.execute.mock.calls[0]![0]).not.toHaveProperty('dataView');
+    expect(f.backend.execute.mock.calls[0]![0]).not.toHaveProperty('fieldFormats');
+    fireEvent.click(screen.getByRole('button', { name: 'Run query' }));
+    expect(await screen.findByText('900,719,925,474,099,300%')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Execution field formats' })).toHaveAttribute('aria-pressed', 'true');
+    expect(f.backend.execute).toHaveBeenCalledTimes(2);
+    expect(f.backend.execute.mock.calls[1]![0].rawDsl).toBe(f.query.dsl);
+    await f.saved();
+  });
+
   it('applies explicitly without execution, keeps old results during definition edits, and preserves settings/locale behavior', async () => {
     const f = await fixture();
     f.mount();

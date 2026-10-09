@@ -1,4 +1,5 @@
 import type { FieldCapability, FieldCatalog } from './resource';
+import { fieldFormatsPayload, parseFieldFormats, type DataViewFieldFormats } from './field-formats';
 
 export const DATA_VIEWS_VERSION = 1;
 export const MAX_DATA_VIEWS = 100;
@@ -13,6 +14,7 @@ export interface DataViewDefinition {
   readonly connectionId: string;
   readonly index: string;
   readonly defaultTimeField: string | null;
+  readonly fieldFormats?: DataViewFieldFormats;
 }
 
 export interface DataViewLibrary {
@@ -35,9 +37,10 @@ const encoder = new TextEncoder();
 const bytes = (value: string) => encoder.encode(value).length;
 const id = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value);
 
-function shape(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
+function shape(value: unknown, keys: readonly string[], optional: readonly string[] = []): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
-    && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+    && Object.keys(value).every((key) => keys.includes(key) || optional.includes(key))
+    && keys.every((key) => Object.hasOwn(value, key));
 }
 
 function noControls(value: string): boolean {
@@ -61,13 +64,16 @@ export function validDataViewTimeField(value: unknown): value is string | null {
 }
 
 export function parseDataViewDefinition(value: unknown): DataViewDefinition | null {
-  if (!shape(value, ['id', 'name', 'connectionId', 'index', 'defaultTimeField'])
+  if (!shape(value, ['id', 'name', 'connectionId', 'index', 'defaultTimeField'], ['fieldFormats'])
     || !id(value.id) || !id(value.connectionId) || typeof value.name !== 'string'
     || value.name.trim() !== value.name || value.name === '' || [...value.name].length > MAX_DATA_VIEW_NAME_CHARS
     || !noControls(value.name) || typeof value.index !== 'string' || !validDataViewIndex(value.index)) return null;
   const field = value.defaultTimeField;
   if (!validDataViewTimeField(field)) return null;
-  return { id: value.id, name: value.name, connectionId: value.connectionId, index: value.index, defaultTimeField: field };
+  const fieldFormats = Object.hasOwn(value, 'fieldFormats') ? parseFieldFormats(value.fieldFormats) : undefined;
+  if (fieldFormats === null) return null;
+  return { id: value.id, name: value.name, connectionId: value.connectionId, index: value.index, defaultTimeField: field,
+    ...(fieldFormats === undefined ? {} : { fieldFormats }) };
 }
 
 export function emptyDataViews(): DataViewLibrary {
@@ -99,7 +105,20 @@ export function parseDataViewRecord(value: unknown): DataViewRecord | null {
 
 export function selectDataView(definition: DataViewDefinition): DataViewSelection {
   const { id, name, connectionId, index, defaultTimeField } = definition;
-  return { version: DATA_VIEWS_VERSION, definition: { id, name, connectionId, index, defaultTimeField } };
+  return { version: DATA_VIEWS_VERSION, definition: { id, name, connectionId, index, defaultTimeField,
+    ...(definition.fieldFormats === undefined ? {} : { fieldFormats: fieldFormatsPayload(definition.fieldFormats) }) } };
+}
+
+export function freezeDataViewSelection(selection: DataViewSelection): DataViewSelection {
+  const copy = { ...selectDataView(selection.definition), version: selection.version };
+  const formats = copy.definition.fieldFormats;
+  if (formats) {
+    for (const entry of formats.entries) { Object.freeze(entry.format); Object.freeze(entry); }
+    Object.freeze(formats.entries);
+    Object.freeze(formats);
+  }
+  Object.freeze(copy.definition);
+  return Object.freeze(copy);
 }
 
 export function parseDataViewSelection(value: unknown, connectionId: string | null, index: string): DataViewSelection | null {
@@ -111,7 +130,8 @@ export function parseDataViewSelection(value: unknown, connectionId: string | nu
 
 export function sameDataView(left: DataViewDefinition, right: DataViewDefinition): boolean {
   return left.id === right.id && left.connectionId === right.connectionId && left.name === right.name
-    && left.index === right.index && left.defaultTimeField === right.defaultTimeField;
+    && left.index === right.index && left.defaultTimeField === right.defaultTimeField
+    && JSON.stringify(left.fieldFormats) === JSON.stringify(right.fieldFormats);
 }
 
 export type TimeFieldStatus = 'none' | 'unchecked' | 'missing' | 'conflict' | 'notDate' | 'notSearchable' | 'valid';

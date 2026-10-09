@@ -161,6 +161,7 @@ export function QueryResults({ kind = 'query', active = true, documentIds, wrapJ
   </div> : null;
 
   const table = <QueryResultGrid key={query.id} rows={displayHits} fieldNames={columns} state={gridState} executionKey={executionKey}
+    fieldFormats={'snapshot' in state ? state.snapshot.dataView?.definition.fieldFormats : undefined}
     active={active} scrollPosition={positions?.table} onScrollPositionChange={(position) => recordScroll('table', position)}
     onStateChange={(value) => {
       setGridStates((current) => ({ ...current, [query.id]: { executionKey, value } }));

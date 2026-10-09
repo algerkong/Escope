@@ -1,7 +1,7 @@
 import { validateQueryDsl, type QueryDslErrorCode } from './query-dsl';
 import { DATA_PREVIEW_DSL } from './query-pagination';
 import type { QueryParameters } from './query-parameters';
-import { parseDataViewSelection, type DataViewSelection } from './data-views';
+import { freezeDataViewSelection, parseDataViewSelection, type DataViewSelection } from './data-views';
 
 export interface QueryDocument {
   readonly id: string;
@@ -23,6 +23,7 @@ export interface ExecutionSnapshot {
   readonly rawDsl: string;
   readonly revision: number;
   readonly startedAt: string;
+  readonly dataView?: DataViewSelection;
 }
 
 export type ExecutionState =
@@ -40,7 +41,7 @@ export function createQuery(connectionId: string | null, view: QueryDocument['re
   };
 }
 
-export type SnapshotRejectionCode = 'noConnection' | 'invalidIndex' | 'invalidTimestamp';
+export type SnapshotRejectionCode = 'noConnection' | 'invalidIndex' | 'invalidTimestamp' | 'invalidDataView';
 
 export interface SnapshotRejection {
   readonly code: QueryDslErrorCode | SnapshotRejectionCode;
@@ -67,6 +68,9 @@ type SnapshotGate =
 function gateSnapshot(query: QueryDocument): SnapshotGate {
   if (!query.connectionId) return { ok: false, code: 'noConnection' };
   if (!query.index.trim()) return { ok: false, code: 'invalidIndex' };
+  if (query.dataView !== undefined && !parseDataViewSelection(query.dataView, query.connectionId, query.index)) {
+    return { ok: false, code: 'invalidDataView' };
+  }
   return { ok: true, connectionId: query.connectionId };
 }
 
@@ -79,6 +83,7 @@ function snapshotFields(
   return {
     requestId, queryId: query.id, connectionId, index: query.index,
     rawDsl: query.dsl, revision: query.revision, startedAt: now.toISOString(),
+    ...(query.dataView === undefined ? {} : { dataView: freezeDataViewSelection(query.dataView) }),
   };
 }
 

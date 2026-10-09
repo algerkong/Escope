@@ -10,6 +10,9 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashSet;
 use tauri::State;
 
+mod field_formats;
+pub use field_formats::FieldFormats;
+
 pub(crate) const VERSION: u32 = 1;
 pub(crate) const MAX_BYTES: usize = 256 * 1024;
 pub(crate) const MAX_REVISION: u64 = 9_007_199_254_740_991;
@@ -23,6 +26,12 @@ pub struct DataViewDefinition {
     pub connection_id: String,
     pub index: String,
     pub default_time_field: Nullable<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "field_formats::optional_formats"
+    )]
+    pub field_formats: Option<FieldFormats>,
 }
 
 fn valid_id(value: &str) -> bool {
@@ -55,6 +64,9 @@ impl DataViewDefinition {
             {
                 return Err(AppError::new("invalidInput"));
             }
+        }
+        if let Some(formats) = &self.field_formats {
+            formats.validate()?;
         }
         Ok(())
     }

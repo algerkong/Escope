@@ -1,6 +1,7 @@
 import { act, renderHook } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { createQuery } from '../../src/domain/query';
+import { selectDataView } from '../../src/domain/data-views';
 import { DATA_PREVIEW_DSL, supportsSnapshotPaging } from '../../src/domain/query-pagination';
 import { useQueryExecutions } from '../../src/features/query/useQueryExecutions';
 import type { ExecutionHistoryEntry } from '../../src/domain/workspace-recovery';
@@ -51,6 +52,30 @@ describe('snapshot paging eligibility', () => {
 });
 
 describe('execution history events', () => {
+  it('uses the original format copy for continuation and never sends presentation options to search or PIT IPC', async () => {
+    const api = backend();
+    const history = vi.fn<(entry: ExecutionHistoryEntry) => void>();
+    const dataView = selectDataView({ id: 'view', name: 'View', connectionId: 'c1', index: 'orders', defaultTimeField: null,
+      fieldFormats: { version: 1, entries: [{ field: 'n', format: { kind: 'number', grouping: true } }] } });
+    const draft = { ...query, dataView };
+    const { result } = renderHook(() => useQueryExecutions(api, history));
+    await act(async () => { await result.current.run(draft, endpoint); });
+    api.execute.mockImplementationOnce(async (request) => response(request, 'second', 2));
+    const changed = selectDataView({ ...dataView.definition,
+      fieldFormats: { version: 1, entries: [{ field: 'n', format: { kind: 'percent', grouping: false } }] } });
+    await act(async () => { await result.current.loadMore({ ...draft, dataView: changed, dsl: '{"size":500}' }); });
+    const state = result.current.entries[query.id]!.state;
+    expect(state.status).toBe('success');
+    expect('snapshot' in state && state.snapshot.dataView).toEqual(dataView);
+    expect(result.current.entries[query.id]!.pages).toHaveLength(2);
+    expect(history.mock.calls[3]![0].snapshot.dataView).toEqual(dataView);
+    expect(history.mock.calls[3]![0].kind).toBe('continuation');
+    expect(history.mock.calls[3]![0].snapshot.dataView).not.toBe(dataView);
+    expect(JSON.stringify([...api.execute.mock.calls, ...api.openPit.mock.calls])).not.toMatch(/fieldFormats|dataView|grouping/);
+    await act(async () => { expect(await result.current.run(draft, endpoint, 'index')).toEqual({ code: 'invalidDataView' }); });
+    expect(api.execute).toHaveBeenCalledTimes(2);
+  });
+
   it('records exact immutable snapshots and honest success without response bodies or PIT ids', async () => {
     const api = backend();
     const history = vi.fn<(entry: ExecutionHistoryEntry) => void>();

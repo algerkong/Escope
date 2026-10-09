@@ -300,7 +300,8 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
 
   const rejectionText = (code: SnapshotRejection['code']) => code.startsWith('dsl') ? t(`query:${code}`)
     : code === 'noConnection' ? t('queryLive:runNeedsConnection')
-      : code === 'invalidIndex' ? t('queryLive:runNeedsIndex') : t('errors:unexpected');
+      : code === 'invalidIndex' ? t('queryLive:runNeedsIndex')
+        : code === 'invalidDataView' ? t('dataViews:invalidSelection') : t('errors:unexpected');
 
   // The palette entry stays owned by the App; only its action and state come from here.
   const runRef = useRef<() => void>(() => {});

@@ -47,6 +47,82 @@ function fill() {
 }
 
 describe('Data View definition editor', () => {
+  it('creates and edits bounded format options without reading fields or running a query', async () => {
+    const service = createSessionDataViewService();
+    const backend = api();
+    render(<Harness service={service} backend={backend} />);
+    await clickNew();
+    fill();
+    fireEvent.click(screen.getByRole('button', { name: 'Add field format' }));
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Field 1'), { target: { value: 'n' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Digit grouping' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add field format' }));
+    fireEvent.change(screen.getByLabelText('Field 2'), { target: { value: '@timestamp' } });
+    fireEvent.change(screen.getAllByLabelText('Format')[1]!, { target: { value: 'date' } });
+    expect(screen.getByLabelText('Date source')).toHaveValue('iso');
+    fireEvent.change(screen.getByLabelText('Date source'), { target: { value: 'epoch_millis' } });
+    await act(async () => { await i18n.changeLanguage('zh-CN'); });
+    expect(screen.getByLabelText('日期来源')).toHaveValue('epoch_millis');
+    expect(screen.getByLabelText('字段 1')).toHaveValue('n');
+    await act(async () => { await i18n.changeLanguage('en-US'); });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await screen.findByRole('dialog', { name: 'Data Views' });
+    const saved = (await service.load()).library.entries[0]!;
+    expect(saved.fieldFormats).toEqual({ version: 1, entries: [
+      { field: 'n', format: { kind: 'number', grouping: false } },
+      { field: '@timestamp', format: { kind: 'date', input: 'epoch_millis' } },
+    ] });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit data view' }));
+    expect(screen.getByLabelText('Field 1')).toHaveValue('n');
+    expect(screen.getByRole('checkbox', { name: 'Digit grouping' })).not.toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove field format 1' }));
+    expect(screen.getByLabelText('Field 1')).toHaveValue('@timestamp');
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await screen.findByRole('dialog', { name: 'Data Views' });
+    expect((await service.load()).library.entries[0]!.fieldFormats?.entries).toHaveLength(1);
+    expect(backend.readResource).not.toHaveBeenCalled();
+    expect(backend.execute).not.toHaveBeenCalled();
+    expect(backend.openPit).not.toHaveBeenCalled();
+  });
+
+  it('rejects duplicate or oversized format fields locally and keeps invalid edits visible', async () => {
+    const service = createSessionDataViewService();
+    render(<Harness service={service} backend={api()} />);
+    await clickNew();
+    fill();
+    fireEvent.click(screen.getByRole('button', { name: 'Add field format' }));
+    fireEvent.change(screen.getByLabelText('Field 1'), { target: { value: 'n' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add field format' }));
+    for (const field of ['n', 'x'.repeat(1025), ' n']) {
+      fireEvent.change(screen.getByLabelText('Field 2'), { target: { value: field } });
+      expect(screen.getByLabelText('Field 2')).toHaveAttribute('aria-invalid', 'true');
+      expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    }
+    expect((await service.load()).library.entries).toEqual([]);
+    fireEvent.change(screen.getByLabelText('Field 2'), { target: { value: 'm' } });
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+  });
+
+  it('caps editor rows and explains stale type evidence without querying implicitly', async () => {
+    const service = createSessionDataViewService();
+    const entries = Array.from({ length: 32 }, (_, index) => ({ field: `n${index}`, format: { kind: 'number' as const, grouping: true } }));
+    await service.save(0, { version: 1, entries: [{ ...definition, defaultTimeField: null, fieldFormats: { version: 1, entries } }] });
+    const backend = api();
+    render(<Harness service={service} backend={backend} />);
+    await screen.findByText('Events');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit data view' }));
+    expect(screen.getByRole('button', { name: 'Add field format' })).toBeDisabled();
+    expect(screen.getByText('Maximum 32 field formats')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove field format 32' }));
+    expect(screen.getByRole('button', { name: 'Add field format' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh data view fields' }));
+    await screen.findAllByText('Field absent from the returned catalog');
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+    expect(backend.readResource).toHaveBeenCalledTimes(1);
+    expect(backend.execute).not.toHaveBeenCalled();
+  });
+
   it('creates only a local definition, reads fields only on request, and exposes explicit new-query opening', async () => {
     const service = createSessionDataViewService();
     const backend = api();

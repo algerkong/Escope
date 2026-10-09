@@ -3,7 +3,7 @@ import { INITIAL_RESULT_GRID_STATE, MAX_COLUMN_WIDTH, MIN_COLUMN_WIDTH, ROW_COLU
 import { utf8ByteLength, MAX_ENTRY_DSL_BYTES, MAX_ENTRY_INDEX_BYTES } from './query-library';
 import type { VisualForm, VisualBuildProblem } from './visual-query';
 import { parametersPayload, parseQueryParameters } from './query-parameters';
-import { parseDataViewSelection, selectDataView } from './data-views';
+import { freezeDataViewSelection, parseDataViewSelection, selectDataView } from './data-views';
 
 export const WORKSPACE_RECOVERY_VERSION = 1;
 export const MAX_WORKSPACE_TABS = 50;
@@ -89,7 +89,8 @@ export function recoveryWorkspace(state: WorkspaceState, previous?: RecoveryWork
 export function historyEntry(snapshot: ExecutionSnapshot, name: string, kind: ExecutionHistoryEntry['kind']): ExecutionHistoryEntry {
   const { requestId, queryId, connectionId, index, rawDsl, revision, startedAt } = snapshot;
   return {
-    snapshot: Object.freeze({ requestId, queryId, connectionId, index, rawDsl, revision, startedAt }),
+    snapshot: Object.freeze({ requestId, queryId, connectionId, index, rawDsl, revision, startedAt,
+      ...(snapshot.dataView === undefined ? {} : { dataView: freezeDataViewSelection(snapshot.dataView) }) }),
     name, kind, status: 'running', finishedAt: null, errorCode: null,
   };
 }
@@ -106,6 +107,7 @@ export function restoreHistoryQuery(entry: ExecutionHistoryEntry, id = crypto.ra
   return {
     id, connectionId: entry.snapshot.connectionId, index: entry.snapshot.index,
     dsl: entry.snapshot.rawDsl, name: entry.name, revision: 0, resultView: 'table',
+    ...(entry.snapshot.dataView === undefined ? {} : { dataView: selectDataView(entry.snapshot.dataView.definition) }),
   };
 }
 
@@ -240,16 +242,18 @@ function validWorkspace(value: unknown): boolean {
     && utf8ByteLength(JSON.stringify(value)) <= MAX_WORKSPACE_BYTES;
 }
 function validSnapshot(value: unknown): boolean {
-  return shape(value, ['requestId', 'queryId', 'connectionId', 'index', 'rawDsl', 'revision', 'startedAt'])
+  return shape(value, ['requestId', 'queryId', 'connectionId', 'index', 'rawDsl', 'revision', 'startedAt'], ['dataView'])
     && id(value.requestId) && id(value.queryId) && id(value.connectionId) && text(value.index, MAX_ENTRY_INDEX_BYTES)
-    && value.index.trim() !== '' && text(value.rawDsl, MAX_ENTRY_DSL_BYTES) && integer(value.revision) && timestamp(value.startedAt);
+    && value.index.trim() !== '' && text(value.rawDsl, MAX_ENTRY_DSL_BYTES) && integer(value.revision) && timestamp(value.startedAt)
+    && (!Object.hasOwn(value, 'dataView') || parseDataViewSelection(value.dataView, value.connectionId, value.index) !== null);
 }
 function validHistory(value: unknown): value is unknown & ExecutionHistoryEntry {
   if (!shape(value, ['snapshot', 'name', 'kind', 'status', 'finishedAt', 'errorCode'])
     || !validSnapshot(value.snapshot) || !name(value.name) || !member(value.kind, ['query', 'index', 'continuation'])
     || !member(value.status, ['running', 'success', 'partial', 'failed', 'cancelled', 'interrupted'])) return false;
   const pending = value.status === 'running' || value.status === 'interrupted';
-  return (pending ? value.finishedAt === null : timestamp(value.finishedAt))
+  return (value.kind !== 'index' || (value.snapshot as ExecutionSnapshot).dataView === undefined)
+    && (pending ? value.finishedAt === null : timestamp(value.finishedAt))
     && (value.errorCode === null || (typeof value.errorCode === 'string' && /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(value.errorCode)))
     && (value.status === 'failed' ? value.errorCode !== null : value.status === 'cancelled' || value.errorCode === null)
     && (value.finishedAt === null || (typeof value.finishedAt === 'string'

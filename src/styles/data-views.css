@@ -24,3 +24,18 @@
 .data-view-time { flex-wrap: wrap; overflow-wrap: anywhere; }
 .data-view-time > svg, .data-view-target > label > svg { flex-shrink: 0; color: var(--muted); }
 .data-views-panel .notice { flex-wrap: wrap; }
+.field-formats-editor { min-width: 0; border-top: 1px solid var(--border); padding-top: 8px; }
+.field-formats-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.field-formats-heading h3 { margin: 0; font-size: .85rem; font-weight: 500; }
+.field-formats-heading h3:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.field-formats-list { list-style: none; margin: 0; padding: 0; max-height: 280px; overflow-y: auto; }
+.field-formats-list > li { display: flex; flex-direction: column; gap: 5px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.field-format-controls { display: flex; align-items: end; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.field-format-name, .field-format-kind { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.field-format-name { flex: 1 1 130px; }
+.field-format-kind { flex: 1 1 140px; }
+.field-format-controls input { width: 100%; min-width: 0; }
+.field-format-controls .icon-button { flex: 0 0 28px; width: 28px; height: 28px; }
+.field-format-grouping, .field-format-date { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.field-format-grouping input { flex: 0 0 auto; width: auto; padding: 0; }
+.field-format-date .select-control { flex: 1 1 160px; width: auto; }

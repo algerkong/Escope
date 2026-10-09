@@ -167,7 +167,8 @@ Authenticode 检查为 `NotSigned`。产物路径、SHA-256 与验证边界见
 复杂条件/nested/日历时间、时间范围与 runtime 的真实边界/权限/成本、字段格式及保存导出/参数交换的真实与原生验收、
 真实认证 TLS 与完整权限许可矩阵、AI 候选审核和写入管理。**
 连接保存不等于连通；历史/标签/草稿/布局恢复的开发自动化通过，桌面重启与退出期间保存仍待人工。
-AI 会话不跨重启。最新范围与验证见 [时间范围验收](docs/query-time-range-qa.md)；
+AI 会话不跨重启。最新构建依赖验证见 [依赖安全验收](docs/dependency-security-qa.md)；
+查询功能见 [时间范围验收](docs/query-time-range-qa.md)；
 前批见 [查询期字段验收](docs/data-view-runtime-fields-qa.md)；
 前批见 [字段格式验收](docs/data-view-field-formats-qa.md)；
 视图库首批见 [Data Views 验收](docs/data-views-qa.md)；
@@ -197,10 +198,11 @@ C01.3 后的 C05.3/C01.4、C04.1、C02/Q07 首批按本轮要求合并开发并�
 Q07 第二批历史/标签/草稿/列布局恢复、第三批独立 PIT 流式导出、第四批参数/查询定义交换已接入；
 C02 第二批精确版本/部署/许可报告与有界会话缓存、Q09 本地 Data Views、字段格式和有界 runtime fields 也已接入；
 Q02 有界时间、时区、预览应用与执行冻结也已接入；
-下一批先 F01/R03 最小开发依赖安全修复，再继续 Q02 类型感知包含/排除与条件交互；
+F01/R03 最小开发依赖安全子项已通过；下一批继续 Q02 类型感知包含/排除与筛选草稿；
 真实环境、系统密钥库、原生导出及跨平台验收分开记录。
-2026-10-10 本批 `npm audit --omit=dev` 为 0；完整审计仍报告继承的 5 项开发依赖 high，
-涉及 braces/source-map-js 及其传递链，不将生产审计结果当作完整安全通过。
+2026-10-10 本批 `npm audit` 与 `npm audit --omit=dev` 均为 0；
+限定 Tailwind CLI 下 watcher 2.5.1 → 2.5.6，移除 micromatch/braces 链，
+source-map-js 1.2.1 → 1.2.2。未升级框架或生产依赖，不将审计 0 当作完整安全通过。
 2026-10-09 最新协作要求改为每批验证后本地提交、在一个新会话继续下一批；
 精简重复测试，全部范围真正完成后才睡眠。详见 [连续开发与交接](docs/continuous-development.md)。
 不自动推送，不以未验证或外部阻塞代替完成。
@@ -221,9 +223,13 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D w
 Git 使用 `main` 和现有身份；用户指定远程 `git@github.com:algerkong/Escope.git`。
 CI 配置和推送不代表远端检查已通过。
 
-本批前端 21 文件 394 项、Rust 定向 76 项及对应检查通过，
-定向验证与暂未验证边界见 [字段格式 QA](docs/data-view-field-formats-qa.md)，
-完整 Vitest 使用 `npm test -- --maxWorkers=2`，不调整原有超时阈值；原型未改则不重复原型回归。
+本批 `npm ci`、前端 4 文件 59 项、原型 16 项、新测试 lint、typecheck 和两类构建通过；
+未改 Rust，不重复旧 Rust 基线，详情见 [依赖 QA](docs/dependency-security-qa.md)。
+Vitest 使用 `npm test -- --maxWorkers=2`，不调整原有超时阈值；
+原型未改通常不重复回归，本批因共享构建依赖变化进行了必要复验。
+`package.json` 的 override 只匹配 `@tailwindcss/cli > @parcel/watcher@2.5.1`；
+上游不再依赖该版本时复核并移除覆盖，重新审计/构建，不将其扩大为全局版本覆盖。
+已有 eslint/whatwg-encoding 弃用提示、JS 单包约 1,272.16 kB 的警告保持可见。
 
 2026-10-09 上一轮 C01.3 独立通过 Rust 定向 131、全量 216（6 默认忽略）、代理环境 fixture 32、
 fmt/严格 clippy；前端定向 47、全量 43 文件 717（`npm test -- --maxWorkers=2`）、原型 16、
@@ -242,7 +248,7 @@ npm run test:ai:gateway
 
 这是用户授权的本机 8788/v1 联调入口，密钥从隐藏输入读取，仅传给测试进程；
 不要把密钥写进命令、配置、脚本或日志。默认 Rust 测试不调用真实模型，本轮未重跑网关认证请求。
-当前构建仍有 JS 单包约 1,073.54 kB 的警告；上一轮生产依赖 audit 为 0，既有开发依赖 5 个 high 留待专项升级，本轮未重跑 audit。
+当前构建 JS 单包约 1,272.16 kB 的警告仍保留；2026-10-10 本批完整/生产 npm 审计均为 0。
 
 ## 本机 ES 测试环境
 
@@ -306,9 +312,10 @@ npm run test:prototype
 
 当前已有连接认证/CA/身份权限首批、独立索引多标签、受限可视化/交互表格、模型与 AI、查询库、
 历史/恢复、两类导出、类型化参数/查询交换、能力诊断与本地 Data Views；
-本轮新增有界字段格式及执行/历史副本。完整父任务仍开放。
+已有有界字段格式、查询期 runtime fields、时间范围与执行冻结；
+本轮完成开发依赖最小安全修复，完整父任务仍开放。
 未启动浏览器/WebView 巡检，布局、原生剪贴板/拖拽/IME、保存重启与安装需集中验收，
-不能复用前会话截图声称通过。下一项为 Q09 查询期 runtime fields，再推进 Q02 时间、查询高级能力与受控管理。
+不能复用前会话截图声称通过。下一项为 Q02 类型感知包含/排除与筛选草稿，再推进查询高级能力与受控管理。
 当前执行顺序和本轮所有权见 `docs/development-plan.md` 第 10 节，第 9 节保留历史批次。
 不将演示数据迁入正式默认工作区，也不把根身份成功当成搜索权限或健康状态证明。
 

@@ -38,6 +38,11 @@
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1"
   },
+  "overrides": {
+    "@tailwindcss/cli": {
+      "@parcel/watcher@2.5.1": "2.5.6"
+    }
+  },
   "devDependencies": {
     "@eslint/js": "^9.39.0",
     "@tailwindcss/cli": "^4.1.0",

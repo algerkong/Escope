@@ -118,6 +118,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib -- query_time_range::tests
   `micromatch` 4.0.8、`braces` 3.0.3、`source-map-js` 1.2.1。
   对照 HEAD 锁文件，版本均未由本批引入/更新；生产依赖审计为 0，但不忽略开发链风险。
   下批 F01/R03 做最小依赖安全修复，不能凭 `audit fix` 输出声称构建/原型或漏洞已验收。
+  后续 2026-10-10 的实际修复与审计 0 见 [依赖 QA](dependency-security-qa.md)；上述为本批时点记录。
 - 一条 OMP 仅获两个新 Rust 文件的所有权，25 分钟内只读取上下文、未产出代码；
   relay `timeout`/退出 1，确认退出与无相关遗留进程后，全部实现由主代理完成。
   relay 末尾的整个工作区 diff 清单不是 OMP 贡献清单。临时报告在

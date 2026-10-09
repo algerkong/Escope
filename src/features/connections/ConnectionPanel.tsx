@@ -3,7 +3,7 @@ import { Check, Database, Pencil, Plus, Search, Trash2, AlertTriangle, PlugZap }
 import { useTranslation } from 'react-i18next';
 import type { ConnectionInput, ConnectionProfile } from '../../domain/connection';
 import { validateConnection } from '../../domain/connection';
-import { EmptyState, IconButton, Modal } from '../../components/controls';
+import { EmptyState, IconButton, Modal, SelectControl } from '../../components/controls';
 import { errorCode } from '../../services/ipc';
 import type { ConnectionTestState } from './useConnectionTests';
 import { ConnectionTestResult } from './ConnectionTestResult';
@@ -96,10 +96,10 @@ function ConnectionEditor({ value, busy, onClose, onSave }:
         onChange={(event) => setInput({ ...input, displayName: event.target.value })} /></label>
       <label className="form-field">{t('connections:endpoint')}<input autoComplete="off" spellCheck={false} required type="url" maxLength={2048}
         value={input.endpoint} onChange={(event) => setInput({ ...input, endpoint: event.target.value })} /></label>
-      <label className="form-field">{t('connections:environment')}<select value={input.environment}
+      <label className="form-field">{t('connections:environment')}<SelectControl value={input.environment}
         onChange={(event) => setInput({ ...input, environment: event.target.value as ConnectionInput['environment'] })}>
         {(['development', 'staging', 'production'] as const).map((env) => <option key={env} value={env}>{t(`connections:${env}`)}</option>)}
-      </select></label>
+      </SelectControl></label>
       <div className="form-field"><span>{t('connections:authentication')}</span><span className="muted">{t('connections:none')}</span></div>
       {input.endpoint.startsWith('http:') ? <div className="notice warning"><AlertTriangle size={16} />{t('connections:httpWarning')}</div> : null}
       {error ? <div className="notice error" role="alert">{t(`errors:${error}`)}</div> : null}

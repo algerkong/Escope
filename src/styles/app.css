@@ -133,13 +133,14 @@ th { color: var(--muted); font-weight: 500; background: var(--subtle); }
 .small { font-size: .85rem; }
 .icon-button { width: 32px; height: 32px; min-width: 32px; border-radius: 6px; border: 0; background: transparent; padding: 0; }
 .icon-button:not(:disabled):hover, .icon-button[aria-pressed="true"] { background: var(--subtle); }
-.primary, .secondary, .danger { min-height: 34px; padding: 7px 13px; border-radius: 6px; border: 1px solid transparent; line-height: 1.35; }
-.primary { background: var(--accent); color: var(--on-accent); box-shadow: 0 1px 2px #0000000d; }
-.primary:not(:disabled):hover { background: color-mix(in srgb, var(--accent) 88%, var(--app)); }
-.primary:not(:disabled):active { box-shadow: inset 0 1px 2px #00000026; }
-.secondary { background: var(--app); border-color: var(--control-border); box-shadow: 0 1px 2px #00000005; }
-.secondary:not(:disabled):hover { background: var(--subtle); border-color: color-mix(in srgb, var(--muted) 44%, var(--border)); }
-.danger { background: var(--error); color: var(--app); }
+/* Limit action styles to buttons without increasing their specificity over compact controls. */
+:where(button).primary, :where(button).secondary, :where(button).danger { min-height: 34px; padding: 7px 13px; border-radius: 6px; border: 1px solid transparent; line-height: 1.35; }
+:where(button).primary { background: var(--accent); color: var(--on-accent); box-shadow: 0 1px 2px #0000000d; }
+:where(button).primary:not(:disabled):hover { background: color-mix(in srgb, var(--accent) 88%, var(--app)); }
+:where(button).primary:not(:disabled):active { box-shadow: inset 0 1px 2px #00000026; }
+:where(button).secondary { background: var(--app); border-color: var(--control-border); box-shadow: 0 1px 2px #00000005; }
+:where(button).secondary:not(:disabled):hover { background: var(--subtle); border-color: color-mix(in srgb, var(--muted) 44%, var(--border)); }
+:where(button).danger { background: var(--error); color: var(--app); }
 .compact-button { font-size: .85rem; min-height: 30px; padding: 5px 9px; }
 .app-shell { height: 100dvh; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .app-header { min-height: 58px; padding: 10px 20px; display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--border); }

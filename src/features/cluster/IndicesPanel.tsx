@@ -2,6 +2,8 @@ import { Layers } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { EmptyState, Modal } from '../../components/controls';
+import { TableSelectionStatus } from '../../components/TableSelectionStatus';
+import { useTableRowSelection } from '../../components/useTableRowSelection';
 import { isValidIndexTarget, parseIndexSettings } from '../../domain/cluster';
 import { parseIndexCatalog, parseMappingFields } from '../../domain/resource';
 import { sliceRaw } from '../../domain/query-result';
@@ -91,7 +93,14 @@ export function IndicesPanel({ connectionId, endpoint, backend }: Props) {
     return needle === '' ? rows : rows.filter((row) => row.name.toLowerCase().includes(needle));
   }, [rows, filter]);
   const paging = usePaging(filtered, CLUSTER_PAGE_SIZE);
+  const rowIds = useMemo(() => filtered.map((row) => JSON.stringify([row.type, row.name])), [filtered]);
+  const rowSelection = useTableRowSelection({
+    rowIds, visibleRowIds: paging.visible.map((row) => JSON.stringify([row.type, row.name])), scope: catalog,
+  });
   const fields = mapping.state.status === 'ready' ? mapping.state.data : null;
+  const mappingRows = useMemo(() => fields?.slice(0, MAX_FIELDS) ?? [], [fields]);
+  const mappingRowIds = useMemo(() => mappingRows.map((_, index) => `field:${index}`), [mappingRows]);
+  const mappingSelection = useTableRowSelection({ rowIds: mappingRowIds, scope: fields, active: detail });
   const mappingRaw = mapping.state.status === 'ready' ? mapping.state.raw : '';
   const settingsEntries = settings.state.status === 'ready' ? settings.state.data : null;
   const settingsRaw = settings.state.status === 'ready' ? settings.state.raw : '';
@@ -105,6 +114,7 @@ export function IndicesPanel({ connectionId, endpoint, backend }: Props) {
       <label className="cluster-filter"><span className="sr-only">{t('cluster:filterIndices')}</span>
         <input type="search" value={filter} placeholder={t('cluster:filterIndices')}
           onChange={(event) => { setFilter(event.target.value); paging.setPage(0); }} /></label>
+      <TableSelectionStatus count={rowSelection.selectedCount} onClear={rowSelection.clear} />
     </ClusterToolbar>
     <ClusterState state={catalogRead.state} onRetry={catalogRead.refresh} onCancel={catalogRead.cancel} />
     <div className="cluster-manual">
@@ -125,7 +135,8 @@ export function IndicesPanel({ connectionId, endpoint, backend }: Props) {
             <th>{t('cluster:nameColumn')}</th><th>{t('cluster:typeColumn')}</th><th>{t('cluster:flagsColumn')}</th>
             <th>{t('cluster:infoColumn')}</th><th><span className="sr-only">{t('cluster:details')}</span></th>
           </tr></thead>
-          <tbody>{paging.visible.map((row) => <tr key={`${row.type}|${row.name}`}>
+          <tbody ref={rowSelection.bodyRef} {...rowSelection.bodyProps}>
+            {paging.visible.map((row) => <tr key={`${row.type}|${row.name}`} {...rowSelection.rowProps(JSON.stringify([row.type, row.name]))}>
             <td className="cluster-mono cluster-strong">{row.name}</td>
             <td>{t(TYPE_KEY[row.type])}</td>
             <td>{row.badges.length === 0 ? <span className="muted">—</span>
@@ -144,7 +155,8 @@ export function IndicesPanel({ connectionId, endpoint, backend }: Props) {
     <Modal open={detail} onClose={() => setDetailTarget(null)}
       title={t('cluster:detailTitle', { index: detailTarget ?? '' })} description={t('cluster:detailHint')}>
       <section className="cluster-detail-section">
-        <h3 className="subheading">{t('cluster:mapping')}</h3>
+        <div className="cluster-detail-heading"><h3 className="subheading">{t('cluster:mapping')}</h3>
+          <TableSelectionStatus count={mappingSelection.selectedCount} onClear={mappingSelection.clear} /></div>
         <ClusterState state={mapping.state} onRetry={mapping.refresh} onCancel={mapping.cancel} />
         {fields === null ? null : fields.length === 0
           ? <p className="muted small">{t('cluster:mappingEmpty')}</p>
@@ -152,7 +164,8 @@ export function IndicesPanel({ connectionId, endpoint, backend }: Props) {
             <div className="cluster-table-wrap cluster-detail-table"><table className="cluster-table">
               <thead><tr><th>{t('cluster:indexColumn')}</th><th>{t('cluster:mappingField')}</th>
                 <th>{t('cluster:mappingType')}</th></tr></thead>
-              <tbody>{fields.slice(0, MAX_FIELDS).map((field, position) => <tr key={`${field.index}|${field.path}|${position}`}>
+              <tbody ref={mappingSelection.bodyRef} {...mappingSelection.bodyProps}>
+                {mappingRows.map((field, position) => <tr key={`${field.index}|${field.path}|${position}`} {...mappingSelection.rowProps(`field:${position}`)}>
                 <td className="cluster-mono">{field.index}</td>
                 <td className="cluster-mono">{field.path}</td>
                 <td>{field.type}</td>

@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ReactElement } from 'react';
 import { I18nextProvider } from 'react-i18next';
@@ -352,6 +352,77 @@ describe('nodes', () => {
 });
 
 describe('shards', () => {
+  it('selects dragged rows, keeps their identities through filters and clears them on refresh', async () => {
+    const user = userEvent.setup();
+    const { backend, calls } = fakeBackend({ shards: SHARDS });
+    renderWithI18n(<ShardsPanel connectionId={CONNECTION} endpoint={ENDPOINT} backend={backend} />);
+    const table = await screen.findByRole('table');
+    const rows = within(table).getAllByRole('row').slice(1);
+    fireEvent.mouseDown(rows[0]!, { button: 0, buttons: 1 });
+    fireEvent.mouseMove(rows[1]!, { buttons: 1 });
+    fireEvent.mouseUp(document);
+    expect(rows[0]).toHaveAttribute('aria-selected', 'true');
+    expect(rows[1]).toHaveAttribute('aria-selected', 'true');
+    expect(rows[2]).toHaveAttribute('aria-selected', 'false');
+    expect(screen.getByText('已选 2 行')).toBeVisible();
+    await user.type(screen.getByPlaceholderText('按索引筛选'), 'logs');
+    expect(screen.getByText('logs').closest('tr')).toHaveAttribute('aria-selected', 'false');
+    await user.clear(screen.getByPlaceholderText('按索引筛选'));
+    expect(table.querySelectorAll('tr[aria-selected="true"]')).toHaveLength(2);
+    expect(calls).toHaveLength(1);
+    await user.click(screen.getByRole('button', { name: '刷新' }));
+    await screen.findByRole('table');
+    expect(screen.getByRole('table').querySelectorAll('tr[aria-selected="true"]')).toHaveLength(0);
+    expect(screen.queryByText('已选 2 行')).not.toBeInTheDocument();
+  });
+
+  it('does not merge two unassigned replicas with otherwise identical identities', async () => {
+    const { backend } = fakeBackend({
+      shards: '[{"index":"orders","shard":"0","prirep":"r","state":"UNASSIGNED"},{"index":"orders","shard":"0","prirep":"r","state":"UNASSIGNED"}]',
+    });
+    renderWithI18n(<ShardsPanel connectionId={CONNECTION} endpoint={ENDPOINT} backend={backend} />);
+    const rows = within(await screen.findByRole('table')).getAllByRole('row').slice(1);
+    fireEvent.click(rows[0]!);
+    expect(rows[0]).toHaveAttribute('aria-selected', 'true');
+    expect(rows[1]).toHaveAttribute('aria-selected', 'false');
+  });
+
+  it.each(['zh-CN', 'en-US'])('keeps shard roles separate from action styles in %s', async (locale) => {
+    await i18n.changeLanguage(locale);
+    const { backend, calls } = fakeBackend({
+      shards: JSON.stringify([...JSON.parse(SHARDS), { index: 'unknown-role', shard: '2', state: 'UNASSIGNED' }]),
+    });
+    renderWithI18n(<ShardsPanel connectionId={CONNECTION} endpoint={ENDPOINT} backend={backend} />);
+    const table = await screen.findByRole('table');
+    const roles = table.querySelectorAll<HTMLElement>('.cluster-role');
+    expect([...roles].map((role) => role.dataset.role)).toEqual(['primary', 'replica', 'primary', 'unknown']);
+    for (const role of roles) {
+      expect(role).toBeVisible();
+      expect(role).not.toHaveClass('primary');
+      expect(role).not.toHaveClass('secondary');
+      expect(role).not.toHaveClass('danger');
+      expect(role).toHaveTextContent(i18n.t(`cluster:${role.dataset.role}`));
+    }
+    expect(table.querySelectorAll('.primary, .secondary, .danger')).toHaveLength(0);
+    expect(screen.getByRole('button', { name: i18n.t('cluster:refresh') })).toHaveClass('secondary', 'compact-button');
+    expect(calls).toHaveLength(1);
+  });
+
+  it('resets a state filter when that state disappears from a refreshed response', async () => {
+    const user = userEvent.setup();
+    const bodies = { shards: SHARDS };
+    const { backend } = fakeBackend(bodies);
+    renderWithI18n(<ShardsPanel connectionId={CONNECTION} endpoint={ENDPOINT} backend={backend} />);
+    await screen.findByRole('table');
+    await user.selectOptions(screen.getByLabelText('按状态筛选'), 'UNASSIGNED');
+    expect(screen.getByLabelText('按状态筛选')).toHaveValue('UNASSIGNED');
+    bodies.shards = '[{"index":"orders","shard":"0","prirep":"p","state":"STARTED","docs":42}]';
+    await user.click(screen.getByRole('button', { name: '刷新' }));
+    await waitFor(() => expect(screen.getByLabelText('按状态筛选')).toHaveValue(''));
+    expect(screen.queryByText('没有分片符合当前筛选条件。')).not.toBeInTheDocument();
+    expect(within(screen.getByRole('table')).getByText('orders')).toBeVisible();
+  });
+
   it('labels primary and replica, keeps the unassigned reason, and filters by index and state', async () => {
     const user = userEvent.setup();
     const { backend } = fakeBackend({ shards: SHARDS });
@@ -383,6 +454,28 @@ describe('shards', () => {
 });
 
 describe('indices', () => {
+  it.each(['nodes', 'indices'] as const)('supports the same row selection in %s without triggering detail reads', async (kind) => {
+    const user = userEvent.setup();
+    const { backend, calls } = fakeBackend({ nodesStats: NODES, indices: CATALOG });
+    renderWithI18n(kind === 'nodes'
+      ? <NodesPanel connectionId={CONNECTION} endpoint={ENDPOINT} backend={backend} />
+      : <IndicesPanel connectionId={CONNECTION} endpoint={ENDPOINT} backend={backend} />);
+    const table = await screen.findByRole('table');
+    const rows = within(table).getAllByRole('row').slice(1);
+    fireEvent.mouseDown(rows[0]!, { button: 0, buttons: 1 });
+    fireEvent.mouseMove(rows[1]!, { buttons: 1 });
+    fireEvent.mouseUp(document);
+    expect(table.querySelectorAll('tr[aria-selected="true"]')).toHaveLength(2);
+    expect(screen.getByText('已选 2 行')).toBeVisible();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(calls).toHaveLength(1);
+    await user.click(screen.getByRole('button', { name: '清除行选择' }));
+    expect(table.querySelectorAll('tr[aria-selected="true"]')).toHaveLength(0);
+    await user.click(within(rows[0]!).getByRole('button'));
+    expect(table.querySelectorAll('tr[aria-selected="true"]')).toHaveLength(0);
+    expect(await screen.findByRole('dialog')).toBeVisible();
+  });
+
   it('lists indices, aliases and data streams with their flags', async () => {
     const { backend } = fakeBackend({ indices: CATALOG });
     renderWithI18n(<IndicesPanel connectionId={CONNECTION} endpoint={ENDPOINT} backend={backend} />);
@@ -422,6 +515,13 @@ describe('indices', () => {
     expect(within(dialog).getByText('long')).toBeInTheDocument();
     expect(within(dialog).getByText(/"number_of_shards":"3"/)).toBeInTheDocument();
     expect(within(dialog).getByText('索引详情 · orders')).toBeInTheDocument();
+    const tableRows = within(dialog).getAllByRole('row').slice(1);
+    fireEvent.mouseDown(tableRows[0]!, { button: 0, buttons: 1 });
+    fireEvent.mouseMove(tableRows[1]!, { buttons: 1 });
+    fireEvent.mouseUp(document);
+    expect(within(dialog).getByText('已选 2 行')).toBeVisible();
+    expect(tableRows[0]).toHaveAttribute('aria-selected', 'true');
+    expect(tableRows[1]).toHaveAttribute('aria-selected', 'true');
   });
 
   it('reads a manually typed target and refuses an invalid one before sending it', async () => {

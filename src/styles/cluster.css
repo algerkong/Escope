@@ -58,9 +58,8 @@
   border: 1px solid var(--border); color: var(--muted); white-space: nowrap;
 }
 .cluster-badge.warn { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 40%, transparent); }
-.cluster-role { font-size: .78rem; }
-.cluster-role.primary { color: var(--text); font-weight: 500; }
-.cluster-role.replica { color: var(--muted); }
+.cluster-role { display: inline-block; font-size: .78rem; color: var(--muted); white-space: nowrap; }
+.cluster-role[data-role="primary"] { color: var(--text); font-weight: 500; }
 
 .cluster-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
 .cluster-paging { display: flex; align-items: center; gap: 8px; justify-content: flex-end; padding-top: 10px; font-size: .78rem; color: var(--muted); }
@@ -80,6 +79,7 @@
 .cluster-copy-note.failed { color: var(--error); }
 .cluster-copy-note.copied { color: var(--success); }
 .cluster-detail-section { margin-top: 18px; }
+.cluster-detail-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; }
 .cluster-detail-section .subheading { margin-top: 0; }
 .cluster-detail-table { max-height: 34dvh; }
 .cluster-settings-index { font-size: .8rem; color: var(--muted); margin-top: 10px; }

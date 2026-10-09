@@ -2,6 +2,8 @@ import { Server, TriangleAlert } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { EmptyState } from '../../components/controls';
+import { TableSelectionStatus } from '../../components/TableSelectionStatus';
+import { useTableRowSelection } from '../../components/useTableRowSelection';
 import { parseNodesStats, type NodeStats, type NodesStats } from '../../domain/cluster';
 import { sliceRaw } from '../../domain/query-result';
 import type { ClusterBackend } from '../../services/cluster';
@@ -46,6 +48,10 @@ export function NodesPanel({ connectionId, endpoint, backend }: Props) {
       (node.name ?? '').toLowerCase().includes(needle) || node.id.toLowerCase().includes(needle));
   }, [nodes, filter]);
   const paging = usePaging(filtered, CLUSTER_PAGE_SIZE);
+  const rowIds = useMemo(() => filtered.map((node) => `node:${node.id}`), [filtered]);
+  const rowSelection = useTableRowSelection({
+    rowIds, visibleRowIds: paging.visible.map((node) => `node:${node.id}`), scope: stats,
+  });
   const unknown = <span className="muted">{t('cluster:unknown')}</span>;
   const unknownText = t('cluster:unknown');
   const completeness = stats === null || stats.completeness === 'complete' ? null
@@ -62,6 +68,7 @@ export function NodesPanel({ connectionId, endpoint, backend }: Props) {
       <label className="cluster-filter"><span className="sr-only">{t('cluster:filterNodes')}</span>
         <input type="search" value={filter} placeholder={t('cluster:filterNodes')}
           onChange={(event) => { setFilter(event.target.value); paging.setPage(0); }} /></label>
+      <TableSelectionStatus count={rowSelection.selectedCount} onClear={rowSelection.clear} />
     </ClusterToolbar>
     <ClusterState state={state} onRetry={refresh} onCancel={cancel} />
     {completeness === null ? null : <div className="notice warning cluster-notice" role="status">
@@ -76,7 +83,8 @@ export function NodesPanel({ connectionId, endpoint, backend }: Props) {
             <th>{t('cluster:fsTotal')}</th><th>{t('cluster:fsAvailable')}</th>
             <th>{t('cluster:rejections')}</th><th><span className="sr-only">{t('cluster:viewRaw')}</span></th>
           </tr></thead>
-          <tbody>{paging.visible.map((node) => <tr key={node.id}>
+          <tbody ref={rowSelection.bodyRef} {...rowSelection.bodyProps}>
+            {paging.visible.map((node) => <tr key={node.id} {...rowSelection.rowProps(`node:${node.id}`)}>
             <td className="cluster-strong">{node.name ?? unknown}</td>
             <td className="cluster-mono">{node.id}</td>
             <td>{node.roles.length === 0 ? unknown

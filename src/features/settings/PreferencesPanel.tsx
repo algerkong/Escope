@@ -1,7 +1,7 @@
 import { Monitor, Moon, Sun, RotateCcw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { defaultPreferences, type Preferences } from '../../domain/preferences';
-import { IconButton, SettingRow, Toggle } from '../../components/controls';
+import { IconButton, SelectControl, SettingRow, Toggle } from '../../components/controls';
 import type { SettingsRoute } from '../../app/routes';
 
 export function PreferencesPanel({ route, preferences: p, update }:
@@ -12,9 +12,9 @@ export function PreferencesPanel({ route, preferences: p, update }:
       <Toggle id={key} label={t(`settings:${key}`)} checked={p[key]} onChange={(value) => update({ [key]: value })} />
     </SettingRow>;
   const select = <K extends keyof Preferences>(key: K, options: { value: Preferences[K]; label: string }[]) =>
-    <select id={key} value={String(p[key])} onChange={(event) => update({ [key]: event.target.value })}>
+    <SelectControl id={key} value={String(p[key])} onChange={(event) => update({ [key]: event.target.value })}>
       {options.map((option) => <option key={String(option.value)} value={String(option.value)}>{option.label}</option>)}
-    </select>;
+    </SelectControl>;
   const resetGeneral = () => {
     const { timeZone, dateFormat, grouping, startAI, startView, wrapJson } = defaultPreferences;
     update({ timeZone, dateFormat, grouping, startAI, startView, wrapJson });

@@ -1,0 +1,18 @@
+{
+  "sourceDsl": "{\"query\":{\"bool\":{\"should\":[{\"term\":{\"original\":9007199254740993}},{\"match\":{\"message\":\"\\u0061\"}}]}},\"sort\":[{\"n\":\"desc\"},\"_score\"],\"size\":25,\"min_score\":1.2300e+2,\"runtime_mappings\":{\"n\":{\"type\":\"long\",\"script\":{\"source\":\"emit(9007199254740995L);\"}}},\"fields\":[\"n\"]}",
+  "filters": [
+    { "id": "status", "field": "status", "fieldType": "keyword", "evidence": "mapped", "operation": "include", "value": "\"ready\"", "origin": "source" },
+    { "id": "n", "field": "n", "fieldType": "long", "evidence": "runtime", "operation": "exclude", "value": "9007199254740995", "origin": "fields" },
+    { "id": "message", "field": "message", "fieldType": "text", "evidence": "mapped", "operation": "include", "value": "\"hello \\\"there\\\"\"", "origin": "source" },
+    { "id": "missing", "field": "status", "fieldType": "keyword", "evidence": "mapped", "operation": "missing", "value": null, "origin": "source" }
+  ],
+  "composition": {
+    "mode": "any",
+    "groups": [
+      { "id": "first", "mode": "any", "filterIds": ["status", "n"] },
+      { "id": "second", "mode": "all", "filterIds": ["message", "missing"] }
+    ]
+  },
+  "groupedDsl": "{\"query\":{\"bool\":{\"must\":[{\"bool\":{\"should\":[{\"term\":{\"original\":9007199254740993}},{\"match\":{\"message\":\"\\u0061\"}}]}}],\"filter\":[{\"bool\":{\"should\":[{\"bool\":{\"should\":[{\"term\":{\"status\":\"ready\"}},{\"bool\":{\"must_not\":[{\"term\":{\"n\":9007199254740995}}]}}],\"minimum_should_match\":1}},{\"bool\":{\"filter\":[{\"match_phrase\":{\"message\":\"hello \\\"there\\\"\"}}],\"must_not\":[{\"exists\":{\"field\":\"status\"}}]}}],\"minimum_should_match\":1}}]}},\"sort\":[{\"n\":\"desc\"},\"_score\"],\"size\":25,\"min_score\":1.2300e+2,\"runtime_mappings\":{\"n\":{\"type\":\"long\",\"script\":{\"source\":\"emit(9007199254740995L);\"}}},\"fields\":[\"n\"]}",
+  "searchAfter": "[9007199254740995,1.1000000000000000001,4294967297]"
+}

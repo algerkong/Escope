@@ -1,10 +1,11 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { I18nextProvider } from 'react-i18next';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { createQuery, createSnapshot, type QueryDocument, type QueryDocumentPatch } from '../../src/domain/query';
-import { type CellFilterSelection, type QueryFilterDraft } from '../../src/domain/query-filters';
+import { MAX_FILTER_GROUPS, MAX_QUERY_FILTERS, type CellFilterSelection, type QueryFilter, type QueryFilterComposition, type QueryFilterDraft } from '../../src/domain/query-filters';
 import { parseFieldCaps, type FieldCatalog } from '../../src/domain/resource';
 import { QueryFiltersDialog } from '../../src/features/query/QueryFiltersDialog';
 import type { Loadable } from '../../src/features/query/useQueryResources';
@@ -22,7 +23,8 @@ const selected: CellFilterSelection = { field: 'n', value: { kind: 'number', tex
 interface HarnessProps {
   current?: QueryDocument;
   fields?: Loadable<FieldCatalog>;
-  selection?: CellFilterSelection;
+  selection?: CellFilterSelection | null;
+  initialDraft?: QueryFilterDraft;
   targetCurrent?: boolean;
   newQuery?: boolean;
   onCommit: (source: QueryDocument, patch: QueryDocumentPatch) => boolean;
@@ -30,11 +32,11 @@ interface HarnessProps {
   onClose: () => void;
   onDiscard: () => void;
 }
-function Harness({ current, fields = ready, selection = selected, targetCurrent = true, newQuery = false, ...callbacks }: HarnessProps) {
-  const [draft, setDraft] = useState<QueryFilterDraft>({ source, snapshot, endpoint: 'https://fixture.test', filters: [] });
+function Harness({ current, fields = ready, selection = selected, initialDraft, targetCurrent = true, newQuery = false, ...callbacks }: HarnessProps) {
+  const [draft, setDraft] = useState<QueryFilterDraft>(initialDraft ?? { source, snapshot, endpoint: 'https://fixture.test', filters: [] });
   return <I18nextProvider i18n={i18n}><QueryFiltersDialog draft={draft} current={current} fields={fields}
-    initialSelection={selection} targetCurrent={targetCurrent} canInspect newQuery={newQuery}
-    onFiltersChange={(filters) => setDraft((state) => ({ ...state, filters }))} {...callbacks} /></I18nextProvider>;
+    initialSelection={selection ?? undefined} targetCurrent={targetCurrent} canInspect newQuery={newQuery}
+    onFiltersChange={(filters, composition) => setDraft((state) => ({ ...state, filters, composition }))} {...callbacks} /></I18nextProvider>;
 }
 function fixture(overrides: Partial<HarnessProps> = {}) {
   const onCommit = vi.fn(() => true);
@@ -48,6 +50,16 @@ function fixture(overrides: Partial<HarnessProps> = {}) {
 const add = () => fireEvent.click(screen.getByRole('button', { name: 'Add to pending filters' }));
 const preview = () => fireEvent.click(screen.getByRole('button', { name: 'Preview filtered DSL' }));
 const apply = () => screen.getByRole('button', { name: 'Apply filters to draft' });
+const join = (label: string, mode: 'all' | 'any') =>
+  fireEvent.click(within(screen.getByRole('radiogroup', { name: label })).getByRole('radio', { name: enQueryFilters[mode] }));
+const groupDraft = (composition?: QueryFilterComposition): QueryFilterDraft => ({
+  source, snapshot, endpoint: 'https://fixture.test', composition,
+  filters: [
+    { id: 'n', field: 'n', fieldType: 'long', evidence: 'mapped', operation: 'include', value: '9007199254740993', origin: 'source' },
+    { id: 'status', field: 'status', fieldType: 'keyword', evidence: 'mapped', operation: 'exclude', value: '"blocked"', origin: 'source' },
+    { id: 'message', field: 'message', fieldType: 'text', evidence: 'mapped', operation: 'include', value: '"some words"', origin: 'source' },
+  ],
+});
 
 describe('cell filter review', () => {
   it('requires staging and explicit preview, preserves exact originals, and keeps language changes inert', async () => {
@@ -189,11 +201,130 @@ describe('cell filter review', () => {
     expect(style).toContain('var(--muted)');
     expect(style).toContain('overflow-wrap: anywhere');
     expect(style).toContain('min-width: 0');
+    expect(style).toContain('input:focus-visible');
+    expect(style).toContain('@media (forced-colors: active)');
+    expect(style).toContain('.qfilter-group-modes { max-height: 160px; overflow: auto; }');
     expect(style).not.toMatch(/background:\s*#|gradient|letter-spacing:\s*-/);
     expect(grid).toContain('.rg-filter-cell:focus-within');
     expect(grid).toContain('flex: 0 0 22px');
     expect(grid).toContain('@media (hover: none)');
     fixture();
     expect(within(screen.getByRole('dialog')).getByRole('button', { name: 'Check field capabilities' })).toHaveAttribute('title');
+  });
+});
+
+describe('filter group review controls', () => {
+  it('reviews group and root AND/OR changes, keeps exclusions local, and preserves the review across languages', async () => {
+    const f = fixture({ selection: null, initialDraft: groupDraft() });
+    preview();
+    expect(apply()).toBeEnabled();
+    join('Group 1 operator', 'any');
+    expect(apply()).toBeDisabled();
+    expect(screen.queryByLabelText('Final filtered DSL')).not.toBeInTheDocument();
+    expect(screen.getByText('minimum_should_match: 1')).toHaveAttribute('title', enQueryFilters.orBoundary);
+    const groupSelect = screen.getByLabelText('Group for status');
+    groupSelect.focus();
+    fireEvent.change(groupSelect, { target: { value: 'new' } });
+    expect(groupSelect).toHaveFocus();
+    expect(screen.getByRole('radiogroup', { name: 'Group 2 operator' })).toBeVisible();
+    join('Between groups', 'any');
+    preview();
+    const final = (screen.getByLabelText('Final filtered DSL') as HTMLTextAreaElement).value;
+    const bool = JSON.parse(final).query.bool;
+    expect(bool.should).toBeUndefined();
+    expect(bool.must_not).toBeUndefined();
+    expect(bool.filter[0].bool.minimum_should_match).toBe(1);
+    expect(bool.filter[0].bool.should[0].bool.minimum_should_match).toBe(1);
+    expect(bool.filter[0].bool.should[1].bool.must_not).toEqual([{ term: { status: 'blocked' } }]);
+    expect(final).toContain('9007199254740993');
+    expect(screen.getByText('Filter context')).toHaveAttribute('title', enQueryFilters.scoringBoundary);
+    await act(async () => { await i18n.changeLanguage('zh-CN'); });
+    expect(within(screen.getByRole('radiogroup', { name: '组间关系' })).getByRole('radio', { name: '任一 (OR)' })).toBeChecked();
+    expect(screen.getByLabelText('最终筛选 DSL')).toHaveValue(final);
+    expect(f.onCommit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '应用筛选到草稿' }));
+    expect(f.onCommit).toHaveBeenCalledExactlyOnceWith(source, { dsl: final });
+    expect(f.onInspect).not.toHaveBeenCalled();
+  });
+
+  it('can add a new cell to a new group and remove or merge groups without dropping other conditions', () => {
+    const f = fixture({ initialDraft: groupDraft(), selection: { field: 'status', value: { kind: 'string', text: 'ready' }, origin: 'source' } });
+    fireEvent.change(screen.getByLabelText('Add to group'), { target: { value: 'new' } });
+    add();
+    expect(screen.getByRole('list', { name: '4 pending filters' })).toBeVisible();
+    join('Between groups', 'any');
+    preview();
+    expect(JSON.parse((screen.getByLabelText('Final filtered DSL') as HTMLTextAreaElement).value).query.bool.filter[0].bool.should).toHaveLength(2);
+    const assignments = screen.getAllByLabelText('Group for status');
+    const firstGroup = (screen.getByLabelText('Group for n') as HTMLSelectElement).value;
+    fireEvent.change(assignments[1]!, { target: { value: firstGroup } });
+    expect(screen.queryByRole('radiogroup', { name: 'Group 2 operator' })).not.toBeInTheDocument();
+    expect(apply()).toBeDisabled();
+    preview();
+    expect((screen.getByLabelText('Final filtered DSL') as HTMLTextAreaElement).value).toContain('"ready"');
+    fireEvent.click(screen.getByRole('button', { name: 'Remove filter for message' }));
+    expect(screen.getByRole('list', { name: '3 pending filters' })).toBeVisible();
+    expect(apply()).toBeDisabled();
+    expect(f.onCommit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Discard pending filters' }));
+    expect(f.onDiscard).toHaveBeenCalledOnce();
+  });
+
+  it('invalidates an already reviewed composition when only its identity changes upstream', () => {
+    const draft = groupDraft({ mode: 'all', groups: [{ id: 'g', mode: 'all', filterIds: ['n', 'status', 'message'] }] });
+    const props = { draft, current: source, fields: ready, targetCurrent: true, canInspect: true, newQuery: false,
+      onInspect: vi.fn(), onFiltersChange: vi.fn(), onCommit: vi.fn(() => true), onDiscard: vi.fn(), onClose: vi.fn() };
+    const renderDialog = (next: QueryFilterDraft) => <I18nextProvider i18n={i18n}><QueryFiltersDialog {...props} draft={next} /></I18nextProvider>;
+    const f = render(renderDialog(draft));
+    preview();
+    expect(apply()).toBeEnabled();
+    f.rerender(renderDialog({ ...draft, composition: structuredClone(draft.composition) }));
+    expect(apply()).toBeDisabled();
+    expect(screen.queryByLabelText('Final filtered DSL')).not.toBeInTheDocument();
+    expect(props.onCommit).not.toHaveBeenCalled();
+  });
+
+  it('requires fresh field evidence and refuses malformed groups instead of silently dropping a leaf', () => {
+    const draft = groupDraft({ mode: 'any', groups: [{ id: 'g', mode: 'any', filterIds: ['n', 'status'] }] });
+    const f = fixture({ selection: null, initialDraft: draft });
+    preview();
+    expect(screen.getByRole('alert')).toHaveTextContent(enQueryFilters.invalidComposition);
+    expect(apply()).toBeDisabled();
+    f.rerender(<Harness {...f.props} fields={{ status: 'error', code: 'forbidden' }} />);
+    preview();
+    expect(screen.getByRole('alert')).toHaveTextContent(enQueryFilters.fieldUnchecked);
+    expect(f.onCommit).not.toHaveBeenCalled();
+  });
+
+  it('exposes native keyboard radio behavior without applying or requesting data', async () => {
+    const f = fixture({ selection: null, initialDraft: groupDraft() });
+    const control = screen.getByRole('radiogroup', { name: 'Group 1 operator' });
+    within(control).getByRole('radio', { name: 'All (AND)' }).focus();
+    await userEvent.setup().keyboard('{ArrowRight}');
+    const any = within(control).getByRole('radio', { name: 'Any (OR)' });
+    expect(any).toBeChecked();
+    expect(any).toHaveFocus();
+    expect(apply()).toBeDisabled();
+    expect(f.onCommit).not.toHaveBeenCalled();
+    expect(f.onInspect).not.toHaveBeenCalled();
+  });
+
+  it.each([MAX_FILTER_GROUPS, MAX_QUERY_FILTERS])('enforces group and filter limits for a %i-leaf draft', (count) => {
+    const filters: QueryFilter[] = Array.from({ length: count }, (_, index) => ({ ...groupDraft().filters[0]!, id: `n-${index}`, value: String(index) }));
+    const initialDraft: QueryFilterDraft = { ...groupDraft(), filters, composition: { mode: 'all',
+      groups: Array.from({ length: MAX_FILTER_GROUPS }, (_, index) => ({ id: `g-${index}`, mode: 'all',
+        filterIds: filters.filter((_, position) => position % MAX_FILTER_GROUPS === index).map((filter) => filter.id) })) } };
+    fixture({ initialDraft });
+    const groupSelect = screen.getByLabelText('Add to group');
+    expect(within(groupSelect).getByRole('option', { name: 'New group' })).toBeDisabled();
+    if (count === MAX_QUERY_FILTERS) {
+      expect(screen.getByRole('button', { name: 'Add to pending filters' })).toBeDisabled();
+      expect(screen.getByText(enQueryFilters.tooMany)).toBeVisible();
+    } else {
+      expect(screen.getByRole('button', { name: 'Add to pending filters' })).toBeEnabled();
+      fireEvent.change(groupSelect, { target: { value: 'new' } });
+      expect(screen.getByRole('button', { name: 'Add to pending filters' })).toBeDisabled();
+      expect(screen.getByText(enQueryFilters.tooManyGroups)).toBeVisible();
+    }
   });
 });

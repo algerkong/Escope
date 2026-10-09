@@ -5,8 +5,8 @@ import { IconButton, Modal, SelectControl } from '../../components/controls';
 import { matchesQueryDraft, type QueryDocument, type QueryDocumentPatch } from '../../domain/query';
 import { formatQueryDsl } from '../../domain/query-dsl';
 import {
-  MAX_FILTER_DSL_BYTES, MAX_QUERY_FILTERS, createQueryFilter, previewQueryFilters, queryFilterDuplicate, queryFilterFieldEvidence, queryFilterValues,
-  type CellFilterSelection, type QueryFilter, type QueryFilterDraft, type QueryFilterOperation, type QueryFilterPreview,
+  MAX_FILTER_DSL_BYTES, MAX_FILTER_GROUPS, MAX_QUERY_FILTERS, createQueryFilter, previewQueryFilters, queryFilterDuplicate, queryFilterFieldEvidence, queryFilterValues,
+  type CellFilterSelection, type QueryFilter, type QueryFilterComposition, type QueryFilterDraft, type QueryFilterJoin, type QueryFilterOperation, type QueryFilterPreview,
 } from '../../domain/query-filters';
 import type { FieldCatalog } from '../../domain/resource';
 import type { Loadable } from './useQueryResources';
@@ -31,7 +31,7 @@ interface Props {
   canInspect: boolean;
   newQuery: boolean;
   onInspect: () => void;
-  onFiltersChange: (filters: readonly QueryFilter[]) => void;
+  onFiltersChange: (filters: readonly QueryFilter[], composition: QueryFilterComposition) => void;
   onCommit: (source: QueryDocument, patch: QueryDocumentPatch) => boolean;
   onDiscard: () => void;
   onClose: () => void;
@@ -44,10 +44,16 @@ export function QueryFiltersDialog({ draft, current, initialSelection, fields, t
   const [selection, setSelection] = useState(initialSelection);
   const [operation, setOperation] = useState<QueryFilterOperation>('include');
   const [valueIndex, setValueIndex] = useState(0);
+  const [selectedGroup, setSelectedGroup] = useState('');
   const [conflict, setConflict] = useState(false);
   const [review, setReview] = useState<{
-    result: QueryFilterPreview; filters: readonly QueryFilter[]; fields: Loadable<FieldCatalog>;
+    result: QueryFilterPreview; filters: readonly QueryFilter[]; composition: QueryFilterComposition | undefined; fields: Loadable<FieldCatalog>;
   } | null>(null);
+  const composition = useMemo<QueryFilterComposition>(() => draft.composition ?? {
+    mode: 'all', groups: draft.filters.length ? [{ id: 'default', mode: 'all', filterIds: draft.filters.map((filter) => filter.id) }] : [],
+  }, [draft.composition, draft.filters]);
+  const candidateGroup = selectedGroup === 'new' || composition.groups.some((group) => group.id === selectedGroup)
+    ? selectedGroup : composition.groups[0]?.id ?? 'new';
   const catalog = fields.status === 'ready' && !fields.refreshing && !fields.refreshError ? fields.data : undefined;
   const busy = fields.status === 'loading' || fields.status === 'ready' && Boolean(fields.refreshing);
   const currentTarget = targetCurrent && matchesQueryDraft(current, draft.source) && !conflict;
@@ -61,8 +67,9 @@ export function QueryFiltersDialog({ draft, current, initialSelection, fields, t
   [draft.source, draft.snapshot, selection, operation, token, catalog]);
   const candidateProblem = proposal && !proposal.ok ? proposal.code
     : draft.filters.length >= MAX_QUERY_FILTERS ? 'tooMany'
-      : proposal?.ok && queryFilterDuplicate(draft.filters, proposal.filter) ? 'duplicate' : null;
-  const reviewed = review?.filters === draft.filters && review.fields === fields ? review.result : null;
+      : candidateGroup === 'new' && composition.groups.length >= MAX_FILTER_GROUPS ? 'tooManyGroups'
+        : proposal?.ok && queryFilterDuplicate(draft.filters, proposal.filter) ? 'duplicate' : null;
+  const reviewed = review?.filters === draft.filters && review.composition === draft.composition && review.fields === fields ? review.result : null;
   const preview = reviewed?.ok ? reviewed : null;
   const formatted = useMemo(() => preview ? formatQueryDsl(preview.dsl) : null, [preview]);
   const finalDsl = formatted?.ok && new TextEncoder().encode(formatted.formatted).length <= MAX_FILTER_DSL_BYTES
@@ -73,6 +80,20 @@ export function QueryFiltersDialog({ draft, current, initialSelection, fields, t
     t(`queryFilters:${item.operation}${['text', 'match_only_text'].includes(item.fieldType)
       && (item.operation === 'include' || item.operation === 'exclude') ? 'Phrase' : ''}`);
   const updateOperation = (value: QueryFilterOperation) => { setOperation(value); setReview(null); };
+  const changeFilters = (filters: readonly QueryFilter[], next: QueryFilterComposition) => {
+    onFiltersChange(filters, next);
+    setReview(null);
+  };
+  const moveFilter = (filterId: string, targetGroup: string) => {
+    if (!currentTarget || targetGroup === 'new' && composition.groups.length >= MAX_FILTER_GROUPS
+      || targetGroup !== 'new' && !composition.groups.some((group) => group.id === targetGroup)) return;
+    const groups = composition.groups.map((group) => ({
+      ...group, filterIds: group.id === targetGroup
+        ? [...group.filterIds.filter((id) => id !== filterId), filterId] : group.filterIds.filter((id) => id !== filterId),
+    })).filter((group) => group.filterIds.length);
+    changeFilters(draft.filters, { ...composition, groups: targetGroup === 'new'
+      ? [...groups, { id: crypto.randomUUID(), mode: 'all', filterIds: [filterId] }] : groups });
+  };
 
   return <Modal open onClose={onClose} title={t('queryFilters:title')}>
     <div className="qfilter-review">
@@ -113,14 +134,35 @@ export function QueryFiltersDialog({ draft, current, initialSelection, fields, t
         {operation === 'exclude' ? <span className="qfilter-note">{t('queryFilters:excludeBoundary')}</span> : null}
         {!presence && field?.ok && field.family === 'text' ? <span className="qfilter-note">{t('queryFilters:phraseBoundary')}</span> : null}
         {field?.ok && field.evidence === 'runtime' ? <span className="qfilter-note">{t('queryFilters:runtimeBoundary')}</span> : null}
+        {composition.groups.length ? <label>{t('queryFilters:addGroup')}
+          <SelectControl value={candidateGroup} disabled={!currentTarget}
+            onChange={(event) => { setSelectedGroup(event.target.value); setReview(null); }}>
+            {composition.groups.map((group, index) => <option key={group.id} value={group.id}>{t('queryFilters:group', { position: index + 1 })}</option>)}
+            <option value="new" disabled={composition.groups.length >= MAX_FILTER_GROUPS}>{t('queryFilters:newGroup')}</option>
+          </SelectControl>
+        </label> : null}
         {candidateProblem ? <span className="qfilter-warning" role="status">{t(`queryFilters:${candidateProblem}`)}</span> : null}
         <button type="button" className="secondary compact-button qfilter-add" disabled={!currentTarget || busy || !proposal?.ok || candidateProblem !== null}
           onClick={() => {
             if (!currentTarget || busy || !proposal?.ok || candidateProblem !== null) return;
-            onFiltersChange([...draft.filters, { ...proposal.filter, id: crypto.randomUUID() }]);
+            const filter = { ...proposal.filter, id: crypto.randomUUID() };
+            const groups = candidateGroup === 'new'
+              ? [...composition.groups, { id: crypto.randomUUID(), mode: 'all' as const, filterIds: [filter.id] }]
+              : composition.groups.map((group) => group.id === candidateGroup ? { ...group, filterIds: [...group.filterIds, filter.id] } : group);
+            changeFilters([...draft.filters, filter], { ...composition, groups });
             setSelection(undefined);
-            setReview(null);
           }}><Plus size={14} aria-hidden="true" />{t('queryFilters:add')}</button>
+      </div> : null}
+      {draft.filters.length ? <div className="qfilter-composition">
+        <div className="qfilter-context" title={t('queryFilters:scoringBoundary')}>{t('queryFilters:filterContext')}</div>
+        <FilterJoinControl label={t('queryFilters:groupMatch')} mode={composition.mode} disabled={!currentTarget || composition.groups.length < 2}
+          onChange={(mode) => changeFilters(draft.filters, { ...composition, mode })} />
+        <div className="qfilter-group-modes">
+          {composition.groups.map((group, index) => <FilterJoinControl key={group.id}
+            label={t('queryFilters:groupJoin', { position: index + 1 })} mode={group.mode} disabled={!currentTarget}
+            onChange={(mode) => changeFilters(draft.filters, { ...composition,
+              groups: composition.groups.map((entry) => entry.id === group.id ? { ...entry, mode } : entry) })} />)}
+        </div>
       </div> : null}
       {draft.filters.length ? <ul className="qfilter-list" aria-label={t('queryFilters:pending', { count: draft.filters.length })}>
         {draft.filters.map((item) => <li key={item.id}>
@@ -129,16 +171,27 @@ export function QueryFiltersDialog({ draft, current, initialSelection, fields, t
             <span title={item.operation === 'exclude' ? t('queryFilters:excludeBoundary') : undefined}>{operationLabel(item)}</span>
             {item.evidence === 'runtime' ? <span title={t('queryFilters:runtimeBoundary')}>{t('queryFilters:runtime')}</span> : null}
             {item.value !== null ? <code title={item.value}>{item.value}</code> : null}
+            <SelectControl aria-label={t('queryFilters:filterGroup', { field: item.field })} disabled={!currentTarget}
+              value={composition.groups.find((group) => group.filterIds.includes(item.id))?.id ?? ''}
+              onChange={(event) => moveFilter(item.id, event.target.value)}>
+              {composition.groups.map((group, index) => <option key={group.id} value={group.id}>{t('queryFilters:group', { position: index + 1 })}</option>)}
+              <option value="new" disabled={composition.groups.length >= MAX_FILTER_GROUPS
+                || composition.groups.find((group) => group.filterIds.includes(item.id))?.filterIds.length === 1}>
+                {t('queryFilters:newGroup')}
+              </option>
+            </SelectControl>
           </div>
           <IconButton icon={Trash2} label={t('queryFilters:remove', { field: item.field })} onClick={() => {
-            onFiltersChange(draft.filters.filter((entry) => entry.id !== item.id));
-            setReview(null);
+            changeFilters(draft.filters.filter((entry) => entry.id !== item.id), { ...composition,
+              groups: composition.groups.map((group) => ({ ...group, filterIds: group.filterIds.filter((id) => id !== item.id) }))
+                .filter((group) => group.filterIds.length) });
           }} />
         </li>)}
       </ul> : null}
       <div className="qfilter-actions">
         <button type="button" className="secondary compact-button" disabled={!currentTarget || busy || !draft.filters.length}
-          onClick={() => setReview({ result: previewQueryFilters(draft.source, draft.snapshot, draft.filters, catalog), filters: draft.filters, fields })}>
+          onClick={() => setReview({ result: previewQueryFilters(draft.source, draft.snapshot, draft.filters, catalog, draft.composition),
+            filters: draft.filters, composition: draft.composition, fields })}>
           <Eye size={14} aria-hidden="true" />{t('queryFilters:preview')}
         </button>
         <IconButton icon={Trash2} label={t('queryFilters:discard')} onClick={onDiscard} />
@@ -159,4 +212,21 @@ export function QueryFiltersDialog({ draft, current, initialSelection, fields, t
       </div>
     </div>
   </Modal>;
+}
+
+function FilterJoinControl({ label, mode, disabled, onChange }: {
+  label: string; mode: QueryFilterJoin; disabled: boolean; onChange: (mode: QueryFilterJoin) => void;
+}) {
+  const { t } = useTranslation();
+  const id = useId();
+  return <div className="qfilter-join" role="radiogroup" aria-label={label}>
+    <span className="qfilter-join-label">{label}</span>
+    <div className="qfilter-segments">
+      {(['all', 'any'] as const).map((value) => <label key={value}>
+        <input type="radio" name={id} value={value} checked={mode === value} disabled={disabled} onChange={() => onChange(value)} />
+        <span>{t(`queryFilters:${value}`)}</span>
+      </label>)}
+    </div>
+    {mode === 'any' ? <code className="qfilter-minimum" title={t('queryFilters:orBoundary')}>minimum_should_match: 1</code> : null}
+  </div>;
 }

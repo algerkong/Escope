@@ -9,6 +9,7 @@ import { compareDecimalText, parseDecimalToken } from './result-grid';
 import { parseRuntimeMappings } from './runtime-fields';
 
 export const MAX_QUERY_FILTERS = 32;
+export const MAX_FILTER_GROUPS = 8;
 export const MAX_FILTER_VALUE_BYTES = 4096;
 export const MAX_FILTER_CELL_BYTES = 64 * 1024;
 export const MAX_FILTER_VALUES = 32;
@@ -34,12 +35,27 @@ export interface QueryFilter {
   readonly origin: FilterValueOrigin;
 }
 
+export type QueryFilterJoin = 'all' | 'any';
+
+export interface QueryFilterGroup {
+  readonly id: string;
+  readonly mode: QueryFilterJoin;
+  readonly filterIds: readonly string[];
+}
+
+/** Two levels only; each filter occurs exactly once and every OR requires one match. */
+export interface QueryFilterComposition {
+  readonly mode: QueryFilterJoin;
+  readonly groups: readonly QueryFilterGroup[];
+}
+
 /** Pending filters are session-only. Only their explicitly applied DSL uses draft persistence. */
 export interface QueryFilterDraft {
   readonly source: QueryDocument;
   readonly snapshot: ExecutionSnapshot;
   readonly endpoint: string;
   readonly filters: readonly QueryFilter[];
+  readonly composition?: QueryFilterComposition;
 }
 
 export type QueryFilterProblem =
@@ -48,7 +64,8 @@ export type QueryFilterProblem =
   | 'runtimeChanged' | 'runtimeValueRequired' | 'noScalarValue' | 'compoundValue'
   | 'valueTypeMismatch' | 'valueOutOfRange' | 'valueUnsupported' | 'invalidValue'
   | 'emptyPhrase' | 'tooLarge' | 'tooMany' | 'empty' | 'duplicate'
-  | 'invalidDsl' | 'unsupportedDsl' | 'invalidBinding' | 'targetChanged';
+  | 'invalidDsl' | 'unsupportedDsl' | 'invalidBinding' | 'targetChanged'
+  | 'invalidComposition' | 'tooManyGroups';
 
 type Failure = { readonly ok: false; readonly code: QueryFilterProblem };
 type Family = 'keyword' | 'text' | 'number' | 'boolean' | 'existence';
@@ -218,9 +235,66 @@ function clauseText(filter: QueryFilter, field: Extract<FilterFieldEvidence, { o
   return `{${JSON.stringify(kind)}:{${JSON.stringify(filter.field)}:${filter.value}}}`;
 }
 
-/** Append a non-scoring conjunction without altering the original bool/MSM/scoring context. */
+function compositionProblem(input: QueryFilterComposition, filters: readonly QueryFilter[]): QueryFilterProblem | null {
+  const record = (value: unknown, keys: readonly string[]): value is Record<string, unknown> => value !== null
+    && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === keys.length
+    && Object.keys(value).every((key) => keys.includes(key));
+  const join = (value: unknown) => value === 'all' || value === 'any';
+  if (!record(input, ['mode', 'groups']) || !join(input.mode) || !Array.isArray(input.groups) || !input.groups.length) {
+    return 'invalidComposition';
+  }
+  if (input.groups.length > MAX_FILTER_GROUPS) return 'tooManyGroups';
+  const groupIds = new Set<string>();
+  const remaining = new Set(filters.map((filter) => filter.id));
+  for (const group of input.groups) {
+    if (!record(group, ['id', 'mode', 'filterIds']) || typeof group.id !== 'string' || !group.id
+      || bytes(group.id) > 128 || groupIds.has(group.id) || !join(group.mode)
+      || !Array.isArray(group.filterIds) || !group.filterIds.length || group.filterIds.length > MAX_QUERY_FILTERS) {
+      return 'invalidComposition';
+    }
+    groupIds.add(group.id);
+    for (const id of group.filterIds) {
+      if (typeof id !== 'string' || !remaining.delete(id)) return 'invalidComposition';
+    }
+  }
+  return remaining.size ? 'invalidComposition' : null;
+}
+
+interface FilterClause { readonly text: string; readonly negative: boolean }
+
+function conjunction(clauses: readonly FilterClause[]): string {
+  const positive = clauses.filter((clause) => !clause.negative).map((clause) => clause.text);
+  const negative = clauses.filter((clause) => clause.negative).map((clause) => clause.text);
+  return [
+    ...(positive.length ? [`"filter":[${positive.join(',')}]`] : []),
+    ...(negative.length ? [`"must_not":[${negative.join(',')}]`] : []),
+  ].join(',');
+}
+
+function disjunction(clauses: readonly FilterClause[]): string {
+  // A negative branch must remain local to this OR, never become a global exclusion.
+  const alternatives = clauses.map((clause) => clause.negative ? `{"bool":{"must_not":[${clause.text}]}}` : clause.text);
+  return `"should":[${alternatives.join(',')}],"minimum_should_match":1`;
+}
+
+function composeClauses(clauses: ReadonlyMap<string, FilterClause>, composition?: QueryFilterComposition): string {
+  if (!composition) return conjunction([...clauses.values()]);
+  const groups = composition.groups.map((group) => ({
+    mode: group.mode, clauses: group.filterIds.map((id) => clauses.get(id)!),
+  }));
+  if (composition.mode === 'all' && groups.length === 1 && groups[0]!.mode === 'all') {
+    return conjunction(groups[0]!.clauses);
+  }
+  const combined = groups.map((group) => ({
+    text: `{"bool":{${group.mode === 'all' ? conjunction(group.clauses) : disjunction(group.clauses)}}}`, negative: false,
+  }));
+  // Even text/should branches stay in filter context; only the untouched original query scores.
+  return composition.mode === 'all' ? conjunction(combined) : `"filter":[{"bool":{${disjunction(combined)}}}]`;
+}
+
+/** Append reviewed filter groups without altering the original bool/MSM/scoring context. */
 export function previewQueryFilters(source: QueryDocument, snapshot: ExecutionSnapshot, filters: readonly QueryFilter[],
-  catalog?: FieldCatalog): QueryFilterPreview {
+  catalog?: FieldCatalog, composition?: QueryFilterComposition): QueryFilterPreview {
   if (!filters.length) return { ok: false, code: 'empty' };
   if (filters.length > MAX_QUERY_FILTERS) return { ok: false, code: 'tooMany' };
   if (bytes(source.dsl) > MAX_FILTER_DSL_BYTES) return { ok: false, code: 'tooLarge' };
@@ -229,13 +303,10 @@ export function previewQueryFilters(source: QueryDocument, snapshot: ExecutionSn
   const root = roots.current;
   if ((root.children ?? []).some((entry) => !ROOT_KEYS.has(String(entry.children?.[0]?.value)))
     || property(root, 'query') && property(root, 'query')?.type !== 'object') return { ok: false, code: 'unsupportedDsl' };
-  const positive: string[] = [];
-  const negative: string[] = [];
-  const ids = new Set<string>();
+  const clauses = new Map<string, FilterClause>();
   for (let index = 0; index < filters.length; index += 1) {
     const filter = filters[index]!;
-    if (ids.has(filter.id) || queryFilterDuplicate(filters.slice(0, index), filter)) return { ok: false, code: 'duplicate' };
-    ids.add(filter.id);
+    if (clauses.has(filter.id) || queryFilterDuplicate(filters.slice(0, index), filter)) return { ok: false, code: 'duplicate' };
     const field = fieldEvidence(roots.executed, root, filter.field, catalog);
     if (!field.ok) return field;
     if (field.fieldType !== filter.fieldType || field.evidence !== filter.evidence) return { ok: false, code: 'fieldChanged' };
@@ -248,8 +319,10 @@ export function previewQueryFilters(source: QueryDocument, snapshot: ExecutionSn
       const problem = checkValue(filter.value!, field);
       if (problem) return { ok: false, code: problem };
     }
-    (filter.operation === 'exclude' || filter.operation === 'missing' ? negative : positive).push(clauseText(filter, field));
+    clauses.set(filter.id, { text: clauseText(filter, field), negative: filter.operation === 'exclude' || filter.operation === 'missing' });
   }
+  const groupingProblem = composition === undefined ? null : compositionProblem(composition, filters);
+  if (groupingProblem) return { ok: false, code: groupingProblem };
   const time = source.timeRange === undefined ? undefined
     : parseQueryTimeRange(source.timeRange, source.connectionId, source.index, source.dsl);
   if (time === null) return { ok: false, code: 'invalidBinding' };
@@ -257,8 +330,7 @@ export function previewQueryFilters(source: QueryDocument, snapshot: ExecutionSn
     ? property(property(property(root, 'query'), 'bool'), 'must')!.children![0]!
     : property(root, 'query');
   const wrapped = `{"bool":{"must":[${original ? sliceRaw(source.dsl, original) : '{"match_all":{}}'}]`
-    + `${positive.length ? `,"filter":[${positive.join(',')}]` : ''}`
-    + `${negative.length ? `,"must_not":[${negative.join(',')}]` : ''}}}`;
+    + `,${composeClauses(clauses, composition)}}}`;
   const last = root.children?.at(-1);
   const dsl = applyEdits(source.dsl, [original ? { offset: original.offset, length: original.length, content: wrapped }
     : { offset: last ? last.offset + last.length : root.offset + 1, length: 0, content: `${last ? ',' : ''}"query":${wrapped}` }]);

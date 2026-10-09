@@ -649,8 +649,8 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
       onInspect={() => {
         if (available && filterTargetCurrent) refreshFields(reviewedFilters.snapshot.connectionId, reviewedFilters.endpoint, reviewedFilters.snapshot.index.trim());
       }}
-      onFiltersChange={(filters) => setFilterDrafts((current) => current[reviewedFilters.source.id] === reviewedFilters
-        ? { ...current, [reviewedFilters.source.id]: { ...reviewedFilters, filters } } : current)}
+      onFiltersChange={(filters, composition) => setFilterDrafts((current) => current[reviewedFilters.source.id] === reviewedFilters
+        ? { ...current, [reviewedFilters.source.id]: { ...reviewedFilters, filters, composition } } : current)}
       onDiscard={() => discardFilters(reviewedFilters.source.id)}
       onClose={() => setFilterDialog(null)}
       onCommit={(source, patch) => {

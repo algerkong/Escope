@@ -1092,6 +1092,51 @@ mod tests {
     }
 
     #[test]
+    fn reviewed_filter_groups_stay_verbatim_in_search_and_pit_requests() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/query-filter-groups-v1.json"
+        ))
+        .unwrap();
+        let raw = fixture["groupedDsl"].as_str().unwrap();
+        assert_eq!(
+            request("events-*", raw).prepare().unwrap().body,
+            raw.as_bytes()
+        );
+        let original: BTreeMap<String, Box<RawValue>> = serde_json::from_str(raw).unwrap();
+        for after in [
+            None,
+            Some(fixture["searchAfter"].as_str().unwrap().to_owned()),
+        ] {
+            let mut paged = request("events-*", raw);
+            paged.pit_id = Some("groups-pit".into());
+            paged.search_after = after.clone();
+            let body = paged.prepare().unwrap().body;
+            let values: BTreeMap<String, Box<RawValue>> = serde_json::from_slice(&body).unwrap();
+            for key in [
+                "query",
+                "sort",
+                "size",
+                "min_score",
+                "runtime_mappings",
+                "fields",
+            ] {
+                assert_eq!(values[key].get(), original[key].get(), "{key}");
+            }
+            assert_eq!(
+                values.get("search_after").map(|value| value.get()),
+                after.as_deref()
+            );
+            assert!(!values.contains_key("composition"));
+            assert!(!values.contains_key("timeRange"));
+        }
+        let value: Value = serde_json::from_str(raw).unwrap();
+        let combined = &value["query"]["bool"]["filter"][0]["bool"];
+        assert_eq!(combined["minimum_should_match"], 1);
+        assert_eq!(combined["should"][0]["bool"]["minimum_should_match"], 1);
+        assert!(value["query"]["bool"].get("should").is_none());
+    }
+
+    #[test]
     fn a_continuation_composes_the_body_without_rewriting_numbers_or_overriding_the_draft() {
         let sentinel = "123456789012345678901234567890";
         let mut continued = request(

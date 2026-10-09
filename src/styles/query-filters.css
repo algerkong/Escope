@@ -25,3 +25,21 @@
 .qfilter-draft-bar > .icon-button:last-child { margin-left: auto; }
 .qfilter-review .dialog-actions { flex-wrap: wrap; }
 .qfilter-review .icon-button, .qfilter-draft-bar .icon-button { flex: 0 0 28px; width: 28px; height: 28px; }
+.qfilter-composition { min-width: 0; padding: 6px 0; border-block: 1px solid var(--border); }
+.qfilter-context { color: var(--muted); font-size: .75rem; margin-bottom: 4px; }
+.qfilter-group-modes { max-height: 160px; overflow: auto; }
+.qfilter-join { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; min-width: 0; padding: 4px 0; }
+.qfilter-join-label { flex: 0 1 130px; min-width: 0; overflow-wrap: anywhere; }
+.qfilter-segments { display: inline-flex; flex-shrink: 0; border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+.qfilter-segments label { display: flex; position: relative; align-items: center; justify-content: center; min-height: 28px; min-width: 74px; cursor: pointer; }
+.qfilter-segments label + label { border-left: 1px solid var(--border); }
+.qfilter-segments input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
+.qfilter-segments span { padding: 3px 8px; font-size: .75rem; overflow-wrap: anywhere; }
+.qfilter-segments label:has(input:checked) { background: var(--subtle); color: var(--text); }
+.qfilter-segments label:has(input:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
+.qfilter-segments label:has(input:disabled) { opacity: .55; cursor: not-allowed; }
+.qfilter-minimum { color: var(--muted); font-size: .7rem; min-width: 0; overflow-wrap: anywhere; }
+.qfilter-item > .select-control { flex-basis: 120px; max-width: 100%; }
+@media (forced-colors: active) {
+  .qfilter-segments input { position: static; opacity: 1; width: 14px; height: 14px; margin-left: 6px; appearance: auto; }
+}

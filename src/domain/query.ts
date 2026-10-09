@@ -1,5 +1,6 @@
 import { validateQueryDsl, type QueryDslErrorCode } from './query-dsl';
 import { DATA_PREVIEW_DSL } from './query-pagination';
+import type { QueryParameters } from './query-parameters';
 
 export interface QueryDocument {
   readonly id: string;
@@ -9,6 +10,7 @@ export interface QueryDocument {
   dsl: string;
   revision: number;
   resultView: 'table' | 'json';
+  parameters?: QueryParameters;
 }
 
 export interface ExecutionSnapshot {
@@ -171,7 +173,7 @@ export function createIndexTab(connectionId: string, index: string, view: QueryD
 }
 
 export function updateWorkspaceDocument(
-  state: WorkspaceState, id: string, patch: Partial<Pick<QueryDocument, 'name' | 'index' | 'dsl' | 'resultView'>>,
+  state: WorkspaceState, id: string, patch: QueryDocumentPatch,
 ): WorkspaceState {
   return {
     ...state,
@@ -183,10 +185,19 @@ export function updateWorkspaceDocument(
       if (!changed) return tab;
       const revised = (allowed.dsl !== undefined && allowed.dsl !== tab.document.dsl)
         || (allowed.index !== undefined && allowed.index !== tab.document.index)
-        || (allowed.name !== undefined && allowed.name !== tab.document.name);
+        || (allowed.name !== undefined && allowed.name !== tab.document.name)
+        || (allowed.parameters !== undefined && JSON.stringify(allowed.parameters) !== JSON.stringify(tab.document.parameters));
       return { ...tab, document: { ...tab.document, ...allowed, revision: tab.document.revision + (revised ? 1 : 0) } };
     }),
   };
+}
+
+export type QueryDocumentPatch = Partial<Pick<QueryDocument, 'name' | 'index' | 'dsl' | 'resultView' | 'parameters'>>;
+
+export function matchesQueryDraft(current: QueryDocument | undefined, expected: QueryDocument): boolean {
+  return current !== undefined && current.id === expected.id && current.revision === expected.revision
+    && current.connectionId === expected.connectionId && current.index === expected.index && current.dsl === expected.dsl
+    && JSON.stringify(current.parameters) === JSON.stringify(expected.parameters);
 }
 
 export function closeWorkspaceTab(state: WorkspaceState, id: string): WorkspaceState {

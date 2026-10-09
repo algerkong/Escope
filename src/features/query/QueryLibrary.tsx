@@ -1,4 +1,4 @@
-import { Bookmark, Download, LoaderCircle, RefreshCw, Star, Trash2 } from 'lucide-react';
+import { Bookmark, Download, FileDown, FileUp, LoaderCircle, RefreshCw, Star, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
@@ -27,6 +27,10 @@ import '../../styles/query-library.css';
  */
 
 export type LibraryLoadStatus = 'loading' | 'ready' | 'error';
+const IMPORT_REJECTIONS = new Set([
+  'exchangeInvalid', 'exchangeVersion', 'exchangeTooLarge', 'exchangeSensitive',
+  'exchangeMappingRequired', 'exchangeTargetChanged', 'invalidInput', 'unsupported',
+]);
 
 export interface SaveStatus {
   readonly status: 'idle' | 'saving' | 'saved' | 'error';
@@ -47,6 +51,8 @@ export interface QueryLibraryController {
   readonly deleteEntry: (id: string) => void;
   readonly setFavorite: (id: string, favorite: boolean) => void;
   readonly retrySave: () => void;
+  readonly importing: boolean;
+  readonly importLibrary: (expected: SavedQueryLibrary, importer: () => Promise<SavedQueryLibrary>) => Promise<void>;
 }
 
 export function useQueryLibrary(service: QueryLibraryService): QueryLibraryController {
@@ -56,6 +62,9 @@ export function useQueryLibrary(service: QueryLibraryService): QueryLibraryContr
   const [saveStatus, setSaveStatus] = useState<SaveStatus>({ status: 'idle' });
   const libraryRef = useRef<SavedQueryLibrary>(createEmptyLibrary());
   const persistedRef = useRef<string | null>(null);
+  const persistedLibraryRef = useRef<SavedQueryLibrary | null>(null);
+  const importingRef = useRef(false);
+  const [importing, setImporting] = useState(false);
   const generationRef = useRef(0);
   const chainRef = useRef<Promise<void>>(Promise.resolve());
   const statusRef = useRef<LibraryLoadStatus>('loading');
@@ -76,12 +85,14 @@ export function useQueryLibrary(service: QueryLibraryService): QueryLibraryContr
     // previous optimistic state is dropped and any queued write for the old generation is skipped.
     libraryRef.current = createEmptyLibrary();
     persistedRef.current = null;
+    persistedLibraryRef.current = null;
     setEntries([]);
     service.load().then(
       (library) => {
         if (generation !== generationRef.current) return;
         libraryRef.current = library;
         persistedRef.current = serializeLibrary(library);
+        persistedLibraryRef.current = library;
         setEntries(library.entries);
         applyStatus('ready');
       },
@@ -98,7 +109,8 @@ export function useQueryLibrary(service: QueryLibraryService): QueryLibraryContr
     );
   }, [applyStatus, service]);
 
-  useEffect(() => { reload(); }, [reload]);
+  const invalidateGeneration = useCallback(() => { generationRef.current++; }, []);
+  useEffect(() => { reload(); return invalidateGeneration; }, [reload, invalidateGeneration]);
 
   const enqueueSave = useCallback(() => {
     // Bind each queued write to the service and load generation that produced it: a service
@@ -114,9 +126,12 @@ export function useQueryLibrary(service: QueryLibraryService): QueryLibraryContr
       if (json === persistedRef.current) return;
       setSaveStatus({ status: 'saving' });
       try {
-        await boundService.save(payload);
+        const expected = persistedLibraryRef.current;
+        if (expected === null) return;
+        await boundService.save(payload, expected);
         if (boundService !== serviceRef.current || boundGeneration !== generationRef.current) return;
         persistedRef.current = json;
+        persistedLibraryRef.current = payload;
         // Only the save that still matches the latest intent may report success; a newer
         // queued save keeps the indicator on "saving" until it settles.
         if (serializeLibrary(libraryRef.current) === json) setSaveStatus({ status: 'saved' });
@@ -140,7 +155,7 @@ export function useQueryLibrary(service: QueryLibraryService): QueryLibraryContr
   const saveDraft = useCallback((document: QueryDocument, options: {
     name: string; favorite: boolean; entryId?: string;
   }): SaveDraftResult => {
-    if (statusRef.current !== 'ready') return { ok: false, code: 'libraryUnavailable' };
+    if (statusRef.current !== 'ready' || importingRef.current) return { ok: false, code: 'libraryUnavailable' };
     const entry = entryFromDocument(document, {
       id: options.entryId ?? crypto.randomUUID(),
       name: options.name,
@@ -154,20 +169,52 @@ export function useQueryLibrary(service: QueryLibraryService): QueryLibraryContr
   }, [commit]);
 
   const deleteEntry = useCallback((id: string) => {
-    if (statusRef.current !== 'ready') return;
+    if (statusRef.current !== 'ready' || importingRef.current) return;
     commit((library) => removeEntry(library, id));
   }, [commit]);
 
   const setFavorite = useCallback((id: string, favorite: boolean) => {
-    if (statusRef.current !== 'ready') return;
+    if (statusRef.current !== 'ready' || importingRef.current) return;
     commit((library) => setEntryFavorite(library, id, favorite));
   }, [commit]);
 
   const retrySave = useCallback(() => { void enqueueSave(); }, [enqueueSave]);
 
+  const importLibrary = useCallback(async (expected: SavedQueryLibrary, importer: () => Promise<SavedQueryLibrary>) => {
+    if (importingRef.current || statusRef.current !== 'ready') throw { code: 'busy' };
+    importingRef.current = true;
+    setImporting(true);
+    const generation = generationRef.current;
+    const boundService = service;
+    const expectedJson = serializeLibrary(expected);
+    try {
+      await chainRef.current;
+      if (generation !== generationRef.current || boundService !== serviceRef.current
+        || expectedJson !== serializeLibrary(libraryRef.current) || expectedJson !== persistedRef.current) throw { code: 'libraryConflict' };
+      const next = await importer();
+      if (generation !== generationRef.current || boundService !== serviceRef.current) throw { code: 'libraryConflict' };
+      libraryRef.current = next;
+      persistedLibraryRef.current = next;
+      persistedRef.current = serializeLibrary(next);
+      setEntries(next.entries);
+      setSaveStatus({ status: 'saved' });
+    } catch (error) {
+      if (generation === generationRef.current && boundService === serviceRef.current) {
+        const code = errorCode(error);
+        if (!IMPORT_REJECTIONS.has(code)) {
+          setSaveStatus({ status: 'error', code: code === 'libraryConflict' ? 'libraryConflict' : 'importUnconfirmed' });
+        }
+      }
+      throw error;
+    } finally {
+      importingRef.current = false;
+      setImporting(false);
+    }
+  }, [service]);
+
   return useMemo(() => ({
-    status, loadError, entries, saveStatus, reload, saveDraft, deleteEntry, setFavorite, retrySave,
-  }), [status, loadError, entries, saveStatus, reload, saveDraft, deleteEntry, setFavorite, retrySave]);
+    status, loadError, entries, saveStatus, reload, saveDraft, deleteEntry, setFavorite, retrySave, importing, importLibrary,
+  }), [status, loadError, entries, saveStatus, reload, saveDraft, deleteEntry, setFavorite, retrySave, importing, importLibrary]);
 }
 
 const LIMIT_MESSAGE_KEYS: Record<string, string> = {
@@ -179,6 +226,7 @@ const LIMIT_MESSAGE_KEYS: Record<string, string> = {
   invalidTimestamp: 'limitInvalidTimestamp',
   connectionIdTooLong: 'limitConnectionIdTooLong',
   libraryUnavailable: 'libraryUnavailable',
+  invalidParameters: 'limitInvalidParameters',
 };
 
 function limitMessage(t: TFunction, code: string): string {
@@ -274,17 +322,19 @@ export interface QueryLibraryDialogProps {
   onToggleFavorite: (entry: SavedQueryEntry) => void;
   onRetrySave: () => void;
   onReload: () => void;
+  onExchange?: (mode: 'import' | 'export') => void;
 }
 
 export function QueryLibraryDialog({
   open, kind, status, loadError, entries, saveStatus, profiles,
-  onClose, onRestore, onDelete, onToggleFavorite, onRetrySave, onReload,
+  onClose, onRestore, onDelete, onToggleFavorite, onRetrySave, onReload, onExchange,
 }: QueryLibraryDialogProps) {
   const { t, i18n } = useTranslation();
   const listRef = useRef<HTMLUListElement>(null);
   const [confirming, setConfirming] = useState<SavedQueryEntry | null>(null);
   const connections = useMemo(() => new Map(profiles.map((profile) => [profile.id, profile.displayName])), [profiles]);
   const timeFormat = useMemo(() => new Intl.DateTimeFormat(i18n.language, { dateStyle: 'medium', timeStyle: 'short' }), [i18n.language]);
+  const reloadRequired = saveStatus.code === 'libraryConflict' || saveStatus.code === 'importUnconfirmed';
 
   useEffect(() => { if (!open) setConfirming(null); }, [open]);
 
@@ -310,9 +360,16 @@ export function QueryLibraryDialog({
           <LoaderCircle className="spin" size={14} aria-hidden="true" />{t('queryLibrary:saving')}</span> : null}
         {saveStatus.status === 'saved' ? <span className="ql-status" role="status">{t('queryLibrary:saved')}</span> : null}
         {saveStatus.status === 'error' ? <>
-          <span className="ql-status qlib-error" role="alert">{t('queryLibrary:saveFailed')}</span>
-          <button type="button" className="secondary compact-button" onClick={onRetrySave}>{t('retry')}</button>
+          <span className="ql-status qlib-error" role="alert">{t(saveStatus.code === 'importUnconfirmed' ? 'queryLibrary:importUnconfirmed'
+            : saveStatus.code === 'libraryConflict' ? 'queryLibrary:saveConflict' : 'queryLibrary:saveFailed')}</span>
+          <button type="button" className="secondary compact-button" onClick={reloadRequired ? onReload : onRetrySave}>
+            {t(reloadRequired ? 'queryLibrary:reloadSaved' : 'retry')}</button>
         </> : null}
+        {onExchange ? <div className="qexchange-actions">
+          <IconButton icon={FileDown} label={t('queryExchange:export')} disabled={status !== 'ready' || entries.length === 0}
+            onClick={() => onExchange('export')} />
+          <IconButton icon={FileUp} label={t('queryExchange:import')} disabled={status !== 'ready'} onClick={() => onExchange('import')} />
+        </div> : null}
       </div>
       {status === 'loading' ? <div className="qlib-empty" role="status">
         <LoaderCircle className="spin" size={20} aria-hidden="true" />

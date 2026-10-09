@@ -13,7 +13,9 @@ mod model_discovery;
 mod models;
 mod operation;
 mod query;
+mod query_exchange;
 mod query_export;
+mod query_parameters;
 mod read_only;
 mod resources;
 mod saved_queries;
@@ -366,6 +368,9 @@ pub fn run() {
             saved_queries::saved_queries_load,
             saved_queries::saved_queries_save,
             saved_queries::saved_queries_export,
+            query_exchange::query_exchange_read,
+            query_exchange::query_exchange_save,
+            query_exchange::query_exchange_import,
             query_export::query_export,
             query_export::query_export_cancel,
             workspace_recovery::workspace_recovery_load,

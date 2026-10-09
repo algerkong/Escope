@@ -3,7 +3,7 @@ import { Command as CommandIcon, Database, LoaderCircle, ScanLine, Search, Setti
 import { useTranslation } from 'react-i18next';
 import {
   addWorkspaceTab, closeWorkspaceTab, createIndexTab, createQuery, createWorkspace,
-  selectWorkspaceTab, switchConnection, updateWorkspaceDocument, type QueryDocument, type WorkspaceState,
+  matchesQueryDraft, selectWorkspaceTab, switchConnection, updateWorkspaceDocument, type QueryDocument, type QueryDocumentPatch, type WorkspaceState,
 } from '../domain/query';
 import { selectConnection, type ConnectionInput, type ConnectionSecurityChange } from '../domain/connection';
 import { parsePreferences, resolveLocale, type Preferences } from '../domain/preferences';
@@ -219,8 +219,11 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
       setCleanupPending(result.status !== 'complete');
     } finally { setCleanupBusy(false); }
   });
-  const updateQuery = (id: string, patch: Partial<Pick<QueryDocument, 'name' | 'index' | 'dsl' | 'resultView'>>) =>
+  const updateQuery = (id: string, patch: QueryDocumentPatch, expected?: QueryDocument) => {
+    if (expected && !matchesQueryDraft(workspaceRef.current.tabs.find((tab) => tab.document.id === id)?.document, expected)) return false;
     setState((current) => updateWorkspaceDocument(current, id, patch));
+    return true;
+  };
   const closeTab = (id: string) => navigateWorkspace((current) => closeWorkspaceTab(current, id));
   const reloadWorkspace = () => {
     // An explicit restore is newer than a connection-selection write still in flight.

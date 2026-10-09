@@ -9,6 +9,7 @@ export type QueryDslErrorCode =
   | 'dslSyntaxError'
   | 'dslNotObject'
   | 'dslDuplicateKey'
+  | 'dslUnresolvedParameters'
   | 'dslParseFailed';
 
 /**
@@ -114,6 +115,14 @@ function checkStructure(source: string): DslStructure {
   const duplicate = duplicateKeyOffset(root);
   if (duplicate !== undefined) {
     return { ok: false, error: { code: 'dslDuplicateKey', ...locate(source, duplicate) } };
+  }
+  const pending = [root];
+  while (pending.length) {
+    const node = pending.pop()!;
+    if (node.type === 'property' && node.children?.[0]?.value === '$param') {
+      return { ok: false, error: { code: 'dslUnresolvedParameters', ...locate(source, node.offset) } };
+    }
+    for (const child of node.children ?? []) pending.push(child);
   }
   return { ok: true };
 }

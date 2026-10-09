@@ -30,6 +30,7 @@
 //! them, and refusing them here keeps the stored bytes canonical.
 
 use crate::error::AppError;
+use crate::query_parameters::{optional_parameters, QueryParameters};
 use crate::storage::Database;
 use crate::{with_database, StorageState};
 use serde::de::value::{MapAccessDeserializer, StrDeserializer};
@@ -327,6 +328,12 @@ pub struct TabDocument {
     pub dsl: String,
     pub revision: u64,
     pub result_view: ResultView,
+    #[serde(
+        default,
+        deserialize_with = "optional_parameters",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub parameters: Option<QueryParameters>,
 }
 
 /// Debug output must never leak a draft body: the DSL is shown as its byte length only.
@@ -341,6 +348,7 @@ impl fmt::Debug for TabDocument {
             .field("dsl_bytes", &self.dsl.len())
             .field("revision", &self.revision)
             .field("result_view", &self.result_view)
+            .field("parameters", &self.parameters)
             .finish()
     }
 }
@@ -687,6 +695,9 @@ impl RecoveryWorkspace {
 impl RecoveryTab {
     fn validate(&self) -> Result<(), AppError> {
         self.document.validate()?;
+        if self.kind == TabKind::Index && self.document.parameters.is_some() {
+            return Err(invalid());
+        }
         self.grid.validate()?;
         if let Nullable(Some(draft)) = &self.visual_draft {
             draft.validate(&self.document.dsl)?;
@@ -707,6 +718,9 @@ impl TabDocument {
         }
         if self.revision > MAX_REVISION {
             return Err(invalid());
+        }
+        if let Some(parameters) = &self.parameters {
+            parameters.validate()?;
         }
         Ok(())
     }
@@ -969,7 +983,7 @@ fn valid_error_code(value: &str) -> bool {
 /// `Date.toISOString()` to equal the input; for this exact grammar that is equivalent to the
 /// calendar check below (an out-of-range component either fails to parse or round-trips to a
 /// different stamp), and no dependency is needed for it.
-fn valid_timestamp(value: &str) -> bool {
+pub(crate) fn valid_timestamp(value: &str) -> bool {
     let bytes = value.as_bytes();
     if bytes.len() != 24
         || bytes[4] != b'-'
@@ -1138,6 +1152,7 @@ mod tests {
             dsl: dsl.to_owned(),
             revision: 3,
             result_view: ResultView::Table,
+            parameters: None,
         }
     }
 
@@ -2241,5 +2256,28 @@ mod tests {
         assert_eq!(save(&mut database, 1, good).unwrap().revision, 2);
         assert_eq!(stored_row(&path).0, 2);
         assert_ne!(stored, stored_row(&path));
+    }
+
+    #[test]
+    fn optional_parameter_definitions_round_trip_in_v1_without_values_or_auto_execution() {
+        let directory = tempdir().unwrap();
+        let mut database = Database::open(&directory.path().join("parameters.sqlite")).unwrap();
+        let mut tab = query_tab("q1", r#"{"size":25}"#);
+        tab.document.parameters = Some(serde_json::from_str(
+            r#"{"version":1,"template":"{ incomplete template","definitions":[{"name":"minimum","type":"number"}]}"#,
+        ).unwrap());
+        let document = base_document(vec![tab], Vec::new());
+        save(&mut database, 0, document.clone()).unwrap();
+        assert_eq!(load(&database).unwrap().document, document);
+        let mut invalid = encoded(&document);
+        invalid["workspace"]["tabs"][0]["document"]["parameters"]["values"] =
+            serde_json::json!({"minimum":"fixture"});
+        refused(&invalid, "parameter input values");
+        let mut invalid = encoded(&document);
+        invalid["workspace"]["tabs"][0]["document"]["parameters"] = serde_json::Value::Null;
+        refused(&invalid, "null parameter definition");
+        let mut invalid = encoded(&document);
+        invalid["workspace"]["tabs"][0]["document"]["parameters"]["version"] = serde_json::json!(2);
+        refused(&invalid, "unknown parameter version");
     }
 }

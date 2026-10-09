@@ -1,10 +1,10 @@
-import { Bookmark, Braces, Database, FileCheck2, FileDown, History, Layers, LoaderCircle, Play, Plus, Save, Settings, ShieldCheck, Star, TriangleAlert, Undo2 } from 'lucide-react';
+import { Bookmark, Braces, Database, FileCheck2, FileDown, History, Layers, LoaderCircle, Play, Plus, Save, Settings, ShieldCheck, Star, TriangleAlert, Undo2, Variable } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ConnectionProfile } from '../../domain/connection';
 import type { AiChatBackend } from '../../domain/ai-chat';
 import type { Preferences } from '../../domain/preferences';
-import type { ExecutionState, QueryDocument, SnapshotRejection, WorkspaceState } from '../../domain/query';
+import { matchesQueryDraft, type ExecutionState, type QueryDocument, type QueryDocumentPatch, type SnapshotRejection, type WorkspaceState } from '../../domain/query';
 import { IconButton, Modal } from '../../components/controls';
 import { PanelResizeHandle } from '../../components/PanelResizeHandle';
 import { PANEL_DEFAULTS } from '../../domain/workspace-panels';
@@ -21,6 +21,9 @@ import { desktopModelService, type ModelService } from '../../services/models';
 import { detectWindowPlatform } from '../../services/window';
 import { AiChatPanel } from '../ai/AiChatPanel';
 import { QueryLibraryDialog, SaveDraftDialog, useQueryLibrary, type SaveDraftResult } from './QueryLibrary';
+import { QueryParametersDialog } from './QueryParametersDialog';
+import { QueryExchangeDialog } from './QueryExchangeDialog';
+import { createQueryExchangeService, type QueryExchangeService } from '../../services/query-exchange';
 import { QueryResults } from './QueryResults';
 import { SnapshotExportDialog, type SnapshotExportTaskState } from './SnapshotExportDialog';
 import { DataPreview } from './DataPreview';
@@ -51,7 +54,7 @@ interface Props {
   testResults: Record<string, ConnectionTestState>;
   toggleAI: () => void;
   onSettings: (route: SettingsRoute) => void;
-  updateQuery: (id: string, patch: Partial<Pick<QueryDocument, 'name' | 'index' | 'dsl' | 'resultView'>>) => void;
+  updateQuery: (id: string, patch: QueryDocumentPatch, expected?: QueryDocument) => boolean | void;
   selectTab: (id: string | null) => void;
   openIndex: (connectionId: string, index: string) => { document: QueryDocument; created: boolean };
   addQuery: (source?: QueryDocument) => void;
@@ -69,12 +72,13 @@ interface Props {
   /** Injectable seam for the local query library and loaded-result export. */
   libraryService?: QueryLibraryService;
   snapshotExportService?: SnapshotExportService;
+  exchangeService?: QueryExchangeService;
   /** Restore a saved query as a new tab; the App owns tab creation and never auto-executes it. */
   restoreQuery?: (document: QueryDocument) => void;
   recovery?: WorkspaceRecoveryController;
 }
 
-export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResults, toggleAI, onSettings, updateQuery, selectTab, openIndex, addQuery, closeTab, backend = desktopQueryBackend, modelService = desktopModelService, aiBackend, canQuery, active = true, onCommandReady, libraryService = defaultQueryLibraryService, snapshotExportService = desktopSnapshotExportService, restoreQuery, recovery }: Props) {
+export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResults, toggleAI, onSettings, updateQuery, selectTab, openIndex, addQuery, closeTab, backend = desktopQueryBackend, modelService = desktopModelService, aiBackend, canQuery, active = true, onCommandReady, libraryService = defaultQueryLibraryService, snapshotExportService = desktopSnapshotExportService, exchangeService: suppliedExchangeService, restoreQuery, recovery }: Props) {
   const { t } = useTranslation();
   const [closing, setClosing] = useState<QueryDocument | null>(null);
   const [checked, setChecked] = useState<Record<string, { source: string; error: QueryDslError | null }>>({});
@@ -96,9 +100,12 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const { entries, run, cancel, release, reconcile, loadMore } = useQueryExecutions(backend, recovery?.onHistory);
   const panels = useWorkspacePanels(aiOpen, active);
   const library = useQueryLibrary(libraryService);
+  const exchangeService = useMemo(() => suppliedExchangeService ?? createQueryExchangeService(libraryService), [suppliedExchangeService, libraryService]);
+  const [exchangeMode, setExchangeMode] = useState<'import' | 'export' | null>(null);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [saveDraftOpen, setSaveDraftOpen] = useState(false);
+  const [parameterSource, setParameterSource] = useState<QueryDocument | null>(null);
   const [savedEntryIds, setSavedEntryIds] = useState<Record<string, string>>({});
   const [exportSource, setExportSource] = useState<SnapshotExportSource | null>(null);
   const [exportVisible, setExportVisible] = useState(false);
@@ -185,7 +192,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
     for (const id of scroll.current.keys()) if (!documentIds.includes(id)) scroll.current.delete(id);
   }, [documentIds, release]);
 
-  const patchQuery = useCallback((patch: Partial<Pick<QueryDocument, 'name' | 'index' | 'dsl' | 'resultView'>>) => {
+  const patchQuery = useCallback((patch: QueryDocumentPatch) => {
     if (!showingQuery) return;
     if (patch.dsl !== undefined || patch.index !== undefined) setRejections((current) => ({ ...current, [query.id]: null }));
     updateQuery(query.id, patch);
@@ -401,6 +408,8 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
           <IconButton icon={Save} label={t('queryLibrary:saveDraft')} disabled={!canSaveDraft}
             title={saveBlockedByVisual ? t('queryLibrary:saveBlockedVisual') : t('queryLibrary:saveDraft')}
             onClick={() => setSaveDraftOpen(true)} />
+          <IconButton icon={Variable} label={t('queryParameters:open')} disabled={saveBlockedByVisual || restoring}
+            onClick={() => setParameterSource(query)} />
           {linkedEntry ? <IconButton className={`qlib-star${linkedEntry.favorite ? ' active' : ''}`} icon={Star}
             aria-pressed={linkedEntry.favorite} label={t(linkedEntry.favorite ? 'queryLibrary:favoriteRemove' : 'queryLibrary:favoriteAdd')}
             onClick={() => library.setFavorite(linkedEntry.id, !linkedEntry.favorite)} /> : null}
@@ -478,7 +487,21 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
     <QueryLibraryDialog open={libraryOpen} kind={libraryService.kind} status={library.status} loadError={library.loadError}
       entries={library.entries} saveStatus={library.saveStatus} profiles={profiles} onClose={() => setLibraryOpen(false)}
       onRestore={restoreQuery ? restoreSaved : undefined} onDelete={library.deleteEntry} onToggleFavorite={toggleSavedFavorite}
-      onRetrySave={library.retrySave} onReload={library.reload} />
+      onRetrySave={library.retrySave} onReload={library.reload}
+      onExchange={(mode) => { setLibraryOpen(false); setExchangeMode(mode); }} />
+    {exchangeMode ? <QueryExchangeDialog mode={exchangeMode} library={library} profiles={profiles} service={exchangeService}
+      onClose={() => { setExchangeMode(null); setLibraryOpen(true); }} /> : null}
+    {parameterSource ? <QueryParametersDialog source={parameterSource}
+      current={state.tabs.find((item) => item.document.id === parameterSource.id)?.document}
+      onClose={() => setParameterSource(null)} onCommit={(source, patch) => {
+        if (!matchesQueryDraft(state.tabs.find((item) => item.document.id === source.id)?.document, source)) return false;
+        if (updateQuery(source.id, patch, source) === false) return false;
+        if (patch.dsl !== undefined) {
+          if (recovery) recovery.setEditorMode(source.id, 'dsl');
+          else setEditorModes((current) => ({ ...current, [source.id]: 'dsl' }));
+        }
+        return true;
+      }} /> : null}
     {exportSource ? <SnapshotExportDialog open={exportVisible && active} source={exportSource} service={snapshotExportService}
       targetAvailable={state.tabs.some((item) => item.document.id === exportSource.queryId)
         && profiles.some((profile) => profile.id === exportSource.connectionId && profile.endpoint === exportSource.endpoint)}

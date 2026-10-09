@@ -758,6 +758,7 @@ impl Database {
     /// Store the saved-query document in one atomic upsert. The byte bound is enforced here as
     /// well as by the table check, so an oversized payload is refused before it is written and the
     /// previous document stays intact.
+    #[cfg(test)]
     pub fn save_saved_queries_json(&self, json: &str) -> Result<(), AppError> {
         if json.len() > MAX_SAVED_QUERIES_BYTES {
             return Err(AppError::new("invalidInput"));
@@ -766,6 +767,50 @@ impl Database {
             "INSERT INTO saved_query_library(singleton,json) VALUES (1,?1) ON CONFLICT(singleton) DO UPDATE SET json=excluded.json",
             [json],
         )?;
+        Ok(())
+    }
+
+    /// CAS also guards import connection choices in the same write transaction. No credentials
+    /// are loaded: a mapping binds only an existing stable ID and its reviewed endpoint.
+    pub(crate) fn compare_saved_queries_json(
+        &mut self,
+        expected: Option<&str>,
+        json: &str,
+        targets: &[(String, String)],
+    ) -> Result<(), AppError> {
+        if json.len() > MAX_SAVED_QUERIES_BYTES {
+            return Err(AppError::new("invalidInput"));
+        }
+        let tx = self
+            .0
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let current: Option<String> = tx
+            .query_row(
+                "SELECT json FROM saved_query_library WHERE singleton=1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if current.as_deref() != expected {
+            return Err(AppError::new("libraryConflict"));
+        }
+        for (id, endpoint) in targets {
+            let stored: Option<String> = tx
+                .query_row(
+                    "SELECT endpoint FROM connections WHERE id=?1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if stored.as_deref() != Some(endpoint.as_str()) {
+                return Err(AppError::new("exchangeTargetChanged"));
+            }
+        }
+        tx.execute(
+            "INSERT INTO saved_query_library(singleton,json) VALUES (1,?1) ON CONFLICT(singleton) DO UPDATE SET json=excluded.json",
+            [json],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 

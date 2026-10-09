@@ -30,7 +30,7 @@ export interface ExportFileRequest {
 export interface QueryLibraryService {
   readonly kind: 'desktop' | 'session';
   load(): Promise<SavedQueryLibrary>;
-  save(library: SavedQueryLibrary): Promise<void>;
+  save(library: SavedQueryLibrary, expected: SavedQueryLibrary): Promise<void>;
   saveExportFile(request: ExportFileRequest): Promise<ExportOutcome>;
 }
 
@@ -39,7 +39,7 @@ function fail(code: ErrorCode): never {
 }
 
 function assertWithinLibraryLimits(library: SavedQueryLibrary): void {
-  if (libraryLimitViolation(library) !== null) return fail('invalidInput');
+  if (libraryLimitViolation(library) !== null || !parseLibraryPayload(library).ok) return fail('invalidInput');
   if (utf8ByteLength(serializeLibrary(library)) > MAX_LIBRARY_BYTES) return fail('invalidInput');
 }
 
@@ -57,10 +57,11 @@ export const desktopQueryLibraryService: QueryLibraryService = {
     if (!parsed.ok) return fail('invalidResponse');
     return parsed.library;
   },
-  save: async (library) => {
+  save: async (library, expected) => {
     if (!isTauri()) return fail('unsupported');
     assertWithinLibraryLimits(library);
-    await invoke('saved_queries_save', { library: libraryPayload(library) });
+    assertWithinLibraryLimits(expected);
+    await invoke('saved_queries_save', { library: libraryPayload(library), expected: libraryPayload(expected) });
   },
   saveExportFile: async (request) => {
     if (!isTauri()) return fail('unsupported');
@@ -84,16 +85,18 @@ export function createSessionQueryLibraryService(): QueryLibraryService {
   let stored = createEmptyLibrary();
   const snapshot = (): SavedQueryLibrary => ({
     version: QUERY_LIBRARY_VERSION,
-    entries: stored.entries.map((entry) => ({ ...entry })),
+    entries: structuredClone(stored.entries),
   });
   return {
     kind: 'session',
     load: async () => snapshot(),
-    save: async (library) => {
+    save: async (library, expected) => {
       assertWithinLibraryLimits(library);
+      assertWithinLibraryLimits(expected);
+      if (serializeLibrary(stored) !== serializeLibrary(expected)) return fail('libraryConflict');
       stored = {
         version: QUERY_LIBRARY_VERSION,
-        entries: library.entries.map((entry) => ({ ...entry })),
+        entries: structuredClone(library.entries),
       };
     },
     saveExportFile: async (request) => {

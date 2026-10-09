@@ -138,19 +138,19 @@ describe('desktop query library IPC', () => {
   it('saves the canonical document and refuses over-limit libraries before IPC', async () => {
     vi.mocked(invoke).mockResolvedValue(undefined);
     const lib = library([entry('e1', 'Saved')]);
-    await desktopQueryLibraryService.save(lib);
-    expect(invoke).toHaveBeenCalledExactlyOnceWith('saved_queries_save', { library: libraryPayload(lib) });
+    await desktopQueryLibraryService.save(lib, createEmptyLibrary());
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('saved_queries_save', { library: libraryPayload(lib), expected: createEmptyLibrary() });
 
     vi.mocked(invoke).mockClear();
     const oversized = library([{ ...entry('e2'), dsl: 'x'.repeat(MAX_ENTRY_DSL_BYTES + 1) }]);
-    await expect(desktopQueryLibraryService.save(oversized)).rejects.toMatchObject({ code: 'invalidInput' });
+    await expect(desktopQueryLibraryService.save(oversized, createEmptyLibrary())).rejects.toMatchObject({ code: 'invalidInput' });
     expect(invoke).not.toHaveBeenCalled();
   });
 
   it('stays unsupported outside the desktop shell instead of degrading', async () => {
     vi.mocked(isTauri).mockReturnValue(false);
     await expect(desktopQueryLibraryService.load()).rejects.toMatchObject({ code: 'unsupported' });
-    await expect(desktopQueryLibraryService.save(createEmptyLibrary())).rejects.toMatchObject({ code: 'unsupported' });
+    await expect(desktopQueryLibraryService.save(createEmptyLibrary(), createEmptyLibrary())).rejects.toMatchObject({ code: 'unsupported' });
     expect(invoke).not.toHaveBeenCalled();
   });
 
@@ -180,12 +180,12 @@ describe('session query library adapter', () => {
     const service = createSessionQueryLibraryService();
     expect(service.kind).toBe('session');
     await expect(service.load()).resolves.toEqual(createEmptyLibrary());
-    await service.save(library([entry('e1', 'Session draft')]));
+    await service.save(library([entry('e1', 'Session draft')]), createEmptyLibrary());
     const loaded = await service.load();
     expect(loaded.entries.map((item) => item.name)).toEqual(['Session draft']);
     (loaded.entries as SavedQueryEntry[]).push(entry('e9'));
     expect((await service.load()).entries).toHaveLength(1);
-    await expect(service.save(library([{ ...entry('e2'), dsl: 'x'.repeat(MAX_ENTRY_DSL_BYTES + 1) }])))
+    await expect(service.save(library([{ ...entry('e2'), dsl: 'x'.repeat(MAX_ENTRY_DSL_BYTES + 1) }]), await service.load()))
       .rejects.toMatchObject({ code: 'invalidInput' });
     expect(invoke).not.toHaveBeenCalled();
   });

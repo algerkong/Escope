@@ -104,4 +104,26 @@ describe('app query integration', () => {
     expect(backend.readResource).not.toHaveBeenCalled();
     expect(backend.execute).not.toHaveBeenCalled();
   });
+
+  it('keeps an executed result bound to its original snapshot after parameter application', async () => {
+    const { backend, user } = await mount();
+    await user.click(screen.getAllByRole('tab')[1]!);
+    fireEvent.change(screen.getByRole('textbox', { name: 'Index or pattern' }), { target: { value: 'orders' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Query DSL' }), { target: { value: '{"size":25}' } });
+    await user.click(screen.getByRole('button', { name: 'Run query' }));
+    await screen.findByText('Completed');
+    const executed = backend.execute.mock.calls[0]![0].rawDsl;
+    fireEvent.click(screen.getByRole('button', { name: 'Query parameters' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add parameter' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Type 1' }), { target: { value: 'number' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Template DSL' }), { target: { value: '{"size":{"$param":"param1"}}' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Value 1' }), { target: { value: '50' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Preview final DSL' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply to draft' }));
+    await waitFor(() => expect(screen.getByRole('textbox', { name: 'Query DSL' })).toHaveValue('{"size":50}'));
+    expect(screen.getByText('Completed')).toBeInTheDocument();
+    expect(backend.execute).toHaveBeenCalledTimes(1);
+    expect(backend.execute.mock.calls[0]![0].rawDsl).toBe(executed);
+    expect(executed).toBe('{"size":25}');
+  });
 });

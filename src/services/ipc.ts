@@ -3,7 +3,10 @@ import { isValidPitId } from '../domain/query-result';
 
 export type ErrorCode = 'invalidInput' | 'invalidName' | 'invalidEndpoint' | 'invalidEnvironment'
   | 'invalidIndex' | 'invalidQuery' | 'duplicateRequest'
-  | 'storageUnavailable' | 'workspaceConflict' | 'notFound' | 'unsupported' | 'permissionDenied' | 'serverForbidden' | 'cancelled'
+  | 'storageUnavailable' | 'workspaceConflict' | 'libraryConflict'
+  | 'exchangeInvalid' | 'exchangeVersion' | 'exchangeTooLarge' | 'exchangeSensitive'
+  | 'exchangeMappingRequired' | 'exchangeTargetChanged' | 'importFailed'
+  | 'notFound' | 'unsupported' | 'permissionDenied' | 'serverForbidden' | 'cancelled'
   | 'busy' | 'networkError' | 'timeout' | 'authenticationFailed' | 'rateLimited'
   | 'credentialNotFound' | 'credentialUnavailable' | 'credentialFailure'
   | 'invalidCertificate' | 'tlsError' | 'exportFailed' | 'exportTargetChanged' | 'exportUnsupportedQuery'

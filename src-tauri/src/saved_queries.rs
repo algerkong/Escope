@@ -8,9 +8,9 @@
 //!   version, count and per-field bounds) and returns an empty library only when nothing was ever
 //!   saved. Anything this build cannot explain fails the load with `invalidResponse`; the stored
 //!   bytes are never rewritten from a failed load, so damaged data is left untouched.
-//! * `saved_queries_save` validates the same bounds, serializes canonically and writes the whole
-//!   document through the storage layer's atomic upsert. An over-limit payload is refused before
-//!   it reaches the database, leaving the previous document intact.
+//! * `saved_queries_save` validates the same bounds and the stored library, then compares the
+//!   caller's last-read document before an atomic write. Corrupt, unknown or conflicting state
+//!   is never repaired or overwritten; an over-limit payload leaves the previous row intact.
 //! * `saved_queries_export` opens the native save dialog and writes the caller's bounded bytes to
 //!   the user-chosen file through a same-directory temporary file. The request carries only a
 //!   format, a file name and the content — never a path — and a cancelled dialog is reported as
@@ -22,6 +22,7 @@
 //! resolves a connection.
 
 use crate::error::AppError;
+use crate::query_parameters::{optional_parameters, QueryParameters};
 use crate::storage::Database;
 use crate::{with_database, StorageState};
 use serde::{Deserialize, Serialize};
@@ -72,6 +73,12 @@ pub struct SavedQueryEntry {
     pub result_view: ResultView,
     pub favorite: bool,
     pub updated_at: String,
+    #[serde(
+        default,
+        deserialize_with = "optional_parameters",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub parameters: Option<QueryParameters>,
 }
 
 /// Debug output must never leak a draft body: the DSL is shown as its byte length only.
@@ -87,6 +94,7 @@ impl std::fmt::Debug for SavedQueryEntry {
             .field("result_view", &self.result_view)
             .field("favorite", &self.favorite)
             .field("updated_at", &self.updated_at)
+            .field("parameters", &self.parameters)
             .finish()
     }
 }
@@ -124,7 +132,7 @@ impl SavedQueryLibrary {
 }
 
 impl SavedQueryEntry {
-    fn validate(&self) -> Result<(), AppError> {
+    pub(crate) fn validate(&self) -> Result<(), AppError> {
         if !valid_id(&self.id) {
             return Err(AppError::new("invalidInput"));
         }
@@ -141,6 +149,9 @@ impl SavedQueryEntry {
         }
         if self.index.len() > MAX_INDEX_BYTES || self.dsl.len() > MAX_DSL_BYTES {
             return Err(AppError::new("invalidInput"));
+        }
+        if let Some(parameters) = &self.parameters {
+            parameters.validate()?;
         }
         if self.updated_at.is_empty()
             || self.updated_at.len() > MAX_UPDATED_AT_CHARS
@@ -165,11 +176,18 @@ fn valid_id(id: &str) -> bool {
 
 /// Fail-closed read: `None` is an empty library, and a document this build cannot explain is an
 /// error whose bytes stay exactly as stored (nothing is repaired or rewritten here).
-fn load_library(database: &mut Database) -> Result<SavedQueryLibrary, AppError> {
+pub(crate) fn load_library(database: &mut Database) -> Result<SavedQueryLibrary, AppError> {
     let Some(json) = database.saved_queries_json()? else {
         return Ok(SavedQueryLibrary::empty());
     };
-    let library = serde_json::from_str::<SavedQueryLibrary>(&json)
+    decode_library(&json)
+}
+
+pub(crate) fn decode_library(json: &str) -> Result<SavedQueryLibrary, AppError> {
+    if json.len() > crate::storage::MAX_SAVED_QUERIES_BYTES {
+        return Err(AppError::new("invalidResponse"));
+    }
+    let library = serde_json::from_str::<SavedQueryLibrary>(json)
         .map_err(|_| AppError::new("invalidResponse"))?;
     library
         .validate()
@@ -177,13 +195,34 @@ fn load_library(database: &mut Database) -> Result<SavedQueryLibrary, AppError> 
     Ok(library)
 }
 
-fn save_library(database: &mut Database, library: SavedQueryLibrary) -> Result<(), AppError> {
+pub(crate) fn save_checked(
+    database: &mut Database,
+    library: SavedQueryLibrary,
+    expected: SavedQueryLibrary,
+    targets: &[(String, String)],
+) -> Result<(), AppError> {
     library.validate()?;
+    expected.validate()?;
     let json = serde_json::to_string(&library).map_err(|_| AppError::new("invalidInput"))?;
     if json.len() > crate::storage::MAX_SAVED_QUERIES_BYTES {
         return Err(AppError::new("invalidInput"));
     }
-    database.save_saved_queries_json(&json)
+    let previous = database.saved_queries_json()?;
+    let stored = previous
+        .as_deref()
+        .map(decode_library)
+        .transpose()?
+        .unwrap_or_else(SavedQueryLibrary::empty);
+    if stored != expected {
+        return Err(AppError::new("libraryConflict"));
+    }
+    database.compare_saved_queries_json(previous.as_deref(), &json, targets)
+}
+
+#[cfg(test)]
+fn save_library(database: &mut Database, library: SavedQueryLibrary) -> Result<(), AppError> {
+    let expected = load_library(database)?;
+    save_checked(database, library, expected, &[])
 }
 
 /// Read the whole library. A document this build cannot explain is `invalidResponse`.
@@ -194,13 +233,16 @@ pub(crate) fn saved_queries_load(
     with_database(&state, load_library)
 }
 
-/// Replace the whole library in one atomic write after validating every bound.
+/// Replace the whole library only when the caller's last-read document still matches.
 #[tauri::command]
 pub(crate) fn saved_queries_save(
     state: State<'_, StorageState>,
     library: SavedQueryLibrary,
+    expected: SavedQueryLibrary,
 ) -> Result<(), AppError> {
-    with_database(&state, |database| save_library(database, library))
+    with_database(&state, |database| {
+        save_checked(database, library, expected, &[])
+    })
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -345,7 +387,7 @@ impl Drop for TemporaryExport {
 /// Write through a unique same-directory temporary file: the target is only ever replaced by a
 /// fully written and flushed file, a failed write or persist removes only the temporary this
 /// process created, the previous file stays intact, and a `.tmp-` leftover is never kept.
-fn write_atomically(target: &Path, bytes: &[u8]) -> Result<(), AppError> {
+pub(crate) fn write_atomically(target: &Path, bytes: &[u8]) -> Result<(), AppError> {
     let directory = target
         .parent()
         .ok_or_else(|| AppError::new("unsupported"))?;
@@ -424,6 +466,7 @@ mod tests {
             result_view: ResultView::Table,
             favorite: false,
             updated_at: "2026-10-09T12:00:00.000Z".to_owned(),
+            parameters: None,
         }
     }
 

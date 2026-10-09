@@ -1,0 +1,20 @@
+.dialog-content:has(.qparams-form) { width: 760px; }
+.qparams-form { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.qparams-label, .qparams-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; font-size: .82rem; color: var(--muted); }
+.qparams-label code { font-size: .75rem; overflow-wrap: anywhere; }
+.qparams-code { width: 100%; min-height: 150px; resize: vertical; font-family: var(--code-font); font-size: var(--code-size); padding: 8px; }
+.qparams-rows { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.qparams-row { display: grid; grid-template-columns: minmax(80px, 1fr) 108px minmax(100px, 1.4fr) auto; gap: 8px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+.qparams-row label { display: flex; flex-direction: column; gap: 4px; min-width: 0; font-size: .76rem; color: var(--muted); }
+.qparams-row input:not([type="checkbox"]), .qparams-row textarea { width: 100%; min-width: 0; padding: 5px 7px; }
+.qparams-row textarea { resize: vertical; font-family: var(--code-font); }
+.qparams-row input[type="checkbox"] { align-self: flex-start; margin-top: 6px; }
+.qparams-value output { padding-top: 6px; }
+.qparams-row-actions { display: flex; align-items: flex-end; gap: 2px; }
+.qparams-review { max-height: 160px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--code-font); font-size: var(--code-size); }
+.qparams-form details summary { color: var(--muted); font-size: .8rem; cursor: pointer; }
+@media (max-width: 560px) {
+  .qparams-row { grid-template-columns: minmax(0, 1fr) 108px; }
+  .qparams-row-actions { justify-content: flex-end; }
+  .qparams-form .dialog-actions { flex-wrap: wrap; }
+}

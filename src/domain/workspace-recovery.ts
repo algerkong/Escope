@@ -2,6 +2,7 @@ import type { ExecutionSnapshot, QueryDocument, WorkspaceState, WorkspaceTab } f
 import { INITIAL_RESULT_GRID_STATE, MAX_COLUMN_WIDTH, MIN_COLUMN_WIDTH, ROW_COLUMN_WIDTH, type ResultGridState } from './result-grid';
 import { utf8ByteLength, MAX_ENTRY_DSL_BYTES, MAX_ENTRY_INDEX_BYTES } from './query-library';
 import type { VisualForm, VisualBuildProblem } from './visual-query';
+import { parametersPayload, parseQueryParameters } from './query-parameters';
 
 export const WORKSPACE_RECOVERY_VERSION = 1;
 export const MAX_WORKSPACE_TABS = 50;
@@ -72,7 +73,8 @@ export function recoveryWorkspace(state: WorkspaceState, previous?: RecoveryWork
       const saved = prior.get(tab.document.id);
       const { id, connectionId, name, index, dsl, revision, resultView } = tab.document;
       return {
-        kind: tab.kind, document: { id, connectionId, name, index, dsl, revision, resultView },
+        kind: tab.kind, document: { id, connectionId, name, index, dsl, revision, resultView,
+          ...(tab.document.parameters === undefined ? {} : { parameters: parametersPayload(tab.document.parameters) }) },
         grid: saved?.grid ?? gridLayout(INITIAL_RESULT_GRID_STATE),
         editorMode: saved?.editorMode ?? 'dsl',
         visualDraft: saved?.visualDraft?.source === dsl ? saved.visualDraft : null,
@@ -204,9 +206,10 @@ function visualDraft(value: unknown, dsl: string): boolean {
       && member(problem.code, PROBLEMS) && (problem.conditionId === undefined || id(problem.conditionId)));
 }
 function validDocument(value: unknown): value is unknown & QueryDocument {
-  return shape(value, ['id', 'connectionId', 'name', 'index', 'dsl', 'revision', 'resultView'])
+  return shape(value, ['id', 'connectionId', 'name', 'index', 'dsl', 'revision', 'resultView'], ['parameters'])
     && id(value.id) && nullableId(value.connectionId) && name(value.name) && text(value.index, MAX_ENTRY_INDEX_BYTES)
-    && text(value.dsl, MAX_ENTRY_DSL_BYTES) && integer(value.revision) && member(value.resultView, ['table', 'json']);
+    && text(value.dsl, MAX_ENTRY_DSL_BYTES) && integer(value.revision) && member(value.resultView, ['table', 'json'])
+    && (!Object.hasOwn(value, 'parameters') || parseQueryParameters(value.parameters) !== null);
 }
 function validWorkspace(value: unknown): boolean {
   if (value === null) return true;
@@ -223,7 +226,7 @@ function validWorkspace(value: unknown): boolean {
     if (tab.kind === 'index') {
       const target = JSON.stringify([tab.document.connectionId, tab.document.index]);
       if (tab.document.connectionId === null || tab.document.index.trim() === '' || tab.document.index !== tab.document.index.trim()
-        || tab.editorMode !== 'dsl' || tab.visualDraft !== null || targets.has(target)) return false;
+        || tab.editorMode !== 'dsl' || tab.visualDraft !== null || tab.document.parameters !== undefined || targets.has(target)) return false;
       targets.add(target);
     }
   }

@@ -1,5 +1,6 @@
 import { createScanner } from 'jsonc-parser';
 import type { QueryDocument } from './query';
+import { parametersPayload, parseQueryParameters, type QueryParameters } from './query-parameters';
 import { items, parseRawJson, property, rawTextOf, type ResultColumn, type ResultHit } from './query-result';
 
 /**
@@ -42,6 +43,7 @@ export interface SavedQueryEntry {
   readonly resultView: 'table' | 'json';
   readonly favorite: boolean;
   readonly updatedAt: string;
+  readonly parameters?: QueryParameters;
 }
 
 export interface SavedQueryLibrary {
@@ -51,7 +53,7 @@ export interface SavedQueryLibrary {
 
 export type EntryLimitCode =
   | 'tooManyEntries' | 'invalidEntryId' | 'nameTooLong' | 'indexTooLarge'
-  | 'dslTooLarge' | 'invalidTimestamp' | 'connectionIdTooLong';
+  | 'dslTooLarge' | 'invalidTimestamp' | 'connectionIdTooLong' | 'invalidParameters';
 
 const ENTRY_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 const UPDATED_AT_PATTERN = /^[0-9A-Za-z:.+-]+$/;
@@ -85,6 +87,7 @@ export function entryFromDocument(document: QueryDocument, options: {
     resultView: document.resultView,
     favorite: options.favorite,
     updatedAt: options.now.toISOString(),
+    ...(document.parameters === undefined ? {} : { parameters: parametersPayload(document.parameters) }),
   };
 }
 
@@ -102,6 +105,7 @@ export function documentFromEntry(entry: SavedQueryEntry, id: string = crypto.ra
     dsl: entry.dsl,
     revision: 0,
     resultView: entry.resultView,
+    ...(entry.parameters === undefined ? {} : { parameters: parametersPayload(entry.parameters) }),
   };
 }
 
@@ -139,6 +143,7 @@ export function entryLimitViolation(library: SavedQueryLibrary, entry: SavedQuer
   if (utf8ByteLength(entry.index) > MAX_ENTRY_INDEX_BYTES) return 'indexTooLarge';
   if (utf8ByteLength(entry.dsl) > MAX_ENTRY_DSL_BYTES) return 'dslTooLarge';
   if (entry.updatedAt.length > MAX_UPDATED_AT_CHARS || !UPDATED_AT_PATTERN.test(entry.updatedAt)) return 'invalidTimestamp';
+  if (entry.parameters !== undefined && parseQueryParameters(entry.parameters) === null) return 'invalidParameters';
   return null;
 }
 
@@ -158,13 +163,14 @@ export function libraryLimitViolation(library: SavedQueryLibrary): EntryLimitCod
 /** Canonical object shape for the IPC payload: exactly the fields the Rust contract knows. */
 export function libraryPayload(library: SavedQueryLibrary): {
   version: number;
-  entries: { id: string; name: string; connectionId: string | null; index: string; dsl: string; resultView: 'table' | 'json'; favorite: boolean; updatedAt: string }[];
+  entries: SavedQueryEntry[];
 } {
   return {
     version: QUERY_LIBRARY_VERSION,
     entries: library.entries.map((entry) => ({
       id: entry.id, name: entry.name, connectionId: entry.connectionId, index: entry.index,
       dsl: entry.dsl, resultView: entry.resultView, favorite: entry.favorite, updatedAt: entry.updatedAt,
+      ...(entry.parameters === undefined ? {} : { parameters: parametersPayload(entry.parameters) }),
     })),
   };
 }
@@ -187,14 +193,17 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 function parseEntry(value: unknown): SavedQueryEntry | null {
   if (!isPlainObject(value)) return null;
   const keys = Object.keys(value);
-  if (keys.length !== ENTRY_KEYS.length || !ENTRY_KEYS.every((key) => keys.includes(key))) return null;
+  if (!ENTRY_KEYS.every((key) => keys.includes(key))
+    || keys.some((key) => key !== 'parameters' && !ENTRY_KEYS.includes(key as typeof ENTRY_KEYS[number]))) return null;
   const { id, name, connectionId, index, dsl, resultView, favorite, updatedAt } = value;
   if (typeof id !== 'string' || typeof name !== 'string' || typeof index !== 'string'
     || typeof dsl !== 'string' || typeof updatedAt !== 'string') return null;
   if (connectionId !== null && typeof connectionId !== 'string') return null;
   if (typeof favorite !== 'boolean') return null;
   if (resultView !== 'table' && resultView !== 'json') return null;
-  return { id, name, connectionId, index, dsl, resultView, favorite, updatedAt };
+  const parameters = Object.hasOwn(value, 'parameters') ? parseQueryParameters(value.parameters) : undefined;
+  if (parameters === null) return null;
+  return { id, name, connectionId, index, dsl, resultView, favorite, updatedAt, ...(parameters ? { parameters } : {}) };
 }
 
 /**

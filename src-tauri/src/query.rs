@@ -398,6 +398,11 @@ fn validate_hits(value: Option<&Value>) -> Result<(), AppError> {
 /// bounded depth and size. The bytes are returned unchanged — this never reformats, reorders or
 /// re-serializes the draft, so number literals and key order survive exactly.
 pub fn validate_search_body(raw: &str) -> Result<Vec<u8>, AppError> {
+    validate_json_body(raw, false)?;
+    Ok(raw.as_bytes().to_vec())
+}
+
+pub(crate) fn validate_json_body(raw: &str, allow_parameters: bool) -> Result<(), AppError> {
     if raw.trim().is_empty() || raw.len() > MAX_BODY_BYTES {
         return Err(AppError::new("invalidQuery"));
     }
@@ -410,13 +415,14 @@ pub fn validate_search_body(raw: &str) -> Result<Vec<u8>, AppError> {
         BodyVisitor {
             depth: 0,
             nodes: &nodes,
+            allow_parameters,
         },
     )
     .map_err(|_| AppError::new("invalidQuery"))?;
     deserializer
         .end()
         .map_err(|_| AppError::new("invalidQuery"))?;
-    Ok(raw.as_bytes().to_vec())
+    Ok(())
 }
 
 fn budget<E: de::Error>(depth: usize, nodes: &Cell<usize>) -> Result<(), E> {
@@ -435,6 +441,7 @@ fn budget<E: de::Error>(depth: usize, nodes: &Cell<usize>) -> Result<(), E> {
 struct BodySeed<'a> {
     depth: usize,
     nodes: &'a Cell<usize>,
+    allow_parameters: bool,
 }
 
 impl<'de, 'a> DeserializeSeed<'de> for BodySeed<'a> {
@@ -447,6 +454,7 @@ impl<'de, 'a> DeserializeSeed<'de> for BodySeed<'a> {
         deserializer.deserialize_any(BodyVisitor {
             depth: self.depth,
             nodes: self.nodes,
+            allow_parameters: self.allow_parameters,
         })
     }
 }
@@ -454,6 +462,7 @@ impl<'de, 'a> DeserializeSeed<'de> for BodySeed<'a> {
 struct BodyVisitor<'a> {
     depth: usize,
     nodes: &'a Cell<usize>,
+    allow_parameters: bool,
 }
 
 impl BodyVisitor<'_> {
@@ -474,12 +483,16 @@ impl<'de> Visitor<'de> for BodyVisitor<'_> {
         budget::<A::Error>(self.depth, self.nodes)?;
         let mut seen = HashSet::new();
         while let Some(key) = map.next_key::<String>()? {
+            if !self.allow_parameters && key == "$param" {
+                return Err(de::Error::custom("unresolved query parameter"));
+            }
             if !seen.insert(key) {
                 return Err(de::Error::custom("query body repeats a key"));
             }
             map.next_value_seed(BodySeed {
                 depth: self.depth + 1,
                 nodes: self.nodes,
+                allow_parameters: self.allow_parameters,
             })?;
         }
         Ok(())
@@ -491,6 +504,7 @@ impl<'de> Visitor<'de> for BodyVisitor<'_> {
             .next_element_seed(BodySeed {
                 depth: self.depth + 1,
                 nodes: self.nodes,
+                allow_parameters: self.allow_parameters,
             })?
             .is_some()
         {}
@@ -533,6 +547,18 @@ mod tests {
 
     const REQUEST: &str = "6f3b2f1c-4f3e-4a5b-8c9d-0e1f2a3b4c5d";
     const CONNECTION: &str = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5e";
+
+    #[test]
+    fn unresolved_parameters_are_rejected_before_any_search_plan() {
+        for raw in [
+            r#"{"query":{"term":{"id":{"$param":"id"}}}}"#,
+            r#"{"query":{"term":{"id":{"\u0024param":"id"}}}}"#,
+        ] {
+            assert_eq!(validate_search_body(raw).unwrap_err().code, "invalidQuery");
+            assert!(validate_json_body(raw, true).is_ok());
+            assert!(request("orders", raw).prepare().is_err());
+        }
+    }
 
     fn profile() -> ConnectionProfile {
         ConnectionProfile {

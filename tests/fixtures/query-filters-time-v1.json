@@ -1,0 +1,23 @@
+{
+  "baseDsl": "{\"size\":25}",
+  "previewAt": "2026-10-10T00:00:00.000Z",
+  "freezeAt": "2026-10-10T01:00:00.000Z",
+  "filters": [
+    { "id": "n-include", "field": "n", "fieldType": "long", "evidence": "mapped", "operation": "include", "value": "9007199254740993", "origin": "source" },
+    { "id": "status-exclude", "field": "status", "fieldType": "keyword", "evidence": "mapped", "operation": "exclude", "value": "\"blocked\"", "origin": "source" }
+  ],
+  "appliedDsl": "{\"size\":25,\"query\":{\"bool\":{\"must\":[{\"bool\":{\"must\":[{\"match_all\":{}}],\"filter\":[{\"term\":{\"n\":9007199254740993}}],\"must_not\":[{\"term\":{\"status\":\"blocked\"}}]}}],\"filter\":[{\"range\":{\"@timestamp\":{\"gte\":\"2026-10-09T23:45:00.000000000Z\",\"lt\":\"2026-10-10T00:00:00.000000000Z\",\"format\":\"strict_date_optional_time_nanos\"}}}]}}}",
+  "timeRange": {
+    "version": 1,
+    "definition": { "field": "@timestamp", "fieldType": "date", "timeZone": "UTC", "range": { "kind": "relative", "amount": 15, "unit": "minutes" } },
+    "bounds": { "resolvedAt": "2026-10-10T00:00:00.000Z", "from": "2026-10-09T23:45:00.000000000Z", "to": "2026-10-10T00:00:00.000000000Z" },
+    "binding": { "connectionId": "connection", "index": "orders" },
+    "hadQuery": true
+  },
+  "frozenDsl": "{\"size\":25,\"query\":{\"bool\":{\"must\":[{\"bool\":{\"must\":[{\"match_all\":{}}],\"filter\":[{\"term\":{\"n\":9007199254740993}}],\"must_not\":[{\"term\":{\"status\":\"blocked\"}}]}}],\"filter\":[{\"range\":{\"@timestamp\":{\"gte\":\"2026-10-10T00:45:00.000000000Z\",\"lt\":\"2026-10-10T01:00:00.000000000Z\",\"format\":\"strict_date_optional_time_nanos\"}}}]}}}",
+  "executionTimeRange": {
+    "version": 1,
+    "definition": { "field": "@timestamp", "fieldType": "date", "timeZone": "UTC", "range": { "kind": "relative", "amount": 15, "unit": "minutes" } },
+    "bounds": { "resolvedAt": "2026-10-10T01:00:00.000Z", "from": "2026-10-10T00:45:00.000000000Z", "to": "2026-10-10T01:00:00.000000000Z" }
+  }
+}

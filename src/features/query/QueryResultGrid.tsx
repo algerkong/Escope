@@ -8,7 +8,7 @@ import {
 } from '@tanstack/react-table';
 import {
   ALargeSmall, ArrowLeft, ArrowRight, ChevronDown, ChevronLeft, ChevronRight, ChevronsUpDown, ChevronUp, Columns3,
-  FileSearch, GripVertical, ListRestart, RotateCcw,
+  FileSearch, Filter, GripVertical, ListRestart, RotateCcw,
 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -45,6 +45,7 @@ interface Props {
   state: ResultGridState;
   onStateChange: (next: ResultGridState) => void;
   onDocument: (row: ResultGridRow) => void;
+  onFilterCell?: (row: ResultGridRow, field: string) => void;
   executionKey: string;
   fieldFormats?: DataViewFieldFormats;
   footerActions?: ReactNode;
@@ -150,7 +151,7 @@ function GridHeaderCell({ header, label, chromeLabel, sortDirection, sortable, m
   </th>;
 }
 
-export function QueryResultGrid({ active = true, scrollPosition, onScrollPositionChange, rows, fieldNames, state, onStateChange, onDocument, executionKey, fieldFormats, footerActions }: Props) {
+export function QueryResultGrid({ active = true, scrollPosition, onScrollPositionChange, rows, fieldNames, state, onStateChange, onDocument, onFilterCell, executionKey, fieldFormats, footerActions }: Props) {
   const { t } = useTranslation();
   const [chooserOpen, setChooserOpen] = useState(false);
   const [rawExecution, setRawExecution] = useState<string | null>(null);
@@ -446,10 +447,14 @@ export function QueryResultGrid({ active = true, scrollPosition, onScrollPositio
     const original = cellTitle(column);
     const title = display?.status === 'formatted' ? t('dataViews:formattedValue', { value: original })
       : display?.status === 'raw' ? t('dataViews:rawFormatValue', { value: original, reason: t(`dataViews:rawReason_${display.reason}`) }) : original;
-    return <span className="rg-cell" data-field-format={display?.status} data-runtime-field={column?.runtime}
+    const content = <span className="rg-cell" data-field-format={display?.status} data-runtime-field={column?.runtime}
       title={column?.runtime ? t('runtimeFields:returnedValue', { value: title ?? '' }) : title}>
       {text?.replace(/\r/g, '\\r').replace(/\n/g, '\\n').replace(/\t/g, '\\t') ?? '—'}
     </span>;
+    return onFilterCell ? <span className="rg-filter-cell">{content}
+      <IconButton icon={Filter} label={t('queryFilters:cellAction', { field })} disabled={!active}
+        onClick={() => onFilterCell(row, field)} />
+    </span> : content;
   };
 
   const copyOriginalCells = (event: ClipboardEvent<HTMLTableElement>) => {

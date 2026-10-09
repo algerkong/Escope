@@ -13,6 +13,7 @@ import type { ExecutionEntry, ExecutionPage } from './useQueryExecutions';
 import { executionErrorKey } from './error-message';
 import { useCopyText } from './useCopyText';
 import type { QueryLibraryService } from '../../services/query-library';
+import type { CellFilterSelection } from '../../domain/query-filters';
 
 const IDLE: ExecutionState = { status: 'idle' };
 const EMPTY_PAGES: readonly ExecutionPage[] = [];
@@ -39,6 +40,7 @@ interface Props {
   exportService?: QueryLibraryService;
   /** Opens a separate, explicitly confirmed scan; never borrows this result's PIT. */
   onSnapshotExport?: () => void;
+  onFilterCell?: (selection: CellFilterSelection) => void;
   /** Persisted layout only. Pages, selection and scroll belong to this live execution. */
   layout?: ResultGridLayout;
   onLayoutChange?: (layout: ResultGridLayout) => void;
@@ -50,7 +52,7 @@ interface Props {
  * number. Failed, cancelled and partial executions stay visually distinct from success, and
  * an unavailable (browser) workspace offers neither a request nor a retry.
  */
-export function QueryResults({ kind = 'query', active = true, documentIds, wrapJson = false, grouping = true, renderToolbar, query, entry, available, stale, endpointChanged, onCancel, onRun, canRun = true, onViewChange, onLoadMore, exportService, onSnapshotExport, layout, onLayoutChange }: Props) {
+export function QueryResults({ kind = 'query', active = true, documentIds, wrapJson = false, grouping = true, renderToolbar, query, entry, available, stale, endpointChanged, onCancel, onRun, canRun = true, onViewChange, onLoadMore, exportService, onSnapshotExport, onFilterCell, layout, onLayoutChange }: Props) {
   const { t, i18n } = useTranslation();
   const copy = useCopyText(query.id);
   const [gridStates, setGridStates] = useState<Record<string, { executionKey: string; value: ResultGridState }>>({});
@@ -168,6 +170,10 @@ export function QueryResults({ kind = 'query', active = true, documentIds, wrapJ
       onLayoutChange?.(value);
     }}
     onDocument={({ hit, pageIndex }) => setDetail({ hit, page: pageIndex, queryId: query.id, requestKey })}
+    onFilterCell={onFilterCell ? ({ hit }, field) => {
+      const column = hit.columns.find((item) => item.name === field);
+      onFilterCell({ field, value: column?.value, origin: column?.runtime || !hit.hasSource ? 'fields' : 'source' });
+    } : undefined}
     footerActions={continuation} />;
 
   const rawBlock = raw === null ? null : <>

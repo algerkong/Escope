@@ -78,7 +78,7 @@ export function WorkspaceTabs({ state, profiles, entries, aiOpen, dirtyIds, onSe
             onClick={() => onSelect(item.id)} onKeyDown={(event) => keyDown(event, position + 1)}>
             <Icon size={15} aria-hidden="true" className={busy ? 'spin' : undefined} />
             <span>{title}</span>
-            {kind === 'query' && (item.revision > 0 || dirtyIds.has(item.id)) ? <span className="draft-dot" /> : null}
+            {(kind === 'query' && item.revision > 0) || dirtyIds.has(item.id) ? <span className="draft-dot" /> : null}
           </button>
           <IconButton icon={X} label={closeLabel} tabIndex={-1} onClick={() => onClose(item.id)} />
         </div>;

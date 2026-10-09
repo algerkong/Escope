@@ -11,6 +11,7 @@ interface Props {
   available: boolean;
   locked: boolean;
   busy: boolean;
+  refreshBlockedReason?: string;
   summary?: ReactNode;
   children?: ReactNode;
   onOpen: (index: string) => void;
@@ -20,7 +21,7 @@ interface Props {
 }
 
 /** Index tabs have immutable targets; only the empty opener accepts a new target. */
-export function DataPreview({ document, target, available, locked, busy, summary, children, onOpen, onRefresh, onNewQuery, onConnections }: Props) {
+export function DataPreview({ document, target, available, locked, busy, refreshBlockedReason, summary, children, onOpen, onRefresh, onNewQuery, onConnections }: Props) {
   const { t } = useTranslation();
   const [index, setIndex] = useState(document.index);
   useEffect(() => { setIndex(document.index); }, [document.id, document.index]);
@@ -46,7 +47,8 @@ export function DataPreview({ document, target, available, locked, busy, summary
         {children}
         {locked ? <>
           <IconButton icon={FilePlus2} label={t('queryLive:queryIndex', { index: document.index })} onClick={onNewQuery} disabled={!target} />
-          <IconButton icon={RefreshCw} label={t('queryLive:refreshIndex')} disabled={!canPreview || busy} onClick={onRefresh} />
+          <IconButton icon={RefreshCw} label={t('queryLive:refreshIndex')} disabled={!canPreview || busy || Boolean(refreshBlockedReason)}
+            title={refreshBlockedReason ?? t('queryLive:refreshIndex')} onClick={onRefresh} />
         </> : <IconButton type="submit" icon={FolderOpen} label={t('queryLive:openIndex')} disabled={!canPreview} />}
         {!target ? <button type="button" className="primary compact-button" onClick={onConnections}>
           <Plus size={15} />{t('connections:add')}</button> : null}

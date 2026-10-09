@@ -192,7 +192,7 @@ describe('independent index tabs', () => {
     await user.click(screen.getByRole('button', { name: 'Appearance' }));
     await user.click(screen.getByRole('button', { name: 'Dark' }));
     await user.click(screen.getByRole('button', { name: 'Back to query' }));
-    expect(indexTab('orders')).toHaveFocus();
+    await waitFor(() => expect(indexTab('orders')).toHaveFocus());
     expect(backend.execute).toHaveBeenCalledTimes(2);
   });
 

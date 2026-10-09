@@ -72,6 +72,12 @@
 .rg-id-cell .rg-cell { flex: 1 1 auto; }
 .rg-id-cell .icon-button { width: 24px; height: 24px; min-width: 24px; flex: 0 0 auto; }
 
+.rg-filter-cell { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.rg-filter-cell .rg-cell { flex: 1; }
+.rg-filter-cell .icon-button { flex: 0 0 22px; width: 22px; min-width: 22px; height: 24px; opacity: 0; }
+.rg-filter-cell:hover .icon-button, .rg-filter-cell:focus-within .icon-button { opacity: 1; }
+@media (hover: none) { .rg-filter-cell .icon-button { opacity: 1; } }
+
 .rg-empty-cell { color: var(--muted); text-align: center; padding: 14px; }
 
 .rg-pager { display: flex; align-items: center; flex-shrink: 0; gap: 6px; color: var(--muted); font-size: .78rem; font-variant-numeric: tabular-nums; white-space: nowrap; }

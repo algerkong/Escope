@@ -32,7 +32,7 @@ NSIS 安装包，输出至 `src-tauri/target/release/bundle/nsis/`。
 2026-10-08 22:03 最新索引多标签版本构建已通过，生成 `EScope_0.1.0_x64-setup.exe`（4,201,624 bytes，约 4.01 MiB），
 Authenticode 检查为 `NotSigned`。产物路径、SHA-256 与验证边界见
 [索引标签与控件验收](docs/index-tabs-and-controls-qa.md)。
-2026-10-09 至 2026-10-10 的后续源码（含认证/CA、能力诊断、保存导出、工作区恢复、Data Views 与时间范围）尚未重新生成上述安装包。
+2026-10-09 至 2026-10-10 的后续源码（含认证/CA、能力诊断、保存导出、工作区恢复、Data Views、时间范围与单元格筛选）尚未重新生成上述安装包。
 复现构建使用 `npm ci` 和仓库中的 `package-lock.json`、`src-tauri/Cargo.lock`，
 不依赖全局 NSIS 或手工更改用户数据库。构建成功不代表原生安装已通过。
 
@@ -59,6 +59,12 @@ Authenticode 检查为 `NotSigned`。产物路径、SHA-256 与验证边界见
   相对时间在明确执行、打开 PIT 前按客户端时钟冻结，续页不移动；手改 DSL/目标解除托管，
   保留草稿中的绝对字面量。字段证据不当权限，runtime 日期须已应用到实际 DSL。
   普通索引标签不接受时间配置，不做自动刷新、任意日期数学或日历取整。
+- 单元格筛选取执行原值，支持顶级 keyword/数字/布尔的包含/排除、text 分析短语与独立
+  exists/missing；数组明确选一个元素，不从 null/空数组推断索引缺失，不猜 `.keyword`。
+  字段证据须检查，runtime 必须与当前实际 DSL 一致；未知/冲突/nested/含点路径拒绝。
+  最多 32 条、每值 4 KiB；会话内待应用列表经完整 DSL 预览后显式应用，不自动执行。
+  原手写条件、时间绑定及执行结果保留，索引标签仅生成同目标新查询；未应用列表不恢复，
+  应用后 DSL 才走既有保存规则。边界与自动化见 [单元格筛选 QA](docs/query-cell-filters-qa.md)。
 - 源码已接入 ES 索引/字段/Mapping 读取、快照查询/取消、部分结果与无损表格/JSON/文档详情，
   统一使用可信连接快照中的无认证或 Basic/API Key/Bearer 认证；
   显式 sort 的可分页查询在第一页前开启 PIT，按最新 ID 与原始游标续页，过期要求从第一页重跑。

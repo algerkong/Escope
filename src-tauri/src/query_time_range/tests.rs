@@ -76,6 +76,27 @@ fn shared_frontend_fixture_round_trips_with_different_draft_and_execution_anchor
 }
 
 #[test]
+fn cell_filter_fixture_keeps_the_managed_time_wrapper_and_preserves_new_inner_conditions() {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/query-filters-time-v1.json"
+    ))
+    .unwrap();
+    let mut time: QueryTimeRange = serde_json::from_value(fixture["timeRange"].clone()).unwrap();
+    let dsl = fixture["appliedDsl"].as_str().unwrap();
+    time.validate(Some("connection"), "orders", dsl).unwrap();
+    assert!(time.had_query);
+    assert!(dsl.contains("9007199254740993"));
+    let executed: ExecutionTimeRange =
+        serde_json::from_value(fixture["executionTimeRange"].clone()).unwrap();
+    executed
+        .validate(fixture["frozenDsl"].as_str().unwrap())
+        .unwrap();
+    assert_ne!(time.bounds, executed.bounds);
+    time.had_query = false;
+    assert!(time.validate(Some("connection"), "orders", dsl).is_err());
+}
+
+#[test]
 fn exact_relative_units_use_fixed_days_even_across_dst() {
     assert!(valid(&relative()));
     let mut time = relative();

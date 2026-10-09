@@ -1,0 +1,27 @@
+.qfilter-review { display: flex; flex-direction: column; gap: 8px; min-width: 0; font-size: .82rem; }
+.qfilter-origin, .qfilter-field, .qfilter-evidence, .qfilter-actions, .qfilter-draft-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; min-width: 0; }
+.qfilter-origin > *, .qfilter-field > * { min-width: 0; overflow-wrap: anywhere; }
+.qfilter-origin, .qfilter-field > span, .qfilter-field > code { color: var(--muted); font-size: .75rem; }
+.qfilter-evidence, .qfilter-actions { justify-content: space-between; }
+.qfilter-candidate { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 8px 0; border-block: 1px solid var(--border); }
+.qfilter-candidate label { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.qfilter-candidate .select-control { width: 100%; min-width: 0; }
+.qfilter-candidate select { max-width: 100%; text-overflow: ellipsis; }
+.qfilter-value, .qfilter-code { display: block; width: 100%; min-width: 0; padding: 8px; resize: vertical; font-family: var(--code-font); font-size: var(--code-size); line-height: 1.5; }
+.qfilter-value { height: 64px; min-height: 48px; max-height: 160px; overflow-wrap: anywhere; }
+.qfilter-code { height: 180px; min-height: 120px; max-height: 32vh; }
+.qfilter-note { color: var(--muted); font-size: .75rem; overflow-wrap: anywhere; }
+.qfilter-warning { color: var(--warning); overflow-wrap: anywhere; }
+.qfilter-add { align-self: flex-end; }
+.qfilter-list { display: flex; flex-direction: column; gap: 4px; padding: 0; margin: 0; list-style: none; max-height: 200px; overflow: auto; }
+.qfilter-list > li { display: flex; align-items: start; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--border); min-width: 0; }
+.qfilter-item { display: flex; flex: 1; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; }
+.qfilter-item > * { min-width: 0; overflow-wrap: anywhere; }
+.qfilter-item > code { flex-basis: 100%; white-space: pre-wrap; max-height: 60px; overflow: auto; }
+.qfilter-item > span { color: var(--muted); font-size: .75rem; }
+.qfilter-current { margin: 6px 0 0; max-height: 140px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--code-font); }
+.qfilter-draft-bar { flex-shrink: 0; padding: 4px 12px; font-size: .75rem; border-bottom: 1px solid var(--border); }
+.qfilter-draft-bar > span { min-width: 0; overflow-wrap: anywhere; }
+.qfilter-draft-bar > .icon-button:last-child { margin-left: auto; }
+.qfilter-review .dialog-actions { flex-wrap: wrap; }
+.qfilter-review .icon-button, .qfilter-draft-bar .icon-button { flex: 0 0 28px; width: 28px; height: 28px; }

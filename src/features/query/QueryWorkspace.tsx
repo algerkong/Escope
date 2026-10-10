@@ -1,4 +1,4 @@
-import { Bookmark, Braces, Clock3, Database, FileCheck2, FileDown, History, Layers, ListOrdered, ListTree, LoaderCircle, Pin, Play, Plus, Redo2, Save, Search, Settings, ShieldCheck, Sigma, Star, TriangleAlert, Undo2, Variable } from 'lucide-react';
+import { Bookmark, Braces, ChartColumnBig, Clock3, Database, FileCheck2, FileDown, History, Layers, ListOrdered, ListTree, LoaderCircle, Pin, Play, Plus, Redo2, Save, Search, Settings, ShieldCheck, Sigma, Star, TriangleAlert, Undo2, Variable } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ConnectionProfile } from '../../domain/connection';
@@ -28,6 +28,8 @@ import { QueryTimeRangeDialog, TimeRangeSummary } from './QueryTimeRangeDialog';
 import { QueryFilterBindingBar, QueryFilterDraftBar, QueryFiltersDialog } from './QueryFiltersDialog';
 import { QuerySortDialog } from './QuerySortDialog';
 import { QueryAggregationBuildDialog } from './QueryAggregationBuildDialog';
+import { ChartDefinitionsDialog } from './ChartDefinitionsDialog';
+import { freezeChartDefinitionSelection, selectChartDefinition } from '../../domain/chart-definitions';
 import { queryFilterEnabled, type CellFilterSelection, type QueryFilterBinding, type QueryFilterDraft } from '../../domain/query-filters';
 import { bindAppliedQueryFilters, hasPendingQueryFilters, matchesQueryFilterBinding, previewQueryFilterDraft, queryFilterDraftChanged } from '../../domain/query-filter-session';
 import { parseNestedFilterMapping } from '../../domain/query-filter-mapping';
@@ -52,6 +54,9 @@ import { DataViewsDialog, DataViewTarget } from './DataViews';
 import { createPinnedFilterService, type PinnedFilterService } from '../../services/pinned-filters';
 import { draftFromPinnedFilters, samePinnedFilter } from '../../domain/pinned-filters';
 import { usePinnedFilters } from './usePinnedFilters';
+import { useChartDefinitions } from './useChartDefinitions';
+import { createChartDefinitionService, type ChartDefinitionService } from '../../services/chart-definitions';
+import type { ChartDefinitionSelection } from '../../domain/chart-definitions';
 import { PinFiltersDialog, PinnedFiltersDialog } from './PinnedFiltersDialog';
 import { QueryDslEditor, type QueryDslEditorHandle, type QueryEditorHistory } from './editor/QueryDslEditor';
 import { QueryEditorModels } from './editor/query-editor-models';
@@ -99,9 +104,11 @@ interface Props {
   recovery?: WorkspaceRecoveryController;
   dataViewService?: DataViewService;
   pinnedFilterService?: PinnedFilterService;
+  chartDefinitionService?: ChartDefinitionService;
 }
 
-export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResults, toggleAI, onSettings, updateQuery, selectTab, openIndex, addQuery, closeTab, backend = desktopQueryBackend, modelService = desktopModelService, aiBackend, canQuery, active = true, onCommandReady, libraryService = defaultQueryLibraryService, snapshotExportService = desktopSnapshotExportService, exchangeService: suppliedExchangeService, restoreQuery, recovery, dataViewService: suppliedDataViewService, pinnedFilterService: suppliedPinnedFilterService }: Props) {
+export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResults, toggleAI, onSettings, updateQuery, selectTab, openIndex, addQuery, closeTab, backend = desktopQueryBackend, modelService = desktopModelService, aiBackend, canQuery, active = true, onCommandReady, libraryService = defaultQueryLibraryService, snapshotExportService = desktopSnapshotExportService, exchangeService: suppliedExchangeService, restoreQuery, recovery, dataViewService: suppliedDataViewService, pinnedFilterService: suppliedPinnedFilterService,
+  chartDefinitionService: suppliedChartDefinitionService }: Props) {
   const { t } = useTranslation();
   const [closing, setClosing] = useState<QueryDocument | null>(null);
   const [checked, setChecked] = useState<Record<string, { source: string; error: QueryDslError | null }>>({});
@@ -126,6 +133,8 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const dataViewService = useMemo(() => suppliedDataViewService ?? createDataViewService(), [suppliedDataViewService]);
   const dataViews = useDataViews(dataViewService);
   const [dataViewsOpen, setDataViewsOpen] = useState(false);
+  const chartDefinitionService = useMemo(() => suppliedChartDefinitionService ?? createChartDefinitionService(), [suppliedChartDefinitionService]);
+  const chartDefinitions = useChartDefinitions(chartDefinitionService);
   const pinnedFilterService = useMemo(() => suppliedPinnedFilterService ?? createPinnedFilterService(), [suppliedPinnedFilterService]);
   const pinnedFilters = usePinnedFilters(pinnedFilterService);
   const [pinnedOpen, setPinnedOpen] = useState<{ source: QueryDocument | null; endpoint: string | null } | null>(null);
@@ -139,7 +148,8 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const [runtimeSource, setRuntimeSource] = useState<{ query: QueryDocument; endpoint: string; catalog?: FieldCatalog } | null>(null);
   const [timeSource, setTimeSource] = useState<{ query: QueryDocument; endpoint: string; catalog?: FieldCatalog; initialTimeZone: string } | null>(null);
   const [sortSource, setSortSource] = useState<{ query: QueryDocument; endpoint: string } | null>(null);
-  const [buildSource, setBuildSource] = useState<{ query: QueryDocument; endpoint: string } | null>(null);
+  const [buildSource, setBuildSource] = useState<{ query: QueryDocument; endpoint: string; seed?: ChartDefinitionSelection } | null>(null);
+  const [chartDefinitionsOpen, setChartDefinitionsOpen] = useState(false);
   const [filterDrafts, setFilterDrafts] = useState<Record<string, QueryFilterDraft>>({});
   const [filterBindings, setFilterBindings] = useState<Record<string, QueryFilterBinding>>({});
   const [filterDetach, setFilterDetach] = useState<QueryFilterBinding | null>(null);
@@ -551,6 +561,9 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
               if (!target || !active || restoring || saveBlockedByVisual || hasPendingFilters || !query.index.trim()) return;
               setBuildSource({ query: structuredClone(query), endpoint: target.endpoint });
             }} />
+          <IconButton icon={ChartColumnBig} label={t('chartDefinitions:open')}
+            disabled={restoring || !active} title={t('chartDefinitions:open')}
+            onClick={() => { if (!active || restoring) return; setChartDefinitionsOpen(true); }} />
           {linkedEntry ? <IconButton className={`qlib-star${linkedEntry.favorite ? ' active' : ''}`} icon={Star}
             aria-pressed={linkedEntry.favorite} label={t(linkedEntry.favorite ? 'queryLibrary:favoriteRemove' : 'queryLibrary:favoriteAdd')}
             onClick={() => library.setFavorite(linkedEntry.id, !linkedEntry.favorite)} /> : null}
@@ -702,7 +715,8 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
         return true;
       }} /> : null}
     {buildSource && active && state.activeTabId === buildSource.query.id ? <QueryAggregationBuildDialog source={buildSource.query}
-      endpoint={buildSource.endpoint} current={buildTab?.document}
+      endpoint={buildSource.endpoint} current={buildTab?.document} seed={buildSource.seed} definitions={chartDefinitions}
+      onSaveDefinition={(definition) => chartDefinitions.save(definition)}
       fields={fieldsFor(buildSource.query.connectionId, buildSource.endpoint, buildSource.query.index.trim())}
       targetCurrent={buildTargetCurrent} canInspect={available && buildTargetCurrent}
       onInspect={() => {
@@ -806,6 +820,15 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
       onClose={() => { setExportSource(null); setExportVisible(false); }} /> : null}
     {recovery ? <ExecutionHistoryDialog open={historyOpen} recovery={recovery} profiles={profiles}
       onClose={() => setHistoryOpen(false)} onRestore={restoreQuery} /> : null}
+    {chartDefinitionsOpen ? <ChartDefinitionsDialog library={chartDefinitions} kind={chartDefinitionService.kind}
+      profiles={profiles} activeTarget={active && showingQuery ? { connectionId: query.connectionId, index: query.index } : null}
+      onReuse={(definition) => {
+        if (!target || !active || restoring || tab?.kind !== 'query') return;
+        if (definition.connectionId !== query.connectionId || definition.index !== query.index.trim()) return;
+        setBuildSource({ query: structuredClone(query), endpoint: target.endpoint,
+          seed: freezeChartDefinitionSelection(selectChartDefinition(definition)) });
+      }}
+      onClose={() => setChartDefinitionsOpen(false)} /> : null}
     {dataViewsOpen ? <DataViewsDialog library={dataViews} kind={dataViewService.kind} profiles={profiles}
       initialConnectionId={state.activeConnectionId} available={available && active}
       fieldsFor={fieldsFor} inspectFields={refreshFields} onClose={() => setDataViewsOpen(false)}

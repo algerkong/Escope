@@ -14,6 +14,7 @@ import { createModelService, type ModelService } from '../services/models';
 import { createQueryLibraryService, type QueryLibraryService } from '../services/query-library';
 import { createWorkspaceRecoveryService, type WorkspaceRecoveryService } from '../services/workspace-recovery';
 import { createDataViewService, type DataViewService } from '../services/data-views';
+import { createChartDefinitionService, type ChartDefinitionService } from '../services/chart-definitions';
 import { createPinnedFilterService, type PinnedFilterService } from '../services/pinned-filters';
 import { connectionTestLabel, useConnectionTests } from '../features/connections/useConnectionTests';
 import { IconButton, SelectControl } from '../components/controls';
@@ -44,10 +45,12 @@ export function applyPreferences(p: Preferences) {
 
 export function App({ service, initial, connectionProbe = testConnection, queryBackend, aiBackend, modelService: suppliedModelService,
   queryLibraryService: suppliedQueryLibraryService, workspaceRecoveryService: suppliedRecoveryService,
-  dataViewService: suppliedDataViewService, pinnedFilterService: suppliedPinnedFilterService }:
+  dataViewService: suppliedDataViewService, pinnedFilterService: suppliedPinnedFilterService,
+  chartDefinitionService: suppliedChartDefinitionService }:
   { service: StorageService; initial: StoredState; connectionProbe?: typeof testConnection; queryBackend?: QueryBackend;
     aiBackend?: AiChatBackend; modelService?: ModelService; queryLibraryService?: QueryLibraryService;
-    workspaceRecoveryService?: WorkspaceRecoveryService; dataViewService?: DataViewService; pinnedFilterService?: PinnedFilterService }) {
+    workspaceRecoveryService?: WorkspaceRecoveryService; dataViewService?: DataViewService; pinnedFilterService?: PinnedFilterService;
+    chartDefinitionService?: ChartDefinitionService }) {
   const { t } = useTranslation();
   const [preferences, setPreferences] = useState(initial.preferences);
   const preferencesRef = useRef(preferences);
@@ -84,6 +87,7 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
   const [queryLibraryService] = useState(() => suppliedQueryLibraryService ?? createQueryLibraryService());
   const [dataViewService] = useState(() => suppliedDataViewService ?? createDataViewService());
   const [pinnedFilterService] = useState(() => suppliedPinnedFilterService ?? createPinnedFilterService());
+  const [chartDefinitionService] = useState(() => suppliedChartDefinitionService ?? createChartDefinitionService());
   const preferenceVersion = useRef(0);
 
   useEffect(() => {
@@ -310,6 +314,7 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
         libraryService={queryLibraryService}
         dataViewService={dataViewService}
         pinnedFilterService={pinnedFilterService}
+        chartDefinitionService={chartDefinitionService}
         recovery={{ ...recovery, reload: reloadWorkspace }}
         toggleAI={() => setAI((value) => !value)} onSettings={openSettings} updateQuery={updateQuery}
         selectTab={selectTab} openIndex={openIndex} addQuery={addQuery} restoreQuery={restoreQuery} closeTab={closeTab} />

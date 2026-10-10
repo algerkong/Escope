@@ -1,3 +1,4 @@
+use crate::chart_definitions::{ChartDefinitionLibrary, ChartDefinitionRecord};
 use crate::connection_tls::CaCertificate;
 use crate::credentials::CredentialRef;
 use crate::data_views::{DataViewLibrary, DataViewRecord};
@@ -12,7 +13,7 @@ use uuid::Uuid;
 
 /// Highest schema version this build understands. A file above it fails closed instead of being
 /// opened with an unknown layout.
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 
 /// Hard upper bound for one credential cleanup batch, so no caller can request unbounded work.
 pub const MAX_CLEANUP_BATCH: usize = 64;
@@ -649,6 +650,7 @@ impl Database {
                 6 => tx.execute_batch(include_str!("../migrations/006_workspace_recovery.sql"))?,
                 7 => tx.execute_batch(include_str!("../migrations/007_data_views.sql"))?,
                 8 => tx.execute_batch(include_str!("../migrations/008_pinned_filters.sql"))?,
+                9 => tx.execute_batch(include_str!("../migrations/009_chart_definitions.sql"))?,
                 _ => return Err(AppError::new("unsupported")),
             }
             tx.commit()?;
@@ -982,6 +984,61 @@ impl Database {
         let revision = expected_revision + 1;
         tx.execute(
             "INSERT INTO pinned_filter_library(singleton,revision,json) VALUES (1,?1,?2)
+             ON CONFLICT(singleton) DO UPDATE SET revision=excluded.revision,json=excluded.json",
+            params![revision, json],
+        )?;
+        tx.commit()?;
+        Ok(revision)
+    }
+
+    pub(crate) fn chart_definitions(&self) -> Result<ChartDefinitionRecord, AppError> {
+        read_chart_definitions(&self.0)
+    }
+
+    /// Validate the stored document and immutable connection ownership under the same CAS lock.
+    /// New definitions require an existing connection; saved definitions survive deletion without
+    /// ever rebinding to a different one.
+    pub(crate) fn save_chart_definitions(
+        &mut self,
+        expected_revision: u64,
+        library: &ChartDefinitionLibrary,
+    ) -> Result<u64, AppError> {
+        library.validate()?;
+        if expected_revision >= crate::chart_definitions::MAX_REVISION {
+            return Err(AppError::new("invalidInput"));
+        }
+        let json = serde_json::to_string(library).map_err(|_| AppError::new("invalidInput"))?;
+        let tx = self
+            .0
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let current = read_chart_definitions(&tx)?;
+        if expected_revision != current.revision {
+            return Err(AppError::new("chartDefinitionConflict"));
+        }
+        for entry in &library.entries {
+            if let Some(previous) = current
+                .library
+                .entries
+                .iter()
+                .find(|previous| previous.id == entry.id)
+            {
+                if entry.connection_id != previous.connection_id {
+                    return Err(AppError::new("invalidInput"));
+                }
+            } else {
+                let exists: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM connections WHERE id=?1)",
+                    [&entry.connection_id],
+                    |row| row.get(0),
+                )?;
+                if !exists {
+                    return Err(AppError::new("chartDefinitionConnectionMissing"));
+                }
+            }
+        }
+        let revision = expected_revision + 1;
+        tx.execute(
+            "INSERT INTO chart_definition_library(singleton,revision,json) VALUES (1,?1,?2)
              ON CONFLICT(singleton) DO UPDATE SET revision=excluded.revision,json=excluded.json",
             params![revision, json],
         )?;
@@ -2036,6 +2093,39 @@ fn read_pinned_filters(connection: &Connection) -> Result<PinnedFilterRecord, Ap
             Ok(PinnedFilterRecord {
                 revision: revision as u64,
                 library: crate::pinned_filters::decode_stored(&json)?,
+            })
+        }
+    }
+}
+
+fn read_chart_definitions(connection: &Connection) -> Result<ChartDefinitionRecord, AppError> {
+    let row = connection
+        .query_row(
+            "SELECT revision,
+         CASE WHEN length(CAST(json AS BLOB)) <= ?1 THEN json ELSE NULL END
+         FROM chart_definition_library WHERE singleton=1",
+            [crate::chart_definitions::MAX_BYTES as i64],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|error| match error {
+            rusqlite::Error::InvalidColumnType(..)
+            | rusqlite::Error::IntegralValueOutOfRange(..)
+            | rusqlite::Error::FromSqlConversionFailure(..) => AppError::new("invalidResponse"),
+            _ => AppError::new("storageUnavailable"),
+        })?;
+    match row {
+        None => Ok(ChartDefinitionRecord {
+            revision: 0,
+            library: ChartDefinitionLibrary::empty(),
+        }),
+        Some((revision, json)) => {
+            if revision <= 0 || revision as u64 > crate::chart_definitions::MAX_REVISION {
+                return Err(AppError::new("invalidResponse"));
+            }
+            Ok(ChartDefinitionRecord {
+                revision: revision as u64,
+                library: crate::chart_definitions::decode_stored(&json)?,
             })
         }
     }

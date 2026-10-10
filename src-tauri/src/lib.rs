@@ -1,4 +1,5 @@
 mod ai;
+mod chart_definitions;
 mod connection;
 mod connection_access;
 mod connection_auth;
@@ -384,6 +385,8 @@ pub fn run() {
             data_views::data_views_save,
             pinned_filters::pinned_filters_load,
             pinned_filters::pinned_filters_save,
+            chart_definitions::chart_definitions_load,
+            chart_definitions::chart_definitions_save,
             ai::ai_chat,
             ai::ai_chat_cancel,
             models::models_load,

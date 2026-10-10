@@ -1,0 +1,28 @@
+.chart-definitions-panel, .chart-definitions-rename { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.chart-definitions-actions, .chart-definitions-status { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.chart-definitions-actions { flex-wrap: wrap; }
+.chart-definitions-actions > input { flex: 1; min-width: 100px; width: 0; }
+.chart-definitions-actions input, .chart-definitions-rename input { padding: 5px 8px; font-size: .85rem; }
+.chart-definitions-rename input { width: 100%; min-width: 0; }
+.chart-definitions-rename label { color: var(--muted); font-size: .82rem; }
+.chart-definitions-scope, .chart-definitions-status, .chart-definitions-bound { font-size: .75rem; color: var(--muted); }
+.chart-definitions-bound { overflow-wrap: anywhere; }
+.chart-definitions-list { list-style: none; padding: 0; margin: 0; max-height: min(46vh, 420px); overflow-y: auto; }
+.chart-definitions-list:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.chart-definitions-list > li { display: flex; align-items: center; gap: 4px; border-bottom: 1px solid var(--border); padding: 7px 0; }
+.chart-definitions-entry { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; overflow-wrap: anywhere; user-select: text; }
+.chart-definitions-entry strong { font-size: .85rem; }
+.chart-definitions-entry span { font-size: .75rem; color: var(--muted); }
+.chart-definitions-panel .icon-button { flex: 0 0 28px; width: 28px; height: 28px; }
+.chart-definitions-panel .dialog-actions { flex-wrap: wrap; }
+
+/* Save-as-definition section inside the aggregation build review. */
+.qaggb-save { display: flex; flex-direction: column; gap: 6px; }
+.qaggb-save-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; align-items: end; }
+.qaggb-save-fields input, .qaggb-save-fields .select-control { width: 100%; min-width: 0; }
+.qaggb-save-status { font-size: .75rem; color: var(--muted); min-height: 18px; overflow-wrap: anywhere; }
+.qaggb-seeded { display: flex; align-items: center; gap: 6px; font-size: .75rem; color: var(--muted); }
+.qaggb-seeded code { overflow-wrap: anywhere; }
+@media (max-width: 520px) {
+  .qaggb-save-fields { grid-template-columns: minmax(0, 1fr); }
+}

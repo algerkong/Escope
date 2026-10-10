@@ -352,6 +352,14 @@ function checkDraft(draft: AggregationBuildDraft): AggregationBuildProblem | nul
 }
 
 /**
+ * Check a draft against the buildable shape and its own limits. Saved chart definitions reuse
+ * this so a stored definition never describes something the builder would refuse to produce.
+ */
+export function validateAggregationDraft(draft: AggregationBuildDraft): AggregationBuildProblem | null {
+  return validShape(draft) ? checkDraft(draft) : 'invalidShape';
+}
+
+/**
  * Top-level entries plus their direct children: the same quantity the aggregation reader caps.
  * Children of handwritten entries are counted because those entries stay in the built DSL.
  */
@@ -435,8 +443,7 @@ export function previewAggregationBuild(source: QueryDocument, draft: Aggregatio
   if (!body.ok) return body;
   const { root, container, parsed } = body;
   const { preserved } = parsed;
-  if (!validShape(draft)) return { ok: false, code: 'invalidShape' };
-  const problem = checkDraft(draft);
+  const problem = validateAggregationDraft(draft);
   if (problem) return { ok: false, code: problem };
   const names = new Set(preserved.map(({ name }) => name));
   const drafted = [draft.group?.name, ...draft.metrics.map((metric) => metric.name)].filter((name): name is string => name !== undefined);

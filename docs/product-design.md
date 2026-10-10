@@ -131,6 +131,11 @@ OR 组编译时明确设置 `minimum_should_match`，不能依赖 bool 上下文
 “不等于”明确区分“排除匹配值，包含缺失字段”和“字段存在且值不等于”。
 条件显示中的自然语言必须反映这一差异。
 同一 nested 分组内条件必须落到同一嵌套对象，不按普通对象路径生成过滤。
+Q02 显式 nested 首批限顶级 nested 路径及直接标量字段，Mapping 原文与 field caps
+报告的实际索引集合须一致。内部否定仍可能被其他对象满足；“不存在匹配对象”的父文档
+排除使用外层 `must_not`，且不越出所属 OR 分支。每组 `score_mode: none`、
+`ignore_unmapped: false`；完整预览后显式应用，不执行、不反向改写手写 nested。
+限制与未验语义见 [nested QA](query-nested-filters-qa.md)。
 
 ### 6.3 时间与聚合
 

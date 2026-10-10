@@ -125,7 +125,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const [timeSource, setTimeSource] = useState<{ query: QueryDocument; endpoint: string; catalog?: FieldCatalog; initialTimeZone: string } | null>(null);
   const [sortSource, setSortSource] = useState<{ query: QueryDocument; endpoint: string } | null>(null);
   const [filterDrafts, setFilterDrafts] = useState<Record<string, QueryFilterDraft>>({});
-  const [filterDialog, setFilterDialog] = useState<{ queryId: string; instanceId: string; selection?: CellFilterSelection } | null>(null);
+  const [filterDialog, setFilterDialog] = useState<{ queryId: string; instanceId: string; selection?: CellFilterSelection; nested?: boolean } | null>(null);
   const [savedEntryIds, setSavedEntryIds] = useState<Record<string, string>>({});
   const [exportSource, setExportSource] = useState<SnapshotExportSource | null>(null);
   const [exportVisible, setExportVisible] = useState(false);
@@ -364,12 +364,12 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const canFilterCell = available && active && !restoring && !saveBlockedByVisual && target !== undefined && !endpointChanged
     && Boolean(entry?.endpoint) && (execution.status === 'success' || execution.status === 'partial')
     && (showingQuery || tab?.kind === 'index' && restoreQuery !== undefined);
-  const openCellFilter = (selection: CellFilterSelection) => {
+  const openCellFilter = (selection?: CellFilterSelection, nested = false) => {
     if (!canFilterCell || !entry?.endpoint || execution.status !== 'success' && execution.status !== 'partial') return;
     const draft: QueryFilterDraft = pendingFilters?.filters.length ? pendingFilters
       : { source: structuredClone(query), snapshot: execution.snapshot, endpoint: entry.endpoint, filters: [] };
     setFilterDrafts((current) => ({ ...current, [query.id]: draft }));
-    setFilterDialog({ queryId: query.id, instanceId: crypto.randomUUID(), selection });
+    setFilterDialog({ queryId: query.id, instanceId: crypto.randomUUID(), selection, nested });
   };
   const currentCheck = checked[query.id]?.source === query.dsl ? checked[query.id] : null;
   const savedFormat = formatted[query.id];
@@ -553,6 +553,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
       <QueryResults kind={showingQuery ? 'query' : 'preview'} query={query} entry={entry}
         available={available} stale={stale} endpointChanged={endpointChanged} documentIds={documentIds} active={active} wrapJson={preferences.wrapJson}
         onFilterCell={canFilterCell ? openCellFilter : undefined}
+        onNestedFilters={canFilterCell ? () => openCellFilter(undefined, true) : undefined}
         canRun={canRun} grouping={preferences.grouping} exportService={libraryService}
         onSnapshotExport={available && snapshotExportService.available && target !== undefined && !endpointChanged
           && entry?.endpoint && (execution.status === 'success' || execution.status === 'partial')
@@ -643,11 +644,18 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
         return true;
       }} /> : null}
     {reviewedFilters && filterDialog && active && state.activeTabId === reviewedFilters.source.id ? <QueryFiltersDialog key={filterDialog.instanceId}
-      draft={reviewedFilters} current={filterTab?.document} initialSelection={filterDialog.selection}
+      draft={reviewedFilters} current={filterTab?.document} initialSelection={filterDialog.selection} initialNested={filterDialog.nested}
       fields={fieldsFor(reviewedFilters.snapshot.connectionId, reviewedFilters.endpoint, reviewedFilters.snapshot.index.trim())}
+      mapping={mappingFor(reviewedFilters.snapshot.connectionId, reviewedFilters.endpoint, reviewedFilters.snapshot.index.trim())}
       targetCurrent={filterTargetCurrent} canInspect={available && filterTargetCurrent} newQuery={filterTab?.kind === 'index'}
       onInspect={() => {
         if (available && filterTargetCurrent) refreshFields(reviewedFilters.snapshot.connectionId, reviewedFilters.endpoint, reviewedFilters.snapshot.index.trim());
+      }}
+      onInspectNested={() => {
+        if (!available || !filterTargetCurrent) return;
+        const { connectionId, index } = reviewedFilters.snapshot;
+        loadMapping(connectionId, reviewedFilters.endpoint, index.trim());
+        refreshFields(connectionId, reviewedFilters.endpoint, index.trim());
       }}
       onFiltersChange={(filters, composition) => setFilterDrafts((current) => current[reviewedFilters.source.id] === reviewedFilters
         ? { ...current, [reviewedFilters.source.id]: { ...reviewedFilters, filters, composition } } : current)}

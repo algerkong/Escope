@@ -1,15 +1,17 @@
-import { Check, Eye, ListFilter, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { Check, Eye, ListFilter, ListTree, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { useId, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { IconButton, Modal, SelectControl } from '../../components/controls';
 import { matchesQueryDraft, type QueryDocument, type QueryDocumentPatch } from '../../domain/query';
 import { formatQueryDsl } from '../../domain/query-dsl';
+import { parseNestedFilterMapping } from '../../domain/query-filter-mapping';
 import {
-  MAX_FILTER_DSL_BYTES, MAX_FILTER_GROUPS, MAX_QUERY_FILTERS, createQueryFilter, previewQueryFilters, queryFilterDuplicate, queryFilterFieldEvidence, queryFilterValues,
-  type CellFilterSelection, type QueryFilter, type QueryFilterComposition, type QueryFilterDraft, type QueryFilterJoin, type QueryFilterOperation, type QueryFilterPreview,
+  MAX_FILTER_DSL_BYTES, MAX_FILTER_GROUPS, MAX_QUERY_FILTERS, createQueryFilter, filterGroupAccepts, previewQueryFilters, queryFilterDuplicate, queryFilterFieldEvidence, queryFilterValues,
+  type CellFilterSelection, type QueryFilter, type QueryFilterComposition, type QueryFilterDraft, type QueryFilterGroup, type QueryFilterJoin, type QueryFilterOperation, type QueryFilterPreview,
 } from '../../domain/query-filters';
 import type { FieldCatalog } from '../../domain/resource';
-import type { Loadable } from './useQueryResources';
+import { NestedFilterEditor } from './NestedFilterEditor';
+import type { Loadable, MappingState } from './useQueryResources';
 import '../../styles/query-filters.css';
 
 export function QueryFilterDraftBar({ count, onReview, onDiscard }: { count: number; onReview: () => void; onDiscard: () => void }) {
@@ -26,36 +28,46 @@ interface Props {
   draft: QueryFilterDraft;
   current: QueryDocument | undefined;
   initialSelection?: CellFilterSelection;
+  initialNested?: boolean;
   fields: Loadable<FieldCatalog>;
+  mapping: Loadable<MappingState>;
   targetCurrent: boolean;
   canInspect: boolean;
   newQuery: boolean;
   onInspect: () => void;
+  onInspectNested: () => void;
   onFiltersChange: (filters: readonly QueryFilter[], composition: QueryFilterComposition) => void;
   onCommit: (source: QueryDocument, patch: QueryDocumentPatch) => boolean;
   onDiscard: () => void;
   onClose: () => void;
 }
 
-export function QueryFiltersDialog({ draft, current, initialSelection, fields, targetCurrent, canInspect, newQuery,
-  onInspect, onFiltersChange, onCommit, onDiscard, onClose }: Props) {
+export function QueryFiltersDialog({ draft, current, initialSelection, initialNested = false, fields, mapping, targetCurrent, canInspect, newQuery,
+  onInspect, onInspectNested, onFiltersChange, onCommit, onDiscard, onClose }: Props) {
   const { t } = useTranslation();
   const id = useId();
   const [selection, setSelection] = useState(initialSelection);
+  const [nestedOpen, setNestedOpen] = useState(initialNested);
   const [operation, setOperation] = useState<QueryFilterOperation>('include');
   const [valueIndex, setValueIndex] = useState(0);
   const [selectedGroup, setSelectedGroup] = useState('');
   const [conflict, setConflict] = useState(false);
   const [review, setReview] = useState<{
-    result: QueryFilterPreview; filters: readonly QueryFilter[]; composition: QueryFilterComposition | undefined; fields: Loadable<FieldCatalog>;
+    result: QueryFilterPreview; filters: readonly QueryFilter[]; composition: QueryFilterComposition | undefined;
+    fields: Loadable<FieldCatalog>; mapping: Loadable<MappingState>;
   } | null>(null);
   const composition = useMemo<QueryFilterComposition>(() => draft.composition ?? {
     mode: 'all', groups: draft.filters.length ? [{ id: 'default', mode: 'all', filterIds: draft.filters.map((filter) => filter.id) }] : [],
   }, [draft.composition, draft.filters]);
-  const candidateGroup = selectedGroup === 'new' || composition.groups.some((group) => group.id === selectedGroup)
-    ? selectedGroup : composition.groups[0]?.id ?? 'new';
+  const candidateGroup = selectedGroup === 'new' || composition.groups.some((group) => group.id === selectedGroup && !group.nested)
+    ? selectedGroup : composition.groups.find((group) => !group.nested)?.id ?? 'new';
   const catalog = fields.status === 'ready' && !fields.refreshing && !fields.refreshError ? fields.data : undefined;
-  const busy = fields.status === 'loading' || fields.status === 'ready' && Boolean(fields.refreshing);
+  const mappingEvidence = useMemo(() => mapping.status === 'ready' && !mapping.refreshing && !mapping.refreshError
+    ? parseNestedFilterMapping(mapping.data.raw) : undefined, [mapping]);
+  const nestedActive = nestedOpen || composition.groups.some((group) => group.nested);
+  const mappingBusy = mapping.status === 'loading' || mapping.status === 'ready' && Boolean(mapping.refreshing);
+  const fieldsBusy = fields.status === 'loading' || fields.status === 'ready' && Boolean(fields.refreshing);
+  const busy = fieldsBusy || nestedActive && mappingBusy;
   const currentTarget = targetCurrent && matchesQueryDraft(current, draft.source) && !conflict;
   const field = useMemo(() => selection
     ? queryFilterFieldEvidence(draft.source, draft.snapshot, selection.field, catalog) : null, [draft.source, draft.snapshot, selection, catalog]);
@@ -69,7 +81,8 @@ export function QueryFiltersDialog({ draft, current, initialSelection, fields, t
     : draft.filters.length >= MAX_QUERY_FILTERS ? 'tooMany'
       : candidateGroup === 'new' && composition.groups.length >= MAX_FILTER_GROUPS ? 'tooManyGroups'
         : proposal?.ok && queryFilterDuplicate(draft.filters, proposal.filter) ? 'duplicate' : null;
-  const reviewed = review?.filters === draft.filters && review.composition === draft.composition && review.fields === fields ? review.result : null;
+  const reviewed = review?.filters === draft.filters && review.composition === draft.composition && review.fields === fields
+    && review.mapping === mapping ? review.result : null;
   const preview = reviewed?.ok ? reviewed : null;
   const formatted = useMemo(() => preview ? formatQueryDsl(preview.dsl) : null, [preview]);
   const finalDsl = formatted?.ok && new TextEncoder().encode(formatted.formatted).length <= MAX_FILTER_DSL_BYTES
@@ -84,15 +97,20 @@ export function QueryFiltersDialog({ draft, current, initialSelection, fields, t
     onFiltersChange(filters, next);
     setReview(null);
   };
+  const newGroup = (filter: QueryFilter): QueryFilterGroup => ({ id: crypto.randomUUID(), mode: 'all', filterIds: [filter.id],
+    ...(filter.nestedPath === undefined ? {} : { nested: { path: filter.nestedPath, match: 'include' } }) });
   const moveFilter = (filterId: string, targetGroup: string) => {
+    const filter = draft.filters.find((item) => item.id === filterId);
+    const target = composition.groups.find((group) => group.id === targetGroup);
     if (!currentTarget || targetGroup === 'new' && composition.groups.length >= MAX_FILTER_GROUPS
-      || targetGroup !== 'new' && !composition.groups.some((group) => group.id === targetGroup)) return;
+      || !filter || targetGroup !== 'new' && (!target || !filterGroupAccepts(target, filter)
+        || filter.nestedPath !== undefined && queryFilterDuplicate(draft.filters.filter((item) => item.id !== filterId && target.filterIds.includes(item.id)), filter))) return;
     const groups = composition.groups.map((group) => ({
       ...group, filterIds: group.id === targetGroup
         ? [...group.filterIds.filter((id) => id !== filterId), filterId] : group.filterIds.filter((id) => id !== filterId),
     })).filter((group) => group.filterIds.length);
     changeFilters(draft.filters, { ...composition, groups: targetGroup === 'new'
-      ? [...groups, { id: crypto.randomUUID(), mode: 'all', filterIds: [filterId] }] : groups });
+      ? [...groups, newGroup(filter)] : groups });
   };
 
   return <Modal open onClose={onClose} title={t('queryFilters:title')}>
@@ -104,10 +122,32 @@ export function QueryFiltersDialog({ draft, current, initialSelection, fields, t
       <div className="qfilter-evidence">
         <span className="muted" title={t('queryFilters:evidenceBoundary')}>
           {fields.status === 'error' || fields.status === 'ready' && fields.refreshError ? t('queryFilters:inspectionFailed')
-            : busy ? t('queryFilters:inspecting') : t('queryFilters:fieldEvidence')}
+            : fieldsBusy ? t('queryFilters:inspecting') : t('queryFilters:fieldEvidence')}
         </span>
         <IconButton icon={RefreshCw} label={t('queryFilters:inspect')} disabled={!canInspect || !currentTarget || busy} onClick={onInspect} />
+        <IconButton icon={ListTree} label={t('queryFilters:nestedEditor')} aria-expanded={nestedOpen}
+          disabled={!currentTarget} onClick={() => { setNestedOpen(!nestedOpen); setSelection(undefined); setReview(null); }} />
       </div>
+      {nestedActive ? <div className="qfilter-evidence">
+        <span className="muted" title={t('queryFilters:nestedEvidenceBoundary')}>
+          {mapping.status === 'error' || mapping.status === 'ready' && mapping.refreshError ? t('queryFilters:mappingFailed')
+            : mappingBusy ? t('queryFilters:mappingLoading') : t('queryFilters:mappingEvidence')}
+        </span>
+        <IconButton icon={RefreshCw} label={t('queryFilters:inspectNested')} disabled={!canInspect || !currentTarget || busy} onClick={onInspectNested} />
+      </div> : null}
+      {nestedOpen ? <NestedFilterEditor draft={draft} composition={composition} catalog={catalog} mapping={mappingEvidence}
+        disabled={!currentTarget || busy} onEdit={() => setReview(null)} onAdd={(proposal, targetGroup) => {
+          if (!currentTarget || busy || draft.filters.length >= MAX_QUERY_FILTERS
+            || targetGroup === 'new' && composition.groups.length >= MAX_FILTER_GROUPS) return null;
+          const filter = { ...proposal, id: crypto.randomUUID() };
+          const target = targetGroup === 'new' ? newGroup(filter) : composition.groups.find((group) => group.id === targetGroup);
+          if (!target || !filterGroupAccepts(target, filter)
+            || queryFilterDuplicate(draft.filters.filter((item) => target.filterIds.includes(item.id)), filter)) return null;
+          const groups = targetGroup === 'new' ? [...composition.groups, target]
+            : composition.groups.map((group) => group.id === targetGroup ? { ...group, filterIds: [...group.filterIds, filter.id] } : group);
+          changeFilters([...draft.filters, filter], { ...composition, groups });
+          return target.id;
+        }} /> : null}
       {selection ? <div className="qfilter-candidate">
         <div className="qfilter-field">
           <strong>{selection.field}</strong>
@@ -137,7 +177,9 @@ export function QueryFiltersDialog({ draft, current, initialSelection, fields, t
         {composition.groups.length ? <label>{t('queryFilters:addGroup')}
           <SelectControl value={candidateGroup} disabled={!currentTarget}
             onChange={(event) => { setSelectedGroup(event.target.value); setReview(null); }}>
-            {composition.groups.map((group, index) => <option key={group.id} value={group.id}>{t('queryFilters:group', { position: index + 1 })}</option>)}
+            {composition.groups.map((group, index) => <option key={group.id} value={group.id} disabled={Boolean(group.nested)}>
+              {t('queryFilters:group', { position: index + 1 })}{group.nested ? ` (${group.nested.path})` : ''}
+            </option>)}
             <option value="new" disabled={composition.groups.length >= MAX_FILTER_GROUPS}>{t('queryFilters:newGroup')}</option>
           </SelectControl>
         </label> : null}
@@ -158,23 +200,41 @@ export function QueryFiltersDialog({ draft, current, initialSelection, fields, t
         <FilterJoinControl label={t('queryFilters:groupMatch')} mode={composition.mode} disabled={!currentTarget || composition.groups.length < 2}
           onChange={(mode) => changeFilters(draft.filters, { ...composition, mode })} />
         <div className="qfilter-group-modes">
-          {composition.groups.map((group, index) => <FilterJoinControl key={group.id}
-            label={t('queryFilters:groupJoin', { position: index + 1 })} mode={group.mode} disabled={!currentTarget}
-            onChange={(mode) => changeFilters(draft.filters, { ...composition,
-              groups: composition.groups.map((entry) => entry.id === group.id ? { ...entry, mode } : entry) })} />)}
+          {composition.groups.map((group, index) => <div key={group.id} className="qfilter-group-mode">
+            <FilterJoinControl label={t('queryFilters:groupJoin', { position: index + 1 })} mode={group.mode} disabled={!currentTarget}
+              onChange={(mode) => changeFilters(draft.filters, { ...composition,
+                groups: composition.groups.map((entry) => entry.id === group.id ? { ...entry, mode } : entry) })} />
+            {group.nested ? <div className="qfilter-nested-scope">
+              <code title={t('queryFilters:nestedSameObject')}>{group.nested.path}</code>
+              <SelectControl aria-label={t('queryFilters:nestedMatch', { position: index + 1 })} value={group.nested.match} disabled={!currentTarget}
+                title={t(group.nested.match === 'exclude' ? 'queryFilters:nestedOuterBoundary' : 'queryFilters:nestedSameObject')}
+                onChange={(event) => changeFilters(draft.filters, { ...composition,
+                  groups: composition.groups.map((entry) => entry.id === group.id && entry.nested
+                    ? { ...entry, nested: { ...entry.nested, match: event.target.value as 'include' | 'exclude' } } : entry) })}>
+                <option value="include">{t('queryFilters:nestedIncludeParent')}</option>
+                <option value="exclude">{t('queryFilters:nestedExcludeParent')}</option>
+              </SelectControl>
+            </div> : null}
+          </div>)}
         </div>
       </div> : null}
       {draft.filters.length ? <ul className="qfilter-list" aria-label={t('queryFilters:pending', { count: draft.filters.length })}>
         {draft.filters.map((item) => <li key={item.id}>
           <div className="qfilter-item">
             <strong>{item.field}</strong><span>{item.fieldType}</span>
-            <span title={item.operation === 'exclude' ? t('queryFilters:excludeBoundary') : undefined}>{operationLabel(item)}</span>
+            <span title={item.nestedPath ? t(item.operation === 'exclude' || item.operation === 'missing'
+              ? 'queryFilters:nestedInnerBoundary' : 'queryFilters:nestedSameObject')
+              : item.operation === 'exclude' ? t('queryFilters:excludeBoundary') : undefined}>{operationLabel(item)}</span>
+            {item.nestedPath ? <code className="qfilter-path" title={t('queryFilters:nestedSameObject')}>{item.nestedPath}</code> : null}
             {item.evidence === 'runtime' ? <span title={t('queryFilters:runtimeBoundary')}>{t('queryFilters:runtime')}</span> : null}
             {item.value !== null ? <code title={item.value}>{item.value}</code> : null}
             <SelectControl aria-label={t('queryFilters:filterGroup', { field: item.field })} disabled={!currentTarget}
               value={composition.groups.find((group) => group.filterIds.includes(item.id))?.id ?? ''}
               onChange={(event) => moveFilter(item.id, event.target.value)}>
-              {composition.groups.map((group, index) => <option key={group.id} value={group.id}>{t('queryFilters:group', { position: index + 1 })}</option>)}
+              {composition.groups.map((group, index) => <option key={group.id} value={group.id} disabled={!filterGroupAccepts(group, item)
+                || item.nestedPath !== undefined && queryFilterDuplicate(draft.filters.filter((filter) => filter.id !== item.id && group.filterIds.includes(filter.id)), item)}>
+                {t('queryFilters:group', { position: index + 1 })}{group.nested ? ` (${group.nested.path})` : ''}
+              </option>)}
               <option value="new" disabled={composition.groups.length >= MAX_FILTER_GROUPS
                 || composition.groups.find((group) => group.filterIds.includes(item.id))?.filterIds.length === 1}>
                 {t('queryFilters:newGroup')}
@@ -190,8 +250,8 @@ export function QueryFiltersDialog({ draft, current, initialSelection, fields, t
       </ul> : null}
       <div className="qfilter-actions">
         <button type="button" className="secondary compact-button" disabled={!currentTarget || busy || !draft.filters.length}
-          onClick={() => setReview({ result: previewQueryFilters(draft.source, draft.snapshot, draft.filters, catalog, draft.composition),
-            filters: draft.filters, composition: draft.composition, fields })}>
+          onClick={() => setReview({ result: previewQueryFilters(draft.source, draft.snapshot, draft.filters, catalog, draft.composition, mappingEvidence),
+            filters: draft.filters, composition: draft.composition, fields, mapping })}>
           <Eye size={14} aria-hidden="true" />{t('queryFilters:preview')}
         </button>
         <IconButton icon={Trash2} label={t('queryFilters:discard')} onClick={onDiscard} />

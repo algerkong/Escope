@@ -52,7 +52,9 @@ async function fixture(timed = false, runtime = false, paged = false) {
     readResource: vi.fn(async (request: ResourceRequest) => ({
       ...request, endpoint: endpoint(request.connectionId), rawResponse: request.resource === 'indices'
         ? '{"indices":[{"name":"events","attributes":["open"],"aliases":[]}],"aliases":[],"data_streams":[]}'
-        : '{"indices":["events"],"fields":{"n":{"long":{"searchable":true}},"status":{"keyword":{"searchable":true}},"date":{"date":{"searchable":true}}}}',
+        : request.resource === 'mapping'
+          ? '{"events":{"mappings":{"properties":{"comments":{"type":"nested","properties":{"author":{"type":"keyword"},"n":{"type":"long"}}}}}}}'
+          : '{"indices":["events"],"fields":{"n":{"long":{"searchable":true}},"status":{"keyword":{"searchable":true}},"date":{"date":{"searchable":true}},"comments.author":{"keyword":{"searchable":true}},"comments.n":{"long":{"searchable":true}}}}',
     })),
     execute: vi.fn(async (request: QueryRequest) => ({
       ...request, endpoint: endpoint(request.connectionId), pitId: request.pitId ?? null, partial: false,
@@ -365,5 +367,118 @@ describe('cell filters in the workspace', () => {
     expect(stored.workspace!.tabs[0]!.document).toMatchObject({ dsl: reviewed, timeRange: f.query.timeRange });
     expect(stored.workspace!.tabs[0]!.document).not.toHaveProperty('composition');
     expect(stored.history.find((entry) => entry.kind === 'continuation')!.snapshot.rawDsl).toBe(executed);
+  });
+
+  it('opens explicit nested review without reading, preserves time/sort and the old PIT, and restores only applied DSL', async () => {
+    const f = await fixture(true, false, true);
+    const mounted = f.mount();
+    await f.saved();
+    expect(screen.queryByRole('button', { name: 'Nested conditions' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Run query' }));
+    await screen.findByText('9,007,199,254,740,993');
+    const executed = f.backend.execute.mock.calls[0]![0].rawDsl;
+    fireEvent.click(screen.getByRole('button', { name: 'Nested conditions' }));
+    expect(screen.getByText(enQueryFilters.mappingUnchecked)).toBeVisible();
+    expect(f.backend.readResource.mock.calls.filter(([request]) => request.resource === 'mapping')).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Check Mapping and field capabilities' }));
+    await waitFor(() => expect(screen.getByLabelText('Nested path')).toBeEnabled());
+    expect(f.backend.readResource.mock.calls.filter(([request]) => request.resource === 'mapping')[0]![0])
+      .toMatchObject({ connectionId: f.a.id, index: 'events' });
+    fireEvent.change(screen.getByLabelText('Nested path'), { target: { value: 'comments' } });
+    fireEvent.change(screen.getByLabelText('Nested field'), { target: { value: 'comments.n' } });
+    fireEvent.change(screen.getByLabelText('Entered value'), { target: { value: '9007199254740993' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add nested condition' }));
+    fireEvent.change(screen.getByLabelText('Group 1 parent match'), { target: { value: 'exclude' } });
+    await f.user.keyboard('{Escape}');
+    expect(screen.getByRole('button', { name: 'Run query' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Save draft' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Server sort' })).toBeDisabled();
+    await f.saved();
+    expect((await f.recovery.load()).document.workspace!.tabs[0]!.document.dsl).toBe(f.query.dsl);
+    fireEvent.click(screen.getByRole('button', { name: 'Review pending filters' }));
+    expect(screen.getByLabelText('Group 1 parent match')).toHaveValue('exclude');
+    expect(screen.getByRole('button', { name: 'Apply filters to draft' })).toBeDisabled();
+    preview();
+    const final = (screen.getByLabelText('Final filtered DSL') as HTMLTextAreaElement).value;
+    apply();
+    expect(screen.getByLabelText('Query DSL')).toHaveValue(final);
+    expect(final).toContain('"comments.n": 9007199254740993');
+    expect(JSON.parse(final).query.bool.must[0].bool.must_not[0].nested.path).toBe('comments');
+    expect(JSON.parse(final).sort).toEqual(JSON.parse(f.query.dsl).sort);
+    expect(f.backend.execute).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    await waitFor(() => expect(f.backend.execute).toHaveBeenCalledTimes(2));
+    expect(f.backend.execute.mock.calls[1]![0]).toMatchObject({ rawDsl: executed, searchAfter: '[2]' });
+    expect(f.backend.openPit).toHaveBeenCalledTimes(1);
+    await f.saved();
+    const stored = (await f.recovery.load()).document;
+    expect(stored.workspace!.tabs[0]!.document).toMatchObject({ dsl: final, timeRange: f.query.timeRange });
+    expect(stored.workspace!.tabs[0]!.document).not.toHaveProperty('composition');
+    expect(stored.workspace!.tabs[0]!.document).not.toHaveProperty('nestedPath');
+    expect(stored.history.find((entry) => entry.kind === 'continuation')!.snapshot.rawDsl).toBe(executed);
+    mounted.unmount();
+    f.mount();
+    await f.saved();
+    expect(screen.getByLabelText('Query DSL')).toHaveValue(final);
+    expect(screen.queryByRole('group', { name: '1 pending filters' })).not.toBeInTheDocument();
+    expect(f.backend.execute).toHaveBeenCalledTimes(2);
+  });
+
+  it('creates a same-target query from an index nested group without changing or executing the index', async () => {
+    const f = await fixture();
+    f.mount();
+    await f.saved();
+    fireEvent.click(await screen.findByRole('button', { name: 'events' }));
+    await screen.findByText('ready', { selector: '.rg-cell' });
+    fireEvent.click(screen.getByRole('button', { name: 'Nested conditions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Check Mapping and field capabilities' }));
+    await waitFor(() => expect(screen.getByLabelText('Nested path')).toBeEnabled());
+    fireEvent.change(screen.getByLabelText('Nested path'), { target: { value: 'comments' } });
+    fireEvent.change(screen.getByLabelText('Nested field'), { target: { value: 'comments.author' } });
+    fireEvent.change(screen.getByLabelText('Entered value'), { target: { value: 'alice' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add nested condition' }));
+    preview();
+    const final = (screen.getByLabelText('Final filtered DSL') as HTMLTextAreaElement).value;
+    fireEvent.click(screen.getByRole('button', { name: 'Open filtered query' }));
+    expect(screen.getByLabelText('Query DSL')).toHaveValue(final);
+    expect(screen.getByRole('heading', { name: i18n.t('query:noResults') })).toBeVisible();
+    expect(f.backend.execute).toHaveBeenCalledTimes(1);
+    await f.saved();
+    const tabs = (await f.recovery.load()).document.workspace!.tabs;
+    expect(tabs.find((tab) => tab.kind === 'index')!.document.dsl).toBe(DATA_PREVIEW_DSL);
+    expect(tabs.at(-1)!.document).toMatchObject({ connectionId: f.a.id, index: 'events', dsl: final });
+  });
+
+  it('keeps rejected Mapping responses visible and cannot reuse evidence for another connection or target', async () => {
+    const f = await fixture();
+    const original = f.backend.readResource.getMockImplementation()!;
+    f.backend.readResource.mockImplementation(async (request) => request.resource === 'mapping'
+      ? { ...await original(request), endpoint: f.b.endpoint } : original(request));
+    f.mount();
+    await f.saved();
+    fireEvent.click(screen.getByRole('button', { name: 'Run query' }));
+    await screen.findByText('ready', { selector: '.rg-cell' });
+    fireEvent.click(screen.getByRole('button', { name: 'Nested conditions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Check Mapping and field capabilities' }));
+    await screen.findByText(enQueryFilters.mappingFailed);
+    expect(screen.getByRole('button', { name: 'Add nested condition' })).toBeDisabled();
+    expect(screen.getByLabelText('Nested path')).toBeDisabled();
+    expect(f.backend.execute).toHaveBeenCalledTimes(1);
+    f.backend.readResource.mockImplementation(original);
+    fireEvent.click(screen.getByRole('button', { name: 'Check Mapping and field capabilities' }));
+    await waitFor(() => expect(screen.getByLabelText('Nested path')).toBeEnabled());
+    fireEvent.change(screen.getByLabelText('Nested path'), { target: { value: 'comments' } });
+    fireEvent.change(screen.getByLabelText('Nested field'), { target: { value: 'comments.author' } });
+    fireEvent.change(screen.getByLabelText('Entered value'), { target: { value: 'alice' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add nested condition' }));
+    await f.user.keyboard('{Escape}');
+    fireEvent.change(screen.getByLabelText('Index or pattern'), { target: { value: 'other' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review pending filters' }));
+    expect(screen.getByRole('alert')).toHaveTextContent(enQueryFilters.draftChanged);
+    expect(screen.getByRole('button', { name: 'Check Mapping and field capabilities' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Apply filters to draft' })).toBeDisabled();
+    expect(f.backend.execute).toHaveBeenCalledTimes(1);
+    await f.user.keyboard('{Escape}');
+    await f.saved();
   });
 });

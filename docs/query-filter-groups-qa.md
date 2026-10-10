@@ -97,7 +97,7 @@ analyzer/normalizer/null_value、多值/FLS/多目标冲突、runtime 成本/变
 原生待验：中英文/日夜/窄窗口/缩放/高对比、radio/select 与屏幕阅读器、长值滚动、
 焦点/IME、关闭/重启及跨平台。详见 [集中人工清单](manual-acceptance.md)，无本批截图或原生通过声明。
 
-下一批推进 Q02 有界显式 nested 条件组：先核对同目标 Mapping 与嵌套路径，
-区分同一 nested 对象内的条件和外层排除，保留完整原查询/时间/排序，不自动执行。
+后续有界显式 nested 条件组已交付，见 [nested QA](query-nested-filters-qa.md)：
+同目标 Mapping/field caps、同一对象条件与外层父排除、完整审核应用，保留原查询/时间/排序。
 筛选启停/固定/持久定义、其他数据探索与 W01/W04 写入审核仍开放。
 本批交接后本地提交并创建一个 local 后继，更新既有监控，不推送、不提前睡眠。

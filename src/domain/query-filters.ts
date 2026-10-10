@@ -1,6 +1,10 @@
 import { applyEdits, getNodeValue, type Node } from 'jsonc-parser';
 import type { ExecutionSnapshot, QueryDocument, QueryDocumentPatch } from './query';
 import { validateQueryDsl } from './query-dsl';
+import {
+  nestedMappingFieldEvidence, runtimeOverlapsNestedPath, validNestedFilterSegment,
+  type NestedFilterMappingResult, type NestedMappingProblem,
+} from './query-filter-mapping';
 import { boundedParameterJson } from './query-parameters';
 import { parseRawJson, property, sliceRaw, type ResultColumn } from './query-result';
 import { copyQueryTimeRange, parseQueryTimeRange, validTimeRangeField } from './query-time-range';
@@ -32,7 +36,9 @@ export interface QueryFilter {
   readonly operation: QueryFilterOperation;
   /** A complete original scalar JSON token, not display text or a parsed JS number. */
   readonly value: string | null;
-  readonly origin: FilterValueOrigin;
+  readonly origin: FilterValueOrigin | 'input';
+  /** Explicit Mapping-proven scope, never inferred from a cell's object or array shape. */
+  readonly nestedPath?: string;
 }
 
 export type QueryFilterJoin = 'all' | 'any';
@@ -41,6 +47,7 @@ export interface QueryFilterGroup {
   readonly id: string;
   readonly mode: QueryFilterJoin;
   readonly filterIds: readonly string[];
+  readonly nested?: { readonly path: string; readonly match: 'include' | 'exclude' };
 }
 
 /** Two levels only; each filter occurs exactly once and every OR requires one match. */
@@ -58,14 +65,14 @@ export interface QueryFilterDraft {
   readonly composition?: QueryFilterComposition;
 }
 
-export type QueryFilterProblem =
+export type QueryFilterProblem = NestedMappingProblem
   | 'invalidField' | 'fieldPath' | 'fieldNested' | 'fieldUnchecked' | 'fieldMissing'
   | 'fieldConflict' | 'fieldNotSearchable' | 'fieldUnsupported' | 'fieldChanged'
   | 'runtimeChanged' | 'runtimeValueRequired' | 'noScalarValue' | 'compoundValue'
   | 'valueTypeMismatch' | 'valueOutOfRange' | 'valueUnsupported' | 'invalidValue'
   | 'emptyPhrase' | 'tooLarge' | 'tooMany' | 'empty' | 'duplicate'
   | 'invalidDsl' | 'unsupportedDsl' | 'invalidBinding' | 'targetChanged'
-  | 'invalidComposition' | 'tooManyGroups';
+  | 'invalidComposition' | 'tooManyGroups' | 'nestedGroupMismatch';
 
 type Failure = { readonly ok: false; readonly code: QueryFilterProblem };
 type Family = 'keyword' | 'text' | 'number' | 'boolean' | 'existence';
@@ -138,6 +145,10 @@ function fieldEvidence(executed: Node, current: Node, field: string, catalog?: F
     const family = familyOf(before.type);
     return family ? { ok: true, family, fieldType: before.type, evidence: 'runtime' } : { ok: false, code: 'fieldUnsupported' };
   }
+  return mappedFieldEvidence(field, catalog);
+}
+
+function mappedFieldEvidence(field: string, catalog?: FieldCatalog): FilterFieldEvidence {
   if (!catalog) return { ok: false, code: 'fieldUnchecked' };
   const capability = catalog.fields.find((entry) => entry.name === field);
   if (!capability || !capability.types.length) return { ok: false, code: 'fieldMissing' };
@@ -153,6 +164,23 @@ export function queryFilterFieldEvidence(source: Pick<QueryDocument, 'id' | 'con
   snapshot: ExecutionSnapshot, field: string, catalog?: FieldCatalog): FilterFieldEvidence {
   const roots = filterRoots(source, snapshot);
   return roots.ok ? fieldEvidence(roots.executed, roots.current, field, catalog) : roots;
+}
+
+function nestedFieldEvidence(executed: Node, current: Node, path: string, field: string,
+  catalog?: FieldCatalog, mapping?: NestedFilterMappingResult): FilterFieldEvidence {
+  const mapped = nestedMappingFieldEvidence(mapping, catalog?.indices ?? [], path, field);
+  if (!mapped.ok) return mapped;
+  if (runtimeOverlapsNestedPath(executed, 'runtime_mappings', path) || runtimeOverlapsNestedPath(current, 'runtime_mappings', path)) {
+    return { ok: false, code: 'nestedRuntime' };
+  }
+  const capability = mappedFieldEvidence(field, catalog);
+  return capability.ok && capability.fieldType !== mapped.fieldType ? { ok: false, code: 'nestedFieldConflict' } : capability;
+}
+
+export function nestedQueryFilterFieldEvidence(source: QueryDocument, snapshot: ExecutionSnapshot, path: string, field: string,
+  catalog?: FieldCatalog, mapping?: NestedFilterMappingResult): FilterFieldEvidence {
+  const roots = filterRoots(source, snapshot);
+  return roots.ok ? nestedFieldEvidence(roots.executed, roots.current, path, field, catalog, mapping) : roots;
 }
 
 /** Arrays mean a choice of one returned element, never whole-array equality or a terms query. */
@@ -209,6 +237,22 @@ export function createQueryFilter(source: QueryDocument, snapshot: ExecutionSnap
     operation, value: presence ? null : value, origin: selection.origin } };
 }
 
+/** Authored values are distinct from returned cell values; no source object is flattened. */
+export function createNestedQueryFilter(source: QueryDocument, snapshot: ExecutionSnapshot, path: string, field: string,
+  operation: QueryFilterOperation, value: string | null, catalog?: FieldCatalog, mapping?: NestedFilterMappingResult):
+  Failure | { readonly ok: true; readonly filter: Omit<QueryFilter, 'id'> } {
+  const evidence = nestedQueryFilterFieldEvidence(source, snapshot, path, field, catalog, mapping);
+  if (!evidence.ok) return evidence;
+  const presence = operation === 'exists' || operation === 'missing';
+  if (!presence && operation !== 'include' && operation !== 'exclude' || !presence && value === null) return { ok: false, code: 'invalidValue' };
+  if (!presence) {
+    const problem = checkValue(value!, evidence);
+    if (problem) return { ok: false, code: problem };
+  }
+  return { ok: true, filter: { field, fieldType: evidence.fieldType, evidence: 'mapped', operation,
+    value: presence ? null : value, origin: 'input', nestedPath: path } };
+}
+
 function checkValue(raw: string, field: Extract<FilterFieldEvidence, { ok: true }>): QueryFilterProblem | null {
   if (bytes(raw) > MAX_FILTER_VALUE_BYTES) return 'tooLarge';
   const value = parseRawJson(raw);
@@ -222,11 +266,15 @@ function checkValue(raw: string, field: Extract<FilterFieldEvidence, { ok: true 
 }
 
 function sameFilter(a: Omit<QueryFilter, 'id'>, b: Omit<QueryFilter, 'id'>): boolean {
-  return a.field === b.field && a.operation === b.operation && a.value === b.value;
+  return a.field === b.field && a.operation === b.operation && a.value === b.value && a.nestedPath === b.nestedPath;
 }
 
 export function queryFilterDuplicate(filters: readonly QueryFilter[], filter: Omit<QueryFilter, 'id'>): boolean {
   return filters.some((entry) => sameFilter(entry, filter));
+}
+
+export function filterGroupAccepts(group: QueryFilterGroup, filter: Pick<QueryFilter, 'nestedPath'>): boolean {
+  return group.nested?.path === filter.nestedPath;
 }
 
 function clauseText(filter: QueryFilter, field: Extract<FilterFieldEvidence, { ok: true }>): string {
@@ -236,25 +284,35 @@ function clauseText(filter: QueryFilter, field: Extract<FilterFieldEvidence, { o
 }
 
 function compositionProblem(input: QueryFilterComposition, filters: readonly QueryFilter[]): QueryFilterProblem | null {
-  const record = (value: unknown, keys: readonly string[]): value is Record<string, unknown> => value !== null
-    && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === keys.length
-    && Object.keys(value).every((key) => keys.includes(key));
+  const record = (value: unknown, keys: readonly string[], optional: readonly string[] = []): value is Record<string, unknown> => value !== null
+    && typeof value === 'object' && !Array.isArray(value) && keys.every((key) => Object.hasOwn(value, key))
+    && Object.keys(value).every((key) => keys.includes(key) || optional.includes(key));
   const join = (value: unknown) => value === 'all' || value === 'any';
   if (!record(input, ['mode', 'groups']) || !join(input.mode) || !Array.isArray(input.groups) || !input.groups.length) {
     return 'invalidComposition';
   }
   if (input.groups.length > MAX_FILTER_GROUPS) return 'tooManyGroups';
   const groupIds = new Set<string>();
+  const byId = new Map(filters.map((filter) => [filter.id, filter]));
   const remaining = new Set(filters.map((filter) => filter.id));
   for (const group of input.groups) {
-    if (!record(group, ['id', 'mode', 'filterIds']) || typeof group.id !== 'string' || !group.id
+    if (!record(group, ['id', 'mode', 'filterIds'], ['nested']) || typeof group.id !== 'string' || !group.id
       || bytes(group.id) > 128 || groupIds.has(group.id) || !join(group.mode)
       || !Array.isArray(group.filterIds) || !group.filterIds.length || group.filterIds.length > MAX_QUERY_FILTERS) {
       return 'invalidComposition';
     }
+    if (Object.hasOwn(group, 'nested') && (!record(group.nested, ['path', 'match'])
+      || !validNestedFilterSegment(group.nested.path) || group.nested.match !== 'include' && group.nested.match !== 'exclude')) {
+      return 'invalidComposition';
+    }
     groupIds.add(group.id);
+    const members: QueryFilter[] = [];
     for (const id of group.filterIds) {
       if (typeof id !== 'string' || !remaining.delete(id)) return 'invalidComposition';
+      const filter = byId.get(id)!;
+      if (!filterGroupAccepts(group as unknown as QueryFilterGroup, filter)) return 'nestedGroupMismatch';
+      if (group.nested && queryFilterDuplicate(members, filter)) return 'duplicate';
+      members.push(filter);
     }
   }
   return remaining.size ? 'invalidComposition' : null;
@@ -280,21 +338,25 @@ function disjunction(clauses: readonly FilterClause[]): string {
 function composeClauses(clauses: ReadonlyMap<string, FilterClause>, composition?: QueryFilterComposition): string {
   if (!composition) return conjunction([...clauses.values()]);
   const groups = composition.groups.map((group) => ({
-    mode: group.mode, clauses: group.filterIds.map((id) => clauses.get(id)!),
+    mode: group.mode, nested: group.nested, clauses: group.filterIds.map((id) => clauses.get(id)!),
   }));
-  if (composition.mode === 'all' && groups.length === 1 && groups[0]!.mode === 'all') {
+  if (composition.mode === 'all' && groups.length === 1 && groups[0]!.mode === 'all' && !groups[0]!.nested) {
     return conjunction(groups[0]!.clauses);
   }
-  const combined = groups.map((group) => ({
-    text: `{"bool":{${group.mode === 'all' ? conjunction(group.clauses) : disjunction(group.clauses)}}}`, negative: false,
-  }));
+  const combined = groups.map((group) => {
+    const query = `{"bool":{${group.mode === 'all' ? conjunction(group.clauses) : disjunction(group.clauses)}}}`;
+    return group.nested ? {
+      text: `{"nested":{"path":${JSON.stringify(group.nested.path)},"query":${query},"score_mode":"none","ignore_unmapped":false}}`,
+      negative: group.nested.match === 'exclude',
+    } : { text: query, negative: false };
+  });
   // Even text/should branches stay in filter context; only the untouched original query scores.
   return composition.mode === 'all' ? conjunction(combined) : `"filter":[{"bool":{${disjunction(combined)}}}]`;
 }
 
 /** Append reviewed filter groups without altering the original bool/MSM/scoring context. */
 export function previewQueryFilters(source: QueryDocument, snapshot: ExecutionSnapshot, filters: readonly QueryFilter[],
-  catalog?: FieldCatalog, composition?: QueryFilterComposition): QueryFilterPreview {
+  catalog?: FieldCatalog, composition?: QueryFilterComposition, mapping?: NestedFilterMappingResult): QueryFilterPreview {
   if (!filters.length) return { ok: false, code: 'empty' };
   if (filters.length > MAX_QUERY_FILTERS) return { ok: false, code: 'tooMany' };
   if (bytes(source.dsl) > MAX_FILTER_DSL_BYTES) return { ok: false, code: 'tooLarge' };
@@ -306,8 +368,12 @@ export function previewQueryFilters(source: QueryDocument, snapshot: ExecutionSn
   const clauses = new Map<string, FilterClause>();
   for (let index = 0; index < filters.length; index += 1) {
     const filter = filters[index]!;
-    if (clauses.has(filter.id) || queryFilterDuplicate(filters.slice(0, index), filter)) return { ok: false, code: 'duplicate' };
-    const field = fieldEvidence(roots.executed, root, filter.field, catalog);
+    if (clauses.has(filter.id) || filter.nestedPath === undefined && queryFilterDuplicate(filters.slice(0, index), filter)) {
+      return { ok: false, code: 'duplicate' };
+    }
+    if (filter.nestedPath !== undefined && (filter.origin !== 'input' || filter.evidence !== 'mapped')) return { ok: false, code: 'nestedGroupMismatch' };
+    const field = filter.nestedPath === undefined ? fieldEvidence(roots.executed, root, filter.field, catalog)
+      : nestedFieldEvidence(roots.executed, root, filter.nestedPath, filter.field, catalog, mapping);
     if (!field.ok) return field;
     if (field.fieldType !== filter.fieldType || field.evidence !== filter.evidence) return { ok: false, code: 'fieldChanged' };
     const presence = filter.operation === 'exists' || filter.operation === 'missing';
@@ -321,6 +387,7 @@ export function previewQueryFilters(source: QueryDocument, snapshot: ExecutionSn
     }
     clauses.set(filter.id, { text: clauseText(filter, field), negative: filter.operation === 'exclude' || filter.operation === 'missing' });
   }
+  if (composition === undefined && filters.some((filter) => filter.nestedPath !== undefined)) return { ok: false, code: 'nestedGroupMismatch' };
   const groupingProblem = composition === undefined ? null : compositionProblem(composition, filters);
   if (groupingProblem) return { ok: false, code: groupingProblem };
   const time = source.timeRange === undefined ? undefined

@@ -1137,6 +1137,60 @@ mod tests {
     }
 
     #[test]
+    fn reviewed_nested_groups_keep_object_and_parent_negation_in_search_and_pit() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/query-nested-filters-v1.json"
+        ))
+        .unwrap();
+        let raw = fixture["nestedDsl"].as_str().unwrap();
+        assert_eq!(
+            request("events-*", raw).prepare().unwrap().body,
+            raw.as_bytes()
+        );
+        let original: BTreeMap<String, Box<RawValue>> = serde_json::from_str(raw).unwrap();
+        for after in [
+            None,
+            Some(fixture["searchAfter"].as_str().unwrap().to_owned()),
+        ] {
+            let mut paged = request("events-*", raw);
+            paged.pit_id = Some("nested-pit".into());
+            paged.search_after = after.clone();
+            let values: BTreeMap<String, Box<RawValue>> =
+                serde_json::from_slice(&paged.prepare().unwrap().body).unwrap();
+            for key in [
+                "query",
+                "sort",
+                "size",
+                "min_score",
+                "runtime_mappings",
+                "fields",
+            ] {
+                assert_eq!(values[key].get(), original[key].get(), "{key}");
+            }
+            assert_eq!(
+                values.get("search_after").map(|value| value.get()),
+                after.as_deref()
+            );
+            for local in ["composition", "nestedPath", "mapping", "timeRange"] {
+                assert!(!values.contains_key(local));
+            }
+        }
+        let value: Value = serde_json::from_str(raw).unwrap();
+        let combined = &value["query"]["bool"]["filter"][0]["bool"];
+        assert_eq!(combined["minimum_should_match"], 1);
+        let included = &combined["should"][0]["nested"];
+        assert_eq!(included["score_mode"], "none");
+        assert_eq!(included["ignore_unmapped"], false);
+        assert_eq!(included["query"]["bool"]["minimum_should_match"], 1);
+        assert!(included["query"]["bool"]["should"][1]["bool"]["must_not"].is_array());
+        assert_eq!(
+            combined["should"][1]["bool"]["must_not"][0]["nested"]["path"],
+            "comments"
+        );
+        assert!(value["query"]["bool"].get("must_not").is_none());
+    }
+
+    #[test]
     fn a_continuation_composes_the_body_without_rewriting_numbers_or_overriding_the_draft() {
         let sentinel = "123456789012345678901234567890";
         let mut continued = request(

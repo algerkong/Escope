@@ -1,0 +1,19 @@
+{
+  "sourceDsl": "{\"query\":{\"bool\":{\"should\":[{\"term\":{\"original\":9007199254740993}},{\"match\":{\"message\":\"\\u0061\"}}],\"minimum_should_match\":\"75%\"}},\"sort\":[{\"n\":\"desc\"},\"_score\"],\"size\":25,\"min_score\":1.2300e+2,\"runtime_mappings\":{\"n\":{\"type\":\"long\",\"script\":{\"source\":\"emit(9007199254740995L);\"}}},\"fields\":[\"n\"]}",
+  "filters": [
+    { "id": "author", "field": "comments.author", "fieldType": "keyword", "evidence": "mapped", "operation": "include", "value": "\"\\u0061\"", "origin": "input", "nestedPath": "comments" },
+    { "id": "number", "field": "comments.n", "fieldType": "long", "evidence": "mapped", "operation": "exclude", "value": "9007199254740995", "origin": "input", "nestedPath": "comments" },
+    { "id": "message", "field": "comments.message", "fieldType": "text", "evidence": "mapped", "operation": "include", "value": "\"hello \\\"there\\\"\"", "origin": "input", "nestedPath": "comments" },
+    { "id": "status", "field": "status", "fieldType": "keyword", "evidence": "mapped", "operation": "include", "value": "\"ready\"", "origin": "source" }
+  ],
+  "composition": {
+    "mode": "any",
+    "groups": [
+      { "id": "first", "mode": "any", "filterIds": ["author", "number"], "nested": { "path": "comments", "match": "include" } },
+      { "id": "second", "mode": "all", "filterIds": ["message"], "nested": { "path": "comments", "match": "exclude" } },
+      { "id": "third", "mode": "all", "filterIds": ["status"] }
+    ]
+  },
+  "nestedDsl": "{\"query\":{\"bool\":{\"must\":[{\"bool\":{\"should\":[{\"term\":{\"original\":9007199254740993}},{\"match\":{\"message\":\"\\u0061\"}}],\"minimum_should_match\":\"75%\"}}],\"filter\":[{\"bool\":{\"should\":[{\"nested\":{\"path\":\"comments\",\"query\":{\"bool\":{\"should\":[{\"term\":{\"comments.author\":\"\\u0061\"}},{\"bool\":{\"must_not\":[{\"term\":{\"comments.n\":9007199254740995}}]}}],\"minimum_should_match\":1}},\"score_mode\":\"none\",\"ignore_unmapped\":false}},{\"bool\":{\"must_not\":[{\"nested\":{\"path\":\"comments\",\"query\":{\"bool\":{\"filter\":[{\"match_phrase\":{\"comments.message\":\"hello \\\"there\\\"\"}}]}},\"score_mode\":\"none\",\"ignore_unmapped\":false}}]}},{\"bool\":{\"filter\":[{\"term\":{\"status\":\"ready\"}}]}}],\"minimum_should_match\":1}}]}},\"sort\":[{\"n\":\"desc\"},\"_score\"],\"size\":25,\"min_score\":1.2300e+2,\"runtime_mappings\":{\"n\":{\"type\":\"long\",\"script\":{\"source\":\"emit(9007199254740995L);\"}}},\"fields\":[\"n\"]}",
+  "searchAfter": "[9007199254740995,1.1000000000000000001,4294967297]"
+}

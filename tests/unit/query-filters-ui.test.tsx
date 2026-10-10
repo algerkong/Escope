@@ -8,7 +8,7 @@ import { createQuery, createSnapshot, type QueryDocument, type QueryDocumentPatc
 import { MAX_FILTER_GROUPS, MAX_QUERY_FILTERS, type CellFilterSelection, type QueryFilter, type QueryFilterComposition, type QueryFilterDraft } from '../../src/domain/query-filters';
 import { parseFieldCaps, type FieldCatalog } from '../../src/domain/resource';
 import { QueryFiltersDialog } from '../../src/features/query/QueryFiltersDialog';
-import type { Loadable } from '../../src/features/query/useQueryResources';
+import type { Loadable, MappingState } from '../../src/features/query/useQueryResources';
 import { i18n } from '../../src/locales';
 import { enQueryFilters, zhQueryFilters } from '../../src/locales/query-filters';
 
@@ -19,10 +19,12 @@ const fieldResult = parseFieldCaps('{"fields":{"n":{"long":{"searchable":true}},
 if (!fieldResult.ok) throw new Error('fixture');
 const ready: Loadable<FieldCatalog> = { status: 'ready', data: fieldResult.value };
 const selected: CellFilterSelection = { field: 'n', value: { kind: 'number', text: '9007199254740993' }, origin: 'source' };
+const idleMapping: Loadable<MappingState> = { status: 'idle' };
 
 interface HarnessProps {
   current?: QueryDocument;
   fields?: Loadable<FieldCatalog>;
+  mapping?: Loadable<MappingState>;
   selection?: CellFilterSelection | null;
   initialDraft?: QueryFilterDraft;
   targetCurrent?: boolean;
@@ -32,9 +34,9 @@ interface HarnessProps {
   onClose: () => void;
   onDiscard: () => void;
 }
-function Harness({ current, fields = ready, selection = selected, initialDraft, targetCurrent = true, newQuery = false, ...callbacks }: HarnessProps) {
+function Harness({ current, fields = ready, mapping = idleMapping, selection = selected, initialDraft, targetCurrent = true, newQuery = false, ...callbacks }: HarnessProps) {
   const [draft, setDraft] = useState<QueryFilterDraft>(initialDraft ?? { source, snapshot, endpoint: 'https://fixture.test', filters: [] });
-  return <I18nextProvider i18n={i18n}><QueryFiltersDialog draft={draft} current={current} fields={fields}
+  return <I18nextProvider i18n={i18n}><QueryFiltersDialog draft={draft} current={current} fields={fields} mapping={mapping} onInspectNested={callbacks.onInspect}
     initialSelection={selection ?? undefined} targetCurrent={targetCurrent} canInspect newQuery={newQuery}
     onFiltersChange={(filters, composition) => setDraft((state) => ({ ...state, filters, composition }))} {...callbacks} /></I18nextProvider>;
 }
@@ -272,8 +274,8 @@ describe('filter group review controls', () => {
 
   it('invalidates an already reviewed composition when only its identity changes upstream', () => {
     const draft = groupDraft({ mode: 'all', groups: [{ id: 'g', mode: 'all', filterIds: ['n', 'status', 'message'] }] });
-    const props = { draft, current: source, fields: ready, targetCurrent: true, canInspect: true, newQuery: false,
-      onInspect: vi.fn(), onFiltersChange: vi.fn(), onCommit: vi.fn(() => true), onDiscard: vi.fn(), onClose: vi.fn() };
+    const props = { draft, current: source, fields: ready, mapping: idleMapping, targetCurrent: true, canInspect: true, newQuery: false,
+      onInspect: vi.fn(), onInspectNested: vi.fn(), onFiltersChange: vi.fn(), onCommit: vi.fn(() => true), onDiscard: vi.fn(), onClose: vi.fn() };
     const renderDialog = (next: QueryFilterDraft) => <I18nextProvider i18n={i18n}><QueryFiltersDialog {...props} draft={next} /></I18nextProvider>;
     const f = render(renderDialog(draft));
     preview();

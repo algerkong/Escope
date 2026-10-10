@@ -40,6 +40,14 @@
 .qfilter-segments label:has(input:disabled) { opacity: .55; cursor: not-allowed; }
 .qfilter-minimum { color: var(--muted); font-size: .7rem; min-width: 0; overflow-wrap: anywhere; }
 .qfilter-item > .select-control { flex-basis: 120px; max-width: 100%; }
+.qfilter-nested-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 8px; min-width: 0; }
+.qfilter-nested-editor input { width: 100%; min-width: 0; font-family: var(--code-font); }
+.qfilter-nested-scope { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 0 0 6px; min-width: 0; }
+.qfilter-nested-scope > code { flex: 0 1 130px; color: var(--muted); font-size: .75rem; min-width: 0; overflow-wrap: anywhere; }
+.qfilter-nested-scope > .select-control { flex: 1 1 180px; min-width: 0; max-width: 100%; }
+.qfilter-nested-scope select { width: 100%; max-width: 100%; text-overflow: ellipsis; }
+.qfilter-group-mode + .qfilter-group-mode { border-top: 1px solid var(--border); }
+.qfilter-item > .qfilter-path { flex-basis: auto; color: var(--muted); }
 @media (forced-colors: active) {
   .qfilter-segments input { position: static; opacity: 1; width: 14px; height: 14px; margin-left: 6px; appearance: auto; }
 }

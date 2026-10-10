@@ -70,6 +70,14 @@ Authenticode 检查为 `NotSigned`。产物路径、SHA-256 与验证边界见
   取 AND 交集且不评分，原 should/MSM/评分、时间、排序和参数模板保留。
   新组/移组/成员或证据变化需重新预览，分组本身只在会话中，旧 PIT 不改；
   不支持任意深层组、组级 NOT 或自定义 MSM，见 [布尔筛选组 QA](docs/query-filter-groups-qa.md)。
+- 成功或部分结果的工具栏提供显式 nested 条件入口：复用原筛选弹窗，读取同目标 Mapping
+  与 field caps，实际索引集合须一致。首批仅顶级 nested 路径和直接标量字段，值为显式输入，
+  不从单元格对象/数组或扁平路径推断；日期/IP 仅存在性，别名、深路径和路径下 runtime 拒绝。
+  同组条件属于同一嵌套对象；对象内排除与“父文档不存在匹配对象”分别选择，
+  每组 `score_mode: none`、`ignore_unmapped: false`，父文档排除不会越出所属 OR 分支。
+  仍限 8 组/32 条，完整 DSL 预览后应用，证据/结构变化需重审；旧 PIT 和时间/排序保留。
+  索引只生成同目标新查询，未应用定义不恢复；不反向转换已有手写 nested，
+  详见 [nested 筛选 QA](docs/query-nested-filters-qa.md)。
 - 服务器排序有独立审核入口：最多 8 个平面标量字段，显式方向、优先级、缺失位置与
   兼容的 `unmapped_type`；同目标 field caps/实际 runtime 声明只作证据，不当作授权或执行成功。
   部分不可聚合索引、未检查/缺失/冲突/不支持分别处理，不猜 keyword 或隐式类型转换；

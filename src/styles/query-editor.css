@@ -1,0 +1,16 @@
+.query-monaco-surface { position: absolute; inset: 0; min-width: 0; }
+.query-editor-loading { position: absolute; inset: 0; padding: 12px; overflow: auto; }
+.query-editor-loading > span { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: .8rem; }
+.query-editor-loading .notice { margin: 0 0 8px; flex-wrap: wrap; }
+.query-editor-loading pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.query-editor-find { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 0 0 6px; min-width: 0; }
+.query-editor-find input { flex: 1 1 140px; min-width: 0; max-width: 320px; padding: 4px 8px; font-size: .82rem; }
+.query-editor-find > span { color: var(--muted); font-size: .75rem; font-variant-numeric: tabular-nums; }
+.query-editor-find .icon-button { width: 28px; height: 28px; min-width: 28px; }
+/* Monaco owns its input geometry; the application's form-control chrome must not reach it. */
+.dsl-editor .monaco-editor textarea,
+.dsl-editor .monaco-editor textarea:focus,
+.dsl-editor .monaco-editor textarea:hover {
+  padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; outline: none; transition: none;
+}
+.dsl-editor .monaco-editor { --vscode-focusBorder: var(--accent); }

@@ -1,4 +1,4 @@
-import { Bookmark, Braces, Clock3, Database, FileCheck2, FileDown, History, Layers, ListOrdered, LoaderCircle, Pin, Play, Plus, Save, Settings, ShieldCheck, Star, TriangleAlert, Undo2, Variable } from 'lucide-react';
+import { Bookmark, Braces, Clock3, Database, FileCheck2, FileDown, History, Layers, ListOrdered, LoaderCircle, Pin, Play, Plus, Redo2, Save, Search, Settings, ShieldCheck, Star, TriangleAlert, Undo2, Variable } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ConnectionProfile } from '../../domain/connection';
@@ -52,6 +52,8 @@ import { createPinnedFilterService, type PinnedFilterService } from '../../servi
 import { draftFromPinnedFilters, samePinnedFilter } from '../../domain/pinned-filters';
 import { usePinnedFilters } from './usePinnedFilters';
 import { PinFiltersDialog, PinnedFiltersDialog } from './PinnedFiltersDialog';
+import { QueryDslEditor, type QueryDslEditorHandle, type QueryEditorHistory } from './editor/QueryDslEditor';
+import { QueryEditorModels } from './editor/query-editor-models';
 import '../../styles/query-live.css';
 
 const IDLE: ExecutionState = { status: 'idle' };
@@ -101,17 +103,17 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const { t } = useTranslation();
   const [closing, setClosing] = useState<QueryDocument | null>(null);
   const [checked, setChecked] = useState<Record<string, { source: string; error: QueryDslError | null }>>({});
-  const [formatted, setFormatted] = useState<Record<string, { before: string; after: string }>>({});
+  const [editorHistory, setEditorHistory] = useState<QueryEditorHistory | null>(null);
+  const [editorModels] = useState(() => new QueryEditorModels());
   const [rejections, setRejections] = useState<Record<string, SnapshotRejection | null>>({});
   const [editorModes, setEditorModes] = useState<Record<string, 'visual' | 'dsl'>>({});
   const [visualValidity, setVisualValidity] = useState<Record<string, boolean>>({});
   const [visualDrafts, setVisualDrafts] = useState<Record<string, VisualEditorDraft>>({});
   const startupView = useRef(preferences.startView);
   const [homeView, setHomeView] = useState(startupView.current);
-  const lineNumbers = useRef<HTMLDivElement | null>(null);
-  const editor = useRef<HTMLTextAreaElement | null>(null);
+  const editor = useRef<QueryDslEditorHandle | null>(null);
   const panel = useRef<HTMLDivElement>(null);
-  const scroll = useRef(new Map<string, { panel: number; editorTop: number; editorLeft: number }>());
+  const scroll = useRef(new Map<string, number>());
   const {
     ensureIndices, refreshIndices, ensureFields, refreshFields, loadMapping, invalidateConnections,
     indicesFor, fieldsFor, mappingFor,
@@ -175,7 +177,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
     ...Object.entries(filterDrafts).filter(([, draft]) => hasPendingQueryFilters(draft)).map(([id]) => id)]), [dirtyVisualIds, filterDrafts, filterBindings]);
   // In visual mode an invalid/unsupported draft means the displayed DSL is stale behind it; saving
   // then would silently persist the old text, so the draft actions are disabled until it is fixed
-  // or the editor is switched back to JSON, where the textarea is the source of truth.
+  // or the editor is switched back to JSON, where the raw text is the source of truth.
   const saveBlockedByVisual = showingQuery && editorMode === 'visual' && (!visualValid || dirtyVisualIds.has(queryId));
   const canSaveDraft = showingQuery && !saveBlockedByVisual && !hasPendingFilters && !reviewingSort;
   const target = profiles.find((profile) => profile.id === query.connectionId);
@@ -210,14 +212,12 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const documentIds = useMemo(() => state.tabs.map((item) => item.document.id), [state.tabs]);
 
   useLayoutEffect(() => {
-    const saved = scroll.current.get(queryId);
-    if (panel.current) panel.current.scrollTop = saved?.panel ?? 0;
-    if (editor.current) {
-      editor.current.scrollTop = saved?.editorTop ?? 0;
-      editor.current.scrollLeft = saved?.editorLeft ?? 0;
-    }
-    if (lineNumbers.current) lineNumbers.current.scrollTop = saved?.editorTop ?? 0;
+    if (panel.current) panel.current.scrollTop = scroll.current.get(queryId) ?? 0;
   }, [queryId, editorMode]);
+  useEffect(() => () => editorModels.dispose(), [editorModels]);
+  useEffect(() => {
+    editorModels.retain(state.tabs.filter((item) => item.kind === 'query').map((item) => item.document.id));
+  }, [editorModels, state.tabs]);
 
   // Dropping reads for a removed connection or a changed endpoint also stops their requests.
   useEffect(() => { invalidateConnections(endpoints); }, [endpoints, invalidateConnections]);
@@ -303,7 +303,6 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
     closeTab(id);
     const prune = <T,>(current: Record<string, T>): Record<string, T> => Object.fromEntries(Object.entries(current).filter(([key]) => key !== id));
     setChecked(prune);
-    setFormatted(prune);
     setRejections(prune);
     setEditorModes(prune);
     setVisualValidity(prune);
@@ -328,21 +327,23 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   useEffect(() => {
     if (!active) return;
     const keyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.repeat || event.altKey || event.shiftKey
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.altKey || event.shiftKey
         || !(event.ctrlKey || event.metaKey) || document.querySelector('[role="dialog"]')) return;
       if (event.key === 'Enter') {
         if (!(event.target instanceof Element) || !event.target.closest('.query-main')) return;
         event.preventDefault();
-        if (canRun) void runQuery();
+        event.stopPropagation();
+        if (!event.repeat && canRun) void runQuery();
       } else if (event.key.toLowerCase() === 'w' && available && state.activeTabId !== null) {
         if (!(event.target instanceof Element) || !event.target.closest('.query-main')) return;
         if (detectWindowPlatform() === 'macos' && !event.metaKey) return;
         event.preventDefault();
-        requestClose(state.activeTabId);
+        event.stopPropagation();
+        if (!event.repeat) requestClose(state.activeTabId);
       }
     };
-    window.addEventListener('keydown', keyDown);
-    return () => window.removeEventListener('keydown', keyDown);
+    window.addEventListener('keydown', keyDown, true);
+    return () => window.removeEventListener('keydown', keyDown, true);
   }, [active, available, canRun, runQuery, requestClose, state.activeTabId]);
 
   const rejectionText = (code: SnapshotRejection['code']) => code.startsWith('dsl') ? t(`query:${code}`)
@@ -412,8 +413,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
     reviewFilters(selection, nested);
   };
   const currentCheck = checked[query.id]?.source === query.dsl ? checked[query.id] : null;
-  const savedFormat = formatted[query.id];
-  const canUndoFormat = savedFormat?.after === query.dsl;
+  const editorReady = editorHistory?.id === query.id && active && editorMode === 'dsl' && !restoring;
   const checkDsl = () => {
     const result = validateQueryDsl(query.dsl);
     setChecked((current) => ({ ...current, [query.id]: { source: query.dsl, error: result.ok ? null : result.error } }));
@@ -425,7 +425,6 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
       return;
     }
     if (result.formatted !== query.dsl) {
-      setFormatted((current) => ({ ...current, [query.id]: { before: query.dsl, after: result.formatted } }));
       updateQuery(query.id, { dsl: result.formatted });
     }
     setChecked((current) => ({ ...current, [query.id]: { source: result.formatted, error: null } }));
@@ -475,8 +474,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
       <div ref={panel} id="workspace-panel" role="tabpanel" aria-labelledby={workspaceTabId(state.activeTabId)}
         className="workspace-panel" data-kind={tab?.kind ?? 'home'}
         onScroll={(event) => {
-          const saved = scroll.current.get(queryId) ?? { panel: 0, editorTop: 0, editorLeft: 0 };
-          scroll.current.set(queryId, { ...saved, panel: event.currentTarget.scrollTop });
+          scroll.current.set(queryId, event.currentTarget.scrollTop);
         }}>
       {showingQuery ? <section className="query-editor-section">
         <div className="query-heading"><div className="query-title-block">
@@ -502,14 +500,10 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
             spellCheck={false} value={query.index} onBlur={() => loadFields(false)}
             onChange={(event) => patchQuery({ index: event.target.value })} /></label>
           <IconButton icon={FileCheck2} label={t('query:validateDsl')} onClick={checkDsl} />
-          <IconButton icon={Braces} label={t('query:formatDsl')} onClick={formatDsl} />
-          <IconButton icon={Undo2} label={t('query:undoFormat')} disabled={!canUndoFormat} onClick={() => {
-            if (!canUndoFormat || !savedFormat) return;
-            updateQuery(query.id, { dsl: savedFormat.before });
-            setFormatted((current) => Object.fromEntries(Object.entries(current).filter(([id]) => id !== queryId)));
-            setChecked((current) => Object.fromEntries(Object.entries(current).filter(([id]) => id !== queryId)));
-            editor.current?.focus();
-          }} />
+          <IconButton icon={Braces} label={t('query:formatDsl')} disabled={!editorReady} onClick={formatDsl} />
+          <IconButton icon={Undo2} label={t('query:undoDsl')} disabled={!editorReady || !editorHistory?.canUndo} onClick={() => editor.current?.undo()} />
+          <IconButton icon={Redo2} label={t('query:redoDsl')} disabled={!editorReady || !editorHistory?.canRedo} onClick={() => editor.current?.redo()} />
+          <IconButton icon={Search} label={t('query:findDsl')} disabled={!editorReady} onClick={() => editor.current?.find()} />
           <IconButton icon={Save} label={t('queryLibrary:saveDraft')} disabled={!canSaveDraft}
             title={saveBlockedByVisual ? t('queryLibrary:saveBlockedVisual') : hasPendingFilters ? t('queryFilters:pendingAction')
               : reviewingSort ? t('querySort:reviewOpen') : t('queryLibrary:saveDraft')}
@@ -564,18 +558,10 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
             draft={visualDraft ?? undefined} onDraftChange={updateVisualDraft}
             onChange={(dsl) => patchQuery({ dsl })} onValidityChange={updateVisualValidity} /> : null}
         </div>
-        <div className="dsl-editor" hidden={editorMode !== 'dsl'}>
-          <div className="line-numbers" ref={lineNumbers} aria-hidden="true">{query.dsl.split('\n').map((_, i) => <div key={i}>{i + 1}</div>)}</div>
-          <textarea ref={editor} aria-label={t('query:dslLabel')} spellCheck={false} autoCapitalize="off" autoComplete="off"
-            aria-invalid={Boolean(currentCheck?.error)} aria-describedby={currentCheck?.error ? 'dsl-diagnostic' : undefined}
-            value={query.dsl} onChange={(event) => patchQuery({ dsl: event.target.value })}
-            onScroll={(event) => {
-              const { scrollTop, scrollLeft } = event.currentTarget;
-              if (lineNumbers.current) lineNumbers.current.scrollTop = scrollTop;
-              const saved = scroll.current.get(queryId) ?? { panel: 0, editorTop: 0, editorLeft: 0 };
-              scroll.current.set(queryId, { ...saved, editorTop: scrollTop, editorLeft: scrollLeft });
-            }}
-            wrap={preferences.wrapJson ? 'soft' : 'off'} />
+        <div hidden={editorMode !== 'dsl'}>
+          <QueryDslEditor ref={editor} models={editorModels} queryId={queryId} value={query.dsl} preferences={preferences}
+            active={active && editorMode === 'dsl'} readOnly={Boolean(restoring)} diagnostic={currentCheck?.error ?? null}
+            onChange={(dsl) => patchQuery({ dsl })} onHistory={setEditorHistory} />
         </div>
         {currentCheck?.error ? <div id="dsl-diagnostic" className="notice error" role="alert">
           <span>{t(`query:${currentCheck.error.code}`)}

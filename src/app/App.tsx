@@ -155,7 +155,7 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
       return addWorkspaceTab(current, { kind: 'query', document: query });
     });
     setView('query');
-    requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('.query-editor-section textarea')?.focus());
+    requestAnimationFrame(() => document.querySelector<HTMLElement>('.query-editor-section .dsl-editor')?.focus());
   }, [navigateWorkspace]);
   const restoreQuery = useCallback((source: QueryDocument) => {
     const document: QueryDocument = { ...source, revision: 0 };

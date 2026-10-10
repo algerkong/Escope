@@ -78,7 +78,7 @@
 .ql-status-chip.partial, .ql-status-chip.cancelled { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 40%, transparent); }
 .ql-status-chip.failed { color: var(--error); border-color: color-mix(in srgb, var(--error) 40%, transparent); }
 .ql-toolbar-end { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-left: auto; min-width: 0; max-width: 100%; }
-.ql-toolbar-end .segment { margin-left: 0; }
+.ql-toolbar-end .segment { margin-left: 0; max-width: 100%; flex-wrap: wrap; }
 .ql-result-origin { display: flex; flex-wrap: wrap; gap: 6px 16px; padding: 0 18px 10px; color: var(--muted); font: .8rem/1.5 var(--code-font); overflow-wrap: anywhere; }
 .ql-result-origin, .ql-index-name, .ql-index-meta, .ql-field-name, .ql-field-type { -webkit-user-select: text; user-select: text; }
 .ql-failures { margin: 4px 0 0; padding-left: 18px; font-size: .8rem; }

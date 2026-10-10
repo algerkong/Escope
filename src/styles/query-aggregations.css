@@ -1,0 +1,48 @@
+.qa-results { min-width: 0; font-size: .8rem; }
+.qa-scope { margin: 6px 0; color: var(--muted); overflow-wrap: anywhere; }
+.qa-selectors { display: flex; flex-wrap: wrap; align-items: end; gap: 8px 12px; margin: 10px 0; }
+.qa-selectors label { display: flex; flex-direction: column; gap: 4px; min-width: 0; max-width: 100%; color: var(--muted); }
+.qa-selectors .select-control { width: 15rem; max-width: 100%; }
+.qa-selectors label:first-child .select-control { width: 7rem; }
+.qa-selectors select { min-height: 30px; font: inherit; }
+.qa-selectors .icon-button { flex: 0 0 30px; }
+.qa-source, .qa-raw { margin: 8px 0; min-width: 0; }
+.qa-source summary, .qa-raw summary { cursor: pointer; padding: 5px 0; color: var(--muted); overflow-wrap: anywhere; }
+.qa-source summary:focus-visible, .qa-raw summary:focus-visible, .qa-table-scroll:focus-visible {
+  outline: 2px solid var(--focus-ring); outline-offset: 2px;
+}
+.qa-copy-status { min-height: 20px; }
+.qa-entry { border-block: 1px solid var(--border); padding: 8px 0; min-width: 0; }
+.qa-entry-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin-bottom: 8px; }
+.qa-entry-title h3 { margin: 0; font-size: .85rem; font-weight: 600; overflow-wrap: anywhere; }
+.qa-entry-title > code { color: var(--muted); font-size: .75rem; overflow-wrap: anywhere; }
+.qa-warning, .qa-notices { color: var(--warning); overflow-wrap: anywhere; }
+.qa-warning { display: block; margin: 4px 0; }
+.qa-notices { margin: 8px 0; padding-left: 18px; }
+.qa-notices li + li { margin-top: 4px; }
+.qa-metadata { display: grid; grid-template-columns: minmax(0, 15rem) minmax(0, 1fr); gap: 4px 12px; margin: 8px 0; }
+.qa-option { display: contents; }
+.qa-metadata dt { color: var(--muted); overflow-wrap: anywhere; }
+.qa-metadata dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.qa-metadata code, .qa-value code, .qa-table td > code { font-family: var(--code-font); -webkit-user-select: text; user-select: text; }
+.qa-option dd > code, .qa-table td > code { display: block; white-space: pre-wrap; max-height: 8rem; overflow-y: auto; }
+.qa-value { display: flex; align-items: flex-start; gap: 4px; min-width: 0; }
+.qa-value > code { display: block; min-width: 0; flex: 1; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 8rem; overflow-y: auto; }
+.qa-value[data-kind="missing"] { color: var(--muted); font-style: italic; }
+.qa-value .icon-button, .qa-table .icon-button { flex: 0 0 24px; width: 24px; height: 24px; }
+.qa-metric-note { display: block; color: var(--warning); font-size: .72rem; font-weight: 400; }
+.qa-table-scroll { max-width: 100%; overflow: auto; margin-top: 10px; }
+.qa-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.qa-table th, .qa-table td { width: 14rem; padding: 6px 8px; vertical-align: top; text-align: left; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.qa-table th { background: var(--subtle); color: var(--muted); font-size: .73rem; font-weight: 500; }
+.qa-table th:first-child, .qa-table td:first-child { width: 3rem; font-variant-numeric: tabular-nums; color: var(--muted); }
+.qa-table th:last-child, .qa-table td:last-child { width: 3rem; }
+.qa-pagination { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 36px; margin-top: 6px; color: var(--muted); }
+.qa-pagination > span { margin-right: auto; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.qa-pagination .icon-button { flex: 0 0 28px; width: 28px; height: 28px; }
+.qa-raw-actions { display: flex; justify-content: flex-end; margin-bottom: 4px; }
+.qa-raw .ql-pre { max-height: 24rem; font-size: .78rem; }
+@container query-results (max-width: 560px) {
+  .qa-metadata { grid-template-columns: minmax(0, 1fr); gap: 3px; }
+  .qa-metadata dd { margin-bottom: 7px; }
+}

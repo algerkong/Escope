@@ -192,6 +192,18 @@ v1/v2 证据保留于 [固定筛选 QA](pinned-filters-qa.md) 和 [固定 nested
 基础聚合通过“分组 + 指标”完成，支持 terms、date_histogram、count、sum、avg。
 高级管道聚合通过 DSL 使用；不能支持的类型仍可查看原始响应与通用聚合树。
 
+2026-10-10 Q06 首批只完成**已有查询聚合结果的有界读取/展示**，不是上述构建/绘图闭环：
+按执行 rawDsl 识别 sum/avg/min/max/value_count/cardinality、单层 terms/date_histogram
+及直接指标子项；value_count 不当文档数，cardinality 标近似，terms 误差/遗漏原值保留。
+每次选择一个原接收页，不相加 PIT 报告或以已加载文档数冒充统计范围。
+缺失/null/0/空桶独立，日期显示返回起点和原 interval/时区/offset/bounds，不补桶或推结束边界。
+post_filter、脚本/runtime、页级部分/超时/分片/跨集群限制可辨；来源与原文按需展开，
+原 token 复制不应用字段格式。聚合解释拒绝不代表查询被拒绝，未知/高级仅保留原文，
+**通用聚合树、聚合构建、图表与保存仍待开发**。
+DSL 256 KiB、原页 1 MiB、32 定义/4,096 桶、64 层/100,000 token/数字 4,096 字符，
+每页 50 桶，超限整次解释拒绝；会话视图/选择/页码不进恢复，操作不额外请求或执行。
+证据与真实/原生/性能待验项见 [聚合结果 QA](query-aggregations-qa.md)。
+
 ## 7. 可视化、DSL 与 AI 的状态契约
 
 每个标签只有一个可执行草稿，但可保留模式切换前的恢复点。

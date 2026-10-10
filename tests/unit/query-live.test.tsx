@@ -396,6 +396,48 @@ describe('compact data preview', () => {
 });
 
 describe('live query execution and results', () => {
+  it('reads size-zero aggregates from the actual executed DSL without field discovery or another query', async () => {
+    const backend = makeBackend();
+    const dsl = '{"size":0,"aggs":{"total":{"sum":{"field":"amount"}},"unique":{"cardinality":{"field":"id"}}}}';
+    const rawResponse = '{"took":2,"timed_out":false,"_shards":{"total":1,"successful":1,"failed":0},'
+      + '"hits":{"total":14,"hits":[]},"aggregations":{"total":{"value":9007199254740993},"unique":{"value":7}}}';
+    backend.execute.mockImplementation(async (request) => ({ ...request, endpoint: baseProfile.endpoint,
+      rawResponse, partial: false, pitId: null }));
+    const { user } = setup(backend, { seeds: [{ index: 'orders-1', dsl }] });
+    expect(backend.execute).not.toHaveBeenCalled();
+    await user.click(runButton());
+    const reads = backend.readResource.mock.calls.length;
+    await user.click(await screen.findByRole('button', { name: '聚合' }));
+    const aggregation = within(screen.getByRole('region', { name: '聚合' }));
+    expect(aggregation.getByLabelText('total')).toHaveTextContent('9007199254740993');
+    fireEvent.change(fields(), { target: { value: '{"size":0,"aggs":{"total":{"cardinality":{"field":"new"}}}}' } });
+    expect(aggregation.queryByText('近似值')).toBeNull();
+    expect(aggregation.getByLabelText('total')).toHaveTextContent('9007199254740993');
+    await user.selectOptions(aggregation.getByRole('combobox', { name: '聚合项' }), 'unique');
+    expect(aggregation.getByText('近似值')).toBeVisible();
+    expect(backend.execute).toHaveBeenCalledTimes(1);
+    expect(backend.execute.mock.calls[0]![0].rawDsl).toBe(dsl);
+    expect(backend.openPit).not.toHaveBeenCalled();
+    expect(backend.readResource).toHaveBeenCalledTimes(reads);
+  });
+
+  it('keeps unsupported aggregation responses accessible without hiding loaded documents or changing execution status', async () => {
+    const backend = makeBackend();
+    const rawResponse = searchResponse.slice(0, -1) + ',"aggregations":{"distribution":{"values":{"50.0":9007199254740993}}}}';
+    backend.execute.mockImplementation(async (request) => ({ ...request, endpoint: baseProfile.endpoint,
+      rawResponse, partial: false, pitId: null }));
+    const { user } = setup(backend, { seeds: [{ index: 'orders-1', dsl: '{"size":1,"aggs":{"distribution":{"percentiles":{"field":"id"}}}}' }] });
+    await user.click(runButton());
+    await user.click(await screen.findByRole('button', { name: '聚合' }));
+    expect(screen.getByText('定义超出已支持的单层范围')).toBeVisible();
+    await user.click(screen.getByText('聚合原始响应', { selector: 'summary' }));
+    expect(await screen.findByLabelText('聚合原始响应')).toHaveTextContent('9007199254740993');
+    await user.click(screen.getByRole('button', { name: '表格' }));
+    expect(screen.getByRole('button', { name: '文档 1' })).toBeVisible();
+    expect(screen.getByText('已完成')).toBeVisible();
+    expect(backend.execute).toHaveBeenCalledTimes(1);
+  });
+
   it('blocks incomplete visual conditions without executing or replacing the previous DSL', async () => {
     const backend = makeBackend();
     const { user } = setup(backend);
@@ -938,6 +980,31 @@ const pagedResponse = (id: string, pitId: string | null, sortValue: number) => '
   + '"_source":{"id":' + sortValue + '},"sort":[' + sortValue + ']}]}}';
 
 describe('snapshot pagination', () => {
+  it('keeps each received aggregation report independent through PIT continuation and draft edits', async () => {
+    const backend = makeBackend();
+    const dsl = '{"sort":["_doc"],"size":1,"aggs":{"total":{"sum":{"field":"id"}}}}';
+    backend.execute.mockImplementation(async (request) => {
+      const next = request.searchAfter !== undefined;
+      const rawResponse = pagedResponse(next ? 'next' : 'first', next ? 'pit-2' : 'pit-1', next ? 2 : 1).slice(0, -1)
+        + `,"aggregations":{"total":{"value":${next ? '9007199254740994' : '9007199254740993'}}}}`;
+      return { ...request, endpoint: baseProfile.endpoint, rawResponse, partial: false, pitId: next ? 'pit-2' : 'pit-1' };
+    });
+    const { user } = setup(backend, { seeds: [{ index: 'orders-1', dsl }] });
+    await user.click(runButton());
+    await user.click(await screen.findByRole('button', { name: '聚合' }));
+    expect(screen.getByLabelText('total')).toHaveTextContent('9007199254740993');
+    await user.click(screen.getByRole('button', { name: '表格' }));
+    fireEvent.change(fields(), { target: { value: '{"sort":["_doc"],"size":1}' } });
+    await user.click(screen.getByRole('button', { name: '加载更多' }));
+    await user.click(screen.getByRole('button', { name: '聚合' }));
+    expect(screen.getByLabelText('total')).toHaveTextContent('9007199254740993');
+    await user.selectOptions(screen.getByRole('combobox', { name: '接收页' }), '1');
+    expect(screen.getByLabelText('total')).toHaveTextContent('9007199254740994');
+    expect(screen.getByText('各接收页是独立报告，不相加为总量。')).toBeVisible();
+    expect(backend.execute.mock.calls.map(([request]) => request.rawDsl)).toEqual([dsl, dsl]);
+    expect(backend.openPit).toHaveBeenCalledTimes(1);
+  });
+
   it('places preview continuation beside the row count and keeps snapshot details in its tooltip', async () => {
     const backend = makeBackend();
     backend.execute.mockImplementation(async (request) => ({

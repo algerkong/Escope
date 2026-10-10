@@ -18,6 +18,7 @@ import { compareLoadedDocuments, type DocumentComparisonResult } from '../../dom
 import { DocumentComparisonDialog } from './DocumentComparisonDialog';
 import { inspectLoadedDocument, type DocumentDetailResult } from '../../domain/document-detail';
 import { DocumentDetailDialog } from './DocumentDetailDialog';
+import { QueryAggregations } from './QueryAggregations';
 
 const IDLE: ExecutionState = { status: 'idle' };
 const EMPTY_PAGES: readonly ExecutionPage[] = [];
@@ -64,6 +65,7 @@ export function QueryResults({ kind = 'query', active = true, documentIds, wrapJ
   const [selectedDetail, setDetail] = useState<{ snapshot: ExecutionSnapshot; result: DocumentDetailResult } | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [selectedComparison, setComparison] = useState<{ snapshot: ExecutionSnapshot; result: DocumentComparisonResult } | null>(null);
+  const [aggregationSnapshot, setAggregationSnapshot] = useState<ExecutionSnapshot | null>(null);
   const scroll = useRef(new Map<string, { executionKey: string; table?: GridScrollPosition; json?: GridScrollPosition }>());
   const jsonViewport = useRef<HTMLPreElement>(null);
   const state = entry?.state ?? IDLE;
@@ -73,6 +75,9 @@ export function QueryResults({ kind = 'query', active = true, documentIds, wrapJ
   const continuationError = entry?.continuationError ?? null;
   const requestKey = 'snapshot' in state ? state.snapshot.requestId : null;
   const detailSnapshot = state.status === 'success' || state.status === 'partial' ? state.snapshot : null;
+  const canShowAggregations = kind === 'query' && detailSnapshot?.queryId === query.id && pages.length > 0;
+  const showAggregations = active && canShowAggregations && detailSnapshot === aggregationSnapshot;
+  useEffect(() => { setAggregationSnapshot(null); }, [query.id, detailSnapshot, active]);
   const detail = active && detailSnapshot?.queryId === query.id && selectedDetail?.snapshot === detailSnapshot ? selectedDetail : null;
   useEffect(() => { setDetail(null); }, [query.id, detailSnapshot, active]);
   const comparison = active && (state.status === 'success' || state.status === 'partial')
@@ -130,7 +135,7 @@ export function QueryResults({ kind = 'query', active = true, documentIds, wrapJ
   // The export dialog follows the execution that is actually displayed: leaving it (running,
   // failed, another query or a new request) closes it, which also invalidates a pending attempt.
   useEffect(() => { if (!exportable) setExportOpen(false); }, [exportable]);
-  useEffect(() => { setExportOpen(false); }, [query.id, requestKey]);
+  useEffect(() => { setExportOpen(false); }, [query.id, requestKey, showAggregations]);
   const totals = summary?.totals ?? null;
   const totalText = totals === null ? '' : new Intl.NumberFormat(i18n.language, { useGrouping: grouping }).format(BigInt(totals.text));
   const hitsText = totals === null ? t('queryLive:hitsUnknown')
@@ -219,6 +224,8 @@ export function QueryResults({ kind = 'query', active = true, documentIds, wrapJ
       </EmptyState>
       {query.resultView === 'json' ? rawBlock : null}
     </>;
+  } else if (showAggregations && detailSnapshot) {
+    content = <QueryAggregations snapshot={detailSnapshot} endpoint={entry?.endpoint ?? null} pages={pages} wrapJson={wrapJson} />;
   } else if (query.resultView === 'json') {
     content = rawBlock;
   } else if (summary === null) {
@@ -246,12 +253,16 @@ export function QueryResults({ kind = 'query', active = true, documentIds, wrapJ
     </div>;
   const toolbarControls = <div className="ql-toolbar-end">
         {onNestedFilters ? <IconButton icon={ListTree} label={t('queryFilters:nestedEditor')} onClick={onNestedFilters} /> : null}
-        {exportable ? <IconButton icon={Download} label={t('queryLibrary:exportLoaded')} onClick={() => setExportOpen(true)} /> : null}
+        {exportable && !showAggregations ? <IconButton icon={Download} label={t('queryLibrary:exportLoaded')} onClick={() => setExportOpen(true)} /> : null}
         {onSnapshotExport ? <IconButton icon={FileDown} label={t('queryExport:open')} onClick={onSnapshotExport} /> : null}
         {state.status === 'running' || continuing ? <button type="button" className="secondary compact-button" onClick={onCancel}>{t('queryLive:cancel')}</button> : null}
         <div className="segment" role="group" aria-label={t('query:resultView')}>
           {(['table', 'json'] as const).map((view) => <button key={view} type="button"
-            aria-pressed={query.resultView === view} onClick={() => onViewChange(view)}>{t(`query:${view}`)}</button>)}
+            aria-pressed={!showAggregations && query.resultView === view} onClick={() => {
+              setAggregationSnapshot(null); onViewChange(view);
+            }}>{t(`query:${view}`)}</button>)}
+          {canShowAggregations ? <button type="button" aria-pressed={showAggregations}
+            onClick={() => setAggregationSnapshot(detailSnapshot)}>{t('queryAggregations:title')}</button> : null}
         </div>
       </div>;
 

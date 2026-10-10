@@ -330,3 +330,160 @@ describe('filter group review controls', () => {
     }
   });
 });
+
+describe('session filter enablement controls', () => {
+  const toggle = (field: string) => screen.getByRole('switch', { name: `Filter enabled for ${field}` });
+  const final = () => (screen.getByLabelText('Final filtered DSL') as HTMLTextAreaElement).value;
+  const confirmDiscard = (count: number) => screen.getByRole('checkbox', {
+    name: `Discard ${count} disabled definitions when applying the enabled filters.`,
+  });
+
+  it('toggles with the native keyboard while retaining values, membership and group operators', async () => {
+    const f = fixture({ selection: null, initialDraft: groupDraft() });
+    join('Group 1 operator', 'any');
+    const assignment = (screen.getByLabelText('Group for n') as HTMLSelectElement).value;
+    preview();
+    const original = final();
+    toggle('n').focus();
+    await userEvent.setup().keyboard(' ');
+    expect(toggle('n')).not.toBeChecked();
+    expect(toggle('n')).toHaveFocus();
+    expect(toggle('n')).toHaveAttribute('title', enQueryFilters.enable);
+    expect(toggle('n')).toHaveAccessibleDescription('Include value 9007199254740993');
+    expect(screen.getByLabelText('Group for n')).toHaveValue(assignment);
+    expect(within(screen.getByRole('radiogroup', { name: 'Group 1 operator' })).getByRole('radio', { name: 'Any (OR)' })).toBeChecked();
+    const item = toggle('n').closest('li')!;
+    expect(item).toHaveAttribute('data-filter-disabled', 'true');
+    expect(item).toHaveTextContent('Disabled');
+    expect(item).toHaveTextContent('9007199254740993');
+    expect(screen.queryByLabelText('Final filtered DSL')).not.toBeInTheDocument();
+    expect(apply()).toBeDisabled();
+    preview();
+    expect(final()).not.toContain('"n":');
+    expect(final()).toContain('"original": 9007199254740993');
+    expect(apply()).toBeDisabled();
+    expect(confirmDiscard(1)).not.toBeChecked();
+    fireEvent.click(toggle('n'));
+    expect(toggle('n')).toBeChecked();
+    expect(screen.queryByLabelText('Final filtered DSL')).not.toBeInTheDocument();
+    preview();
+    expect(final()).toBe(original);
+    expect(apply()).toBeEnabled();
+    expect(f.onCommit).not.toHaveBeenCalled();
+    expect(f.onInspect).not.toHaveBeenCalled();
+  });
+
+  it('retains fully inactive groups and previews the exact original body without permitting a no-op commit', () => {
+    const draft = groupDraft({ mode: 'any', groups: [
+      { id: 'first', mode: 'any', filterIds: ['n', 'message'] },
+      { id: 'second', mode: 'all', filterIds: ['status'] },
+    ] });
+    const f = fixture({ selection: null, initialDraft: draft });
+    for (const field of ['n', 'status', 'message']) fireEvent.click(toggle(field));
+    expect(screen.getByRole('list', { name: '3 pending filters' })).toBeVisible();
+    expect(screen.getByText('Group 1: 0 / 2 enabled')).toHaveAttribute('title', enQueryFilters.inactiveGroupBoundary);
+    expect(screen.getByText('Group 2: 0 / 1 enabled')).toBeVisible();
+    expect(screen.getByRole('status')).toHaveTextContent('0 / 3 enabled');
+    expect(screen.getByRole('status')).toHaveTextContent(enQueryFilters.allDisabled);
+    preview();
+    expect(final()).toBe(source.dsl);
+    expect(apply()).toBeDisabled();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    fireEvent.click(apply());
+    expect(f.onCommit).not.toHaveBeenCalled();
+    fireEvent.click(toggle('n'));
+    expect(screen.getByLabelText('Group for n')).toHaveValue('first');
+    expect(screen.getByLabelText('Group for status')).toHaveValue('second');
+    preview();
+    const branches = JSON.parse(final()).query.bool.filter[0].bool;
+    expect(branches.minimum_should_match).toBe(1);
+    expect(branches.should).toHaveLength(1);
+    expect(branches.should[0].bool.minimum_should_match).toBe(1);
+    expect(branches.should[0].bool.should).toHaveLength(1);
+    expect(final()).toContain('"n": 9007199254740993');
+    expect(final()).not.toContain('blocked');
+    expect(f.onInspect).not.toHaveBeenCalled();
+  });
+
+  it('requires explicit discard confirmation for disabled definitions and resets it for every new review', async () => {
+    const f = fixture({ selection: null, initialDraft: groupDraft() });
+    fireEvent.click(toggle('message'));
+    preview();
+    fireEvent.click(apply());
+    expect(f.onCommit).not.toHaveBeenCalled();
+    fireEvent.click(confirmDiscard(1));
+    expect(apply()).toBeEnabled();
+    join('Group 1 operator', 'any');
+    expect(apply()).toBeDisabled();
+    preview();
+    expect(confirmDiscard(1)).not.toBeChecked();
+    fireEvent.click(confirmDiscard(1));
+    f.rerender(<Harness {...f.props} fields={{ ...ready }} />);
+    expect(screen.queryByLabelText('Final filtered DSL')).not.toBeInTheDocument();
+    expect(apply()).toBeDisabled();
+    preview();
+    expect(confirmDiscard(1)).not.toBeChecked();
+    fireEvent.click(confirmDiscard(1));
+    const reviewed = final();
+    await act(async () => { await i18n.changeLanguage('zh-CN'); });
+    expect(screen.getByRole('switch', { name: 'message 筛选启用状态' })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: '应用已启用筛选时，丢弃 1 项禁用定义。' })).toBeChecked();
+    expect(screen.getByLabelText('最终筛选 DSL')).toHaveValue(reviewed);
+    expect(f.onCommit).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '应用筛选到草稿' }));
+    expect(f.onCommit).toHaveBeenCalledExactlyOnceWith(source, { dsl: reviewed });
+    expect(f.onClose).toHaveBeenCalledOnce();
+  });
+
+  it.each(['source', 'snapshot', 'endpoint'] as const)('does not reuse a confirmed preview after the session %s changes', (change) => {
+    const draft = { ...groupDraft(), filters: groupDraft().filters.map((filter) => ({ ...filter, enabled: filter.id !== 'message' })) };
+    const props = { current: source, fields: ready, mapping: idleMapping, targetCurrent: true, canInspect: true, newQuery: false,
+      onInspect: vi.fn(), onInspectNested: vi.fn(), onFiltersChange: vi.fn(), onCommit: vi.fn(() => true), onDiscard: vi.fn(), onClose: vi.fn() };
+    const renderDialog = (next: QueryFilterDraft) => <I18nextProvider i18n={i18n}><QueryFiltersDialog {...props} current={next.source} draft={next} /></I18nextProvider>;
+    const view = render(renderDialog(draft));
+    preview();
+    fireEvent.click(confirmDiscard(1));
+    expect(apply()).toBeEnabled();
+    const next: QueryFilterDraft = { ...draft,
+      ...(change === 'source' ? { source: { ...source, revision: source.revision + 1, dsl: '{"size":25}' } }
+        : change === 'snapshot' ? { snapshot: { ...snapshot, requestId: 'new-request' } }
+          : { endpoint: 'https://other.test' }) };
+    view.rerender(renderDialog(next));
+    expect(screen.queryByLabelText('Final filtered DSL')).not.toBeInTheDocument();
+    expect(apply()).toBeDisabled();
+    expect(toggle('message')).not.toBeChecked();
+    expect(props.onCommit).not.toHaveBeenCalled();
+  });
+
+  it('requires current evidence again when re-enabling a disabled condition', () => {
+    const initialDraft = { ...groupDraft(), filters: groupDraft().filters.map((filter) => ({ ...filter, enabled: filter.id === 'status' })) };
+    const onlyStatus: Loadable<FieldCatalog> = { ...ready, data: { ...ready.data, fields: ready.data.fields.filter((field) => field.name === 'status') } };
+    const f = fixture({ selection: null, initialDraft, fields: onlyStatus });
+    preview();
+    expect(screen.getByLabelText('Final filtered DSL')).toBeVisible();
+    fireEvent.click(toggle('n'));
+    preview();
+    expect(screen.getByRole('alert')).toHaveTextContent(enQueryFilters.fieldMissing);
+    expect(apply()).toBeDisabled();
+    expect(toggle('n')).toBeChecked();
+    f.rerender(<Harness {...f.props} fields={ready} />);
+    preview();
+    expect(screen.getByLabelText('Final filtered DSL')).toBeVisible();
+    expect(apply()).toBeDisabled();
+    expect(confirmDiscard(1)).not.toBeChecked();
+    expect(f.onCommit).not.toHaveBeenCalled();
+  });
+
+  it('does not bypass target guards or duplicate and group quotas using disabled definitions', () => {
+    const initialDraft = { ...groupDraft(), filters: groupDraft().filters.map((filter) => ({ ...filter, enabled: false })) };
+    const f = fixture({ initialDraft });
+    expect(screen.getByText(enQueryFilters.duplicate)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Add to pending filters' })).toBeDisabled();
+    preview();
+    f.rerender(<Harness {...f.props} targetCurrent={false} />);
+    expect(toggle('n')).toBeDisabled();
+    expect(apply()).toBeDisabled();
+    expect(screen.getByRole('alert')).toHaveTextContent(enQueryFilters.draftChanged);
+    expect(f.onCommit).not.toHaveBeenCalled();
+  });
+});

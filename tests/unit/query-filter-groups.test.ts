@@ -100,6 +100,33 @@ describe('bounded non-scoring filter groups', () => {
     expect(result.dsl).not.toContain('"exists":{"field":"a"}');
   });
 
+  it.each([
+    ['all', 'all', 'all'], ['all', 'all', 'any'], ['all', 'any', 'all'], ['all', 'any', 'any'],
+    ['any', 'all', 'all'], ['any', 'all', 'any'], ['any', 'any', 'all'], ['any', 'any', 'any'],
+  ] as const)('omits inactive branches for %s / %s / %s without interpreting an inactive group as true or false', (rootMode, firstMode, secondMode) => {
+    const composition = grouped(rootMode, firstMode, secondMode);
+    for (let enabledMask = 0; enabledMask < 16; enabledMask += 1) {
+      const filters = leaves.map((filter, index) => ({ ...filter, enabled: Boolean(enabledMask & (1 << index)) }));
+      const saved = structuredClone({ composition, filters });
+      const result = preview(composition, filters);
+      const body = JSON.parse(result.dsl) as { query: BooleanClause };
+      expect(result.dsl).not.toContain('"should":[]');
+      expect(result.dsl).not.toContain('"filter":[]');
+      if (enabledMask === 0) expect(result).toEqual({ ok: true, dsl: source.dsl, patch: { dsl: source.dsl } });
+      for (let bits = 0; bits < 16; bits += 1) {
+        const [a, b, c, d] = [1, 2, 4, 8].map((mask) => Boolean(bits & mask));
+        const members = [[a, !b], [c, !d]].map((values, group) =>
+          values.filter((_, index) => Boolean(enabledMask & (1 << (group * 2 + index)))));
+        const groups = members.flatMap((values, index) => values.length
+          ? [(index === 0 ? firstMode : secondMode) === 'all' ? values.every(Boolean) : values.some(Boolean)] : []);
+        const expected = !groups.length || (rootMode === 'all' ? groups.every(Boolean) : groups.some(Boolean));
+        const present = new Set(['a', 'b', 'c', 'd'].filter((_, index) => Boolean(bits & (1 << index))));
+        expect(matches(body.query, present), `enabled ${enabledMask}, row ${bits}`).toBe(expected);
+      }
+      expect({ composition, filters }).toEqual(saved);
+    }
+  });
+
   it('writes minimum_should_match for every generated OR, even singleton groups', () => {
     const filters = [leaves[0]!];
     const result = preview({ mode: 'any', groups: [{ id: 'g', mode: 'any', filterIds: [filters[0]!.id] }] }, filters);

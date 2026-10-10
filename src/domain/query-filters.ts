@@ -39,6 +39,8 @@ export interface QueryFilter {
   readonly origin: FilterValueOrigin | 'input';
   /** Explicit Mapping-proven scope, never inferred from a cell's object or array shape. */
   readonly nestedPath?: string;
+  /** Omitted means enabled. Disabled definitions retain their membership and still count toward limits. */
+  readonly enabled?: boolean;
 }
 
 export type QueryFilterJoin = 'all' | 'any';
@@ -72,7 +74,7 @@ export type QueryFilterProblem = NestedMappingProblem
   | 'valueTypeMismatch' | 'valueOutOfRange' | 'valueUnsupported' | 'invalidValue'
   | 'emptyPhrase' | 'tooLarge' | 'tooMany' | 'empty' | 'duplicate'
   | 'invalidDsl' | 'unsupportedDsl' | 'invalidBinding' | 'targetChanged'
-  | 'invalidComposition' | 'tooManyGroups' | 'nestedGroupMismatch';
+  | 'invalidComposition' | 'tooManyGroups' | 'nestedGroupMismatch' | 'invalidFilterState';
 
 type Failure = { readonly ok: false; readonly code: QueryFilterProblem };
 type Family = 'keyword' | 'text' | 'number' | 'boolean' | 'existence';
@@ -273,8 +275,28 @@ export function queryFilterDuplicate(filters: readonly QueryFilter[], filter: Om
   return filters.some((entry) => sameFilter(entry, filter));
 }
 
+export function queryFilterEnabled(filter: QueryFilter): boolean {
+  return !Object.hasOwn(filter, 'enabled') || filter.enabled !== false;
+}
+
 export function filterGroupAccepts(group: QueryFilterGroup, filter: Pick<QueryFilter, 'nestedPath'>): boolean {
   return group.nested?.path === filter.nestedPath;
+}
+
+function inactiveFilterProblem(filter: QueryFilter): QueryFilterProblem | null {
+  if (!validTimeRangeField(filter.field)) return 'invalidField';
+  if (filter.nestedPath === undefined ? filter.field.includes('.')
+    : !validNestedFilterSegment(filter.nestedPath) || !filter.field.startsWith(`${filter.nestedPath}.`)
+      || !validNestedFilterSegment(filter.field.slice(filter.nestedPath.length + 1))) return 'fieldPath';
+  if (filter.evidence !== 'mapped' && filter.evidence !== 'runtime'
+    || filter.origin !== 'source' && filter.origin !== 'fields' && filter.origin !== 'input') return 'invalidValue';
+  const family = familyOf(filter.fieldType);
+  if (!family) return 'fieldUnsupported';
+  const presence = filter.operation === 'exists' || filter.operation === 'missing';
+  if (presence) return filter.value === null ? null : 'invalidValue';
+  if (filter.operation !== 'include' && filter.operation !== 'exclude' || typeof filter.value !== 'string') return 'invalidValue';
+  if (filter.evidence === 'runtime' && filter.origin !== 'fields') return 'runtimeValueRequired';
+  return checkValue(filter.value, { ok: true, fieldType: filter.fieldType, evidence: filter.evidence, family });
 }
 
 function clauseText(filter: QueryFilter, field: Extract<FilterFieldEvidence, { ok: true }>): string {
@@ -338,8 +360,9 @@ function disjunction(clauses: readonly FilterClause[]): string {
 function composeClauses(clauses: ReadonlyMap<string, FilterClause>, composition?: QueryFilterComposition): string {
   if (!composition) return conjunction([...clauses.values()]);
   const groups = composition.groups.map((group) => ({
-    mode: group.mode, nested: group.nested, clauses: group.filterIds.map((id) => clauses.get(id)!),
-  }));
+    mode: group.mode, nested: group.nested,
+    clauses: group.filterIds.filter((id) => clauses.has(id)).map((id) => clauses.get(id)!),
+  })).filter((group) => group.clauses.length);
   if (composition.mode === 'all' && groups.length === 1 && groups[0]!.mode === 'all' && !groups[0]!.nested) {
     return conjunction(groups[0]!.clauses);
   }
@@ -366,12 +389,21 @@ export function previewQueryFilters(source: QueryDocument, snapshot: ExecutionSn
   if ((root.children ?? []).some((entry) => !ROOT_KEYS.has(String(entry.children?.[0]?.value)))
     || property(root, 'query') && property(root, 'query')?.type !== 'object') return { ok: false, code: 'unsupportedDsl' };
   const clauses = new Map<string, FilterClause>();
+  const filterIds = new Set<string>();
   for (let index = 0; index < filters.length; index += 1) {
     const filter = filters[index]!;
-    if (clauses.has(filter.id) || filter.nestedPath === undefined && queryFilterDuplicate(filters.slice(0, index), filter)) {
+    if (Object.hasOwn(filter, 'enabled') && typeof filter.enabled !== 'boolean') return { ok: false, code: 'invalidFilterState' };
+    if (filterIds.has(filter.id) || filter.nestedPath === undefined && queryFilterDuplicate(filters.slice(0, index), filter)) {
       return { ok: false, code: 'duplicate' };
     }
+    filterIds.add(filter.id);
     if (filter.nestedPath !== undefined && (filter.origin !== 'input' || filter.evidence !== 'mapped')) return { ok: false, code: 'nestedGroupMismatch' };
+    if (!queryFilterEnabled(filter)) {
+      // Disabled leaves need no current field evidence, but are not a way to hide malformed definitions.
+      const problem = inactiveFilterProblem(filter);
+      if (problem) return { ok: false, code: problem };
+      continue;
+    }
     const field = filter.nestedPath === undefined ? fieldEvidence(roots.executed, root, filter.field, catalog)
       : nestedFieldEvidence(roots.executed, root, filter.nestedPath, filter.field, catalog, mapping);
     if (!field.ok) return field;
@@ -393,6 +425,9 @@ export function previewQueryFilters(source: QueryDocument, snapshot: ExecutionSn
   const time = source.timeRange === undefined ? undefined
     : parseQueryTimeRange(source.timeRange, source.connectionId, source.index, source.dsl);
   if (time === null) return { ok: false, code: 'invalidBinding' };
+  // An inactive group contributes nothing, including under OR or an outer nested exclusion.
+  if (!clauses.size) return { ok: true, dsl: source.dsl,
+    patch: { dsl: source.dsl, ...(time ? { timeRange: copyQueryTimeRange(time) } : {}) } };
   const original = time
     ? property(property(property(root, 'query'), 'bool'), 'must')!.children![0]!
     : property(root, 'query');

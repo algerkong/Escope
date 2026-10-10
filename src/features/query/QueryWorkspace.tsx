@@ -27,7 +27,7 @@ import { RuntimeFieldsDialog } from './RuntimeFieldsDialog';
 import { QueryTimeRangeDialog, TimeRangeSummary } from './QueryTimeRangeDialog';
 import { QueryFilterDraftBar, QueryFiltersDialog } from './QueryFiltersDialog';
 import { QuerySortDialog } from './QuerySortDialog';
-import type { CellFilterSelection, QueryFilterDraft } from '../../domain/query-filters';
+import { queryFilterEnabled, type CellFilterSelection, type QueryFilterDraft } from '../../domain/query-filters';
 import { copyQueryTimeRange, validTimeRangeZone } from '../../domain/query-time-range';
 import type { FieldCatalog } from '../../domain/resource';
 import { QueryExchangeDialog } from './QueryExchangeDialog';
@@ -547,6 +547,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
           <span className="status-spacer" /><span>JSON</span><span>UTF-8</span></div>
       </section> : null}
       {pendingFilters?.filters.length ? <QueryFilterDraftBar count={pendingFilters.filters.length}
+        enabled={pendingFilters.filters.filter(queryFilterEnabled).length}
         onReview={() => setFilterDialog({ queryId: query.id, instanceId: crypto.randomUUID() })}
         onDiscard={() => discardFilters(query.id)} /> : null}
       {'snapshot' in execution && execution.snapshot.timeRange ? <TimeRangeSummary time={execution.snapshot.timeRange} /> : null}

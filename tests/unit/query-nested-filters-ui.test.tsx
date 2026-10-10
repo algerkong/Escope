@@ -234,4 +234,52 @@ describe('explicit nested filter editor', () => {
     expect(f.props.onCommit).not.toHaveBeenCalled();
     expect(f.props.onInspectNested).not.toHaveBeenCalled();
   });
+
+  it('omits a disabled parent-exclusion group without losing its scope or moving it into an OR branch', () => {
+    const comment = pending('comments.author', '"alice"');
+    const f = fixture({ initialNested: false, draft: initial([comment, flat], { mode: 'any', groups: [
+      { id: 'comments', mode: 'any', filterIds: [comment.id], nested: { path: 'comments', match: 'exclude' } },
+      { id: 'flat', mode: 'all', filterIds: [flat.id] },
+    ] }) });
+    preview();
+    const original = final();
+    fireEvent.click(screen.getByRole('switch', { name: 'Filter enabled for comments.author' }));
+    expect(apply()).toBeDisabled();
+    expect(screen.getByText('Group 1: 0 / 1 enabled')).toBeVisible();
+    expect(screen.getByLabelText('Group for comments.author')).toHaveValue('comments');
+    expect(screen.getByLabelText('Group 1 parent match')).toHaveValue('exclude');
+    preview();
+    expect(final()).not.toContain('"nested"');
+    expect(final()).not.toContain('"must_not"');
+    const branches = JSON.parse(final()).query.bool.filter[0].bool;
+    expect(branches.minimum_should_match).toBe(1);
+    expect(branches.should).toEqual([{ bool: { filter: [{ term: { status: 'ready' } }] } }]);
+    fireEvent.click(screen.getByRole('switch', { name: 'Filter enabled for comments.author' }));
+    expect(screen.queryByLabelText('Final filtered DSL')).not.toBeInTheDocument();
+    preview();
+    expect(final()).toBe(original);
+    expect(f.props.onCommit).not.toHaveBeenCalled();
+    expect(f.props.onInspectNested).not.toHaveBeenCalled();
+  });
+
+  it('can review an inactive nested group without Mapping but cannot re-enable it using failed evidence', () => {
+    const comment = { ...pending('comments.author', '"alice"'), enabled: false };
+    const f = fixture({ initialNested: false, mapping: { status: 'error', code: 'forbidden' },
+      draft: initial([comment, flat], { mode: 'all', groups: [
+        { id: 'comments', mode: 'any', filterIds: [comment.id], nested: { path: 'comments', match: 'exclude' } },
+        { id: 'flat', mode: 'all', filterIds: [flat.id] },
+      ] }) });
+    preview();
+    expect(final()).not.toContain('"nested"');
+    expect(screen.getByText('Mapping check failed')).toBeVisible();
+    fireEvent.click(screen.getByRole('switch', { name: 'Filter enabled for comments.author' }));
+    preview();
+    expect(screen.getByRole('alert')).toHaveTextContent(enQueryFilters.mappingUnchecked);
+    expect(apply()).toBeDisabled();
+    expect(screen.getByLabelText('Group 1 parent match')).toHaveValue('exclude');
+    f.rerender(<Harness {...f.props} mapping={mapping} />);
+    preview();
+    expect(final()).toContain('"nested"');
+    expect(f.props.onCommit).not.toHaveBeenCalled();
+  });
 });

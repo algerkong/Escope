@@ -260,6 +260,65 @@ describe('reviewed nested query compilation', () => {
       .toEqual({ ok: false, code: 'duplicate' });
   });
 
+  it.each([
+    ['all', 'all', 'include'], ['all', 'all', 'exclude'], ['all', 'any', 'include'], ['all', 'any', 'exclude'],
+    ['any', 'all', 'include'], ['any', 'all', 'exclude'], ['any', 'any', 'include'], ['any', 'any', 'exclude'],
+  ] as const)('preserves quantifiers and negation while toggling %s / %s / %s groups', (rootMode, innerMode, parentMatch) => {
+    const definitions: QueryFilter[] = [atom('comments.author', '"alice"'), atom('comments.n', '2', 'exclude'),
+      { id: 'flat', field: 'status', fieldType: 'keyword', evidence: 'mapped', origin: 'source', operation: 'include', value: '"ready"' }];
+    const composition: QueryFilterComposition = { mode: rootMode, groups: [
+      group(definitions.slice(0, 2), { mode: innerMode, nested: { path: 'comments', match: parentMatch } }),
+      { id: 'flat-group', mode: 'any', filterIds: ['flat'] },
+    ] };
+    for (let enabled = 0; enabled < 8; enabled += 1) {
+      const filters = definitions.map((filter, index) => ({ ...filter, enabled: Boolean(enabled & (1 << index)) }));
+      const saved = structuredClone({ filters, composition });
+      const result = preview(filters, composition);
+      const query = JSON.parse(result.dsl).query as Clause;
+      const generated: Clause = enabled === 0 ? { match_all: {} }
+        : { bool: { filter: query.bool!.filter, must_not: query.bool!.must_not } };
+      expect(result.dsl).not.toContain('"bool":{}');
+      expect(result.dsl).not.toContain('"should":[]');
+      if (!(enabled & 3)) expect(result.dsl).not.toContain('"nested"');
+      const objects: (TestDocument[] | undefined)[] = [undefined, [], [{}], [{ author: 'alice', n: 2 }], [{ author: 'bob', n: 1 }],
+        [{ author: 'alice', n: 2 }, { author: 'bob', n: 1 }], [{ author: 'alice', n: 1 }]];
+      for (const comments of objects) {
+        for (const status of ['ready', 'blocked']) {
+          const hasObject = comments?.some((object) => {
+            const conditions = [object.author === 'alice', object.n !== 2].filter((_, index) => Boolean(enabled & (1 << index)));
+            return innerMode === 'all' ? conditions.every(Boolean) : conditions.some(Boolean);
+          }) ?? false;
+          const groups = [
+            ...(enabled & 3 ? [parentMatch === 'include' ? hasObject : !hasObject] : []),
+            ...(enabled & 4 ? [status === 'ready'] : []),
+          ];
+          expect(matches(generated, { comments, status }), `enabled ${enabled}: ${JSON.stringify({ comments, status })}`)
+            .toBe(!groups.length || (rootMode === 'all' ? groups.every(Boolean) : groups.some(Boolean)));
+        }
+      }
+      expect({ filters, composition }).toEqual(saved);
+    }
+  });
+
+  it('retains disabled nested definitions and membership while requiring fresh Mapping only for enabled leaves', () => {
+    const included = atom('comments.author', '"alice"');
+    const disabled = { ...included, enabled: false };
+    const composition: QueryFilterComposition = { mode: 'any', groups: [group([disabled], { nested: { path: 'comments', match: 'exclude' } })] };
+    expect(previewQueryFilters(source, snapshot, [disabled], undefined, composition, undefined))
+      .toEqual({ ok: true, dsl: source.dsl, patch: { dsl: source.dsl } });
+    expect(previewQueryFilters(source, snapshot, [included], catalog, composition, undefined))
+      .toEqual({ ok: false, code: 'mappingUnchecked' });
+    expect(previewQueryFilters(source, snapshot, [disabled], undefined, { ...composition, groups: [{ ...composition.groups[0]!, nested: { path: 'other', match: 'exclude' } }] }))
+      .toEqual({ ok: false, code: 'nestedGroupMismatch' });
+    expect(previewQueryFilters(source, snapshot, [{ ...disabled, nestedPath: 'comments.author' }], undefined, composition))
+      .toEqual({ ok: false, code: 'fieldPath' });
+    const duplicate = { ...disabled, id: 'duplicate' };
+    expect(previewQueryFilters(source, snapshot, [included, duplicate], catalog, { mode: 'all', groups: [group([included, duplicate])] }, proof))
+      .toEqual({ ok: false, code: 'duplicate' });
+    expect(previewQueryFilters(source, snapshot, [included, duplicate], catalog,
+      { mode: 'all', groups: [group([included]), group([duplicate], { id: 'independent' })] }, proof).ok).toBe(true);
+  });
+
   it('preserves exact authored tokens and rejects coercion, compound values and oversized values', () => {
     expect(preview([atom('comments.n', '9007199254740993')]).dsl).toContain('"comments.n":9007199254740993');
     expect(preview([atom('comments.author', '"\\u0061"')]).dsl).toContain('"comments.author":"\\u0061"');

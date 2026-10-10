@@ -5,6 +5,10 @@
 前置见 [布尔筛选组 QA](query-filter-groups-qa.md)、[nested QA](query-nested-filters-qa.md)
 和 [单元格筛选 QA](query-cell-filters-qa.md)。Q02 与六方向父任务保持开放。
 
+本文件记录第六批当时的行为。随后第七批已接入[已应用会话绑定](query-filter-session-qa.md)，
+应用后保留禁用定义，替代下文的混合应用弃用确认；可信绑定的全禁用/移空可以经审核恢复
+基线。第六批的测试数量和“仅待应用”限制不作为第七批验收结论。
+
 ## 实际交付
 
 | 范围 | 已实现 | 边界 |

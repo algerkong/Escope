@@ -4,8 +4,9 @@ import { useState } from 'react';
 import { I18nextProvider } from 'react-i18next';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { createQuery, createSnapshot, type QueryDocument, type QueryDocumentPatch } from '../../src/domain/query';
+import { createQuery, createSnapshot, updateWorkspaceDocument, type QueryDocument, type QueryDocumentPatch } from '../../src/domain/query';
 import { MAX_FILTER_GROUPS, MAX_QUERY_FILTERS, type CellFilterSelection, type QueryFilter, type QueryFilterComposition, type QueryFilterDraft } from '../../src/domain/query-filters';
+import { bindAppliedQueryFilters, previewQueryFilterDraft } from '../../src/domain/query-filter-session';
 import { parseFieldCaps, type FieldCatalog } from '../../src/domain/resource';
 import { QueryFiltersDialog } from '../../src/features/query/QueryFiltersDialog';
 import type { Loadable, MappingState } from '../../src/features/query/useQueryResources';
@@ -17,7 +18,7 @@ const source: QueryDocument = { ...createQuery('connection'), id: 'query', index
 const snapshot = createSnapshot(source, 'request', new Date('2026-10-10T00:00:00.000Z'));
 const fieldResult = parseFieldCaps('{"fields":{"n":{"long":{"searchable":true}},"message":{"text":{"searchable":true}},"status":{"keyword":{"searchable":true}}}}');
 if (!fieldResult.ok) throw new Error('fixture');
-const ready: Loadable<FieldCatalog> = { status: 'ready', data: fieldResult.value };
+const ready = { status: 'ready', data: fieldResult.value } satisfies Loadable<FieldCatalog>;
 const selected: CellFilterSelection = { field: 'n', value: { kind: 'number', text: '9007199254740993' }, origin: 'source' };
 const idleMapping: Loadable<MappingState> = { status: 'idle' };
 
@@ -334,9 +335,6 @@ describe('filter group review controls', () => {
 describe('session filter enablement controls', () => {
   const toggle = (field: string) => screen.getByRole('switch', { name: `Filter enabled for ${field}` });
   const final = () => (screen.getByLabelText('Final filtered DSL') as HTMLTextAreaElement).value;
-  const confirmDiscard = (count: number) => screen.getByRole('checkbox', {
-    name: `Discard ${count} disabled definitions when applying the enabled filters.`,
-  });
 
   it('toggles with the native keyboard while retaining values, membership and group operators', async () => {
     const f = fixture({ selection: null, initialDraft: groupDraft() });
@@ -361,8 +359,8 @@ describe('session filter enablement controls', () => {
     preview();
     expect(final()).not.toContain('"n":');
     expect(final()).toContain('"original": 9007199254740993');
-    expect(apply()).toBeDisabled();
-    expect(confirmDiscard(1)).not.toBeChecked();
+    expect(apply()).toBeEnabled();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
     fireEvent.click(toggle('n'));
     expect(toggle('n')).toBeChecked();
     expect(screen.queryByLabelText('Final filtered DSL')).not.toBeInTheDocument();
@@ -405,29 +403,26 @@ describe('session filter enablement controls', () => {
     expect(f.onInspect).not.toHaveBeenCalled();
   });
 
-  it('requires explicit discard confirmation for disabled definitions and resets it for every new review', async () => {
+  it('keeps disabled definitions through mixed application without asking to discard them, and renews review after edits', async () => {
     const f = fixture({ selection: null, initialDraft: groupDraft() });
     fireEvent.click(toggle('message'));
     preview();
-    fireEvent.click(apply());
-    expect(f.onCommit).not.toHaveBeenCalled();
-    fireEvent.click(confirmDiscard(1));
     expect(apply()).toBeEnabled();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(f.onCommit).not.toHaveBeenCalled();
     join('Group 1 operator', 'any');
     expect(apply()).toBeDisabled();
     preview();
-    expect(confirmDiscard(1)).not.toBeChecked();
-    fireEvent.click(confirmDiscard(1));
+    expect(apply()).toBeEnabled();
     f.rerender(<Harness {...f.props} fields={{ ...ready }} />);
     expect(screen.queryByLabelText('Final filtered DSL')).not.toBeInTheDocument();
     expect(apply()).toBeDisabled();
     preview();
-    expect(confirmDiscard(1)).not.toBeChecked();
-    fireEvent.click(confirmDiscard(1));
+    expect(apply()).toBeEnabled();
     const reviewed = final();
     await act(async () => { await i18n.changeLanguage('zh-CN'); });
     expect(screen.getByRole('switch', { name: 'message 筛选启用状态' })).not.toBeChecked();
-    expect(screen.getByRole('checkbox', { name: '应用已启用筛选时，丢弃 1 项禁用定义。' })).toBeChecked();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
     expect(screen.getByLabelText('最终筛选 DSL')).toHaveValue(reviewed);
     expect(f.onCommit).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: '应用筛选到草稿' }));
@@ -435,14 +430,13 @@ describe('session filter enablement controls', () => {
     expect(f.onClose).toHaveBeenCalledOnce();
   });
 
-  it.each(['source', 'snapshot', 'endpoint'] as const)('does not reuse a confirmed preview after the session %s changes', (change) => {
+  it.each(['source', 'snapshot', 'endpoint'] as const)('does not reuse a preview after the session %s changes', (change) => {
     const draft = { ...groupDraft(), filters: groupDraft().filters.map((filter) => ({ ...filter, enabled: filter.id !== 'message' })) };
     const props = { current: source, fields: ready, mapping: idleMapping, targetCurrent: true, canInspect: true, newQuery: false,
       onInspect: vi.fn(), onInspectNested: vi.fn(), onFiltersChange: vi.fn(), onCommit: vi.fn(() => true), onDiscard: vi.fn(), onClose: vi.fn() };
     const renderDialog = (next: QueryFilterDraft) => <I18nextProvider i18n={i18n}><QueryFiltersDialog {...props} current={next.source} draft={next} /></I18nextProvider>;
     const view = render(renderDialog(draft));
     preview();
-    fireEvent.click(confirmDiscard(1));
     expect(apply()).toBeEnabled();
     const next: QueryFilterDraft = { ...draft,
       ...(change === 'source' ? { source: { ...source, revision: source.revision + 1, dsl: '{"size":25}' } }
@@ -469,8 +463,8 @@ describe('session filter enablement controls', () => {
     f.rerender(<Harness {...f.props} fields={ready} />);
     preview();
     expect(screen.getByLabelText('Final filtered DSL')).toBeVisible();
-    expect(apply()).toBeDisabled();
-    expect(confirmDiscard(1)).not.toBeChecked();
+    expect(apply()).toBeEnabled();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
     expect(f.onCommit).not.toHaveBeenCalled();
   });
 
@@ -484,6 +478,76 @@ describe('session filter enablement controls', () => {
     expect(toggle('n')).toBeDisabled();
     expect(apply()).toBeDisabled();
     expect(screen.getByRole('alert')).toHaveTextContent(enQueryFilters.draftChanged);
+    expect(f.onCommit).not.toHaveBeenCalled();
+  });
+});
+
+describe('applied session filter review', () => {
+  function boundFixture() {
+    const first = groupDraft();
+    const result = previewQueryFilterDraft(first, ready.data);
+    if (!result.ok) throw new Error(result.code);
+    const applied = updateWorkspaceDocument({ activeConnectionId: source.connectionId, activeTabId: source.id,
+      tabs: [{ kind: 'query', document: source }], lastTabByConnection: {} }, source.id, result.patch).tabs[0]!.document;
+    const binding = bindAppliedQueryFilters(first, applied, ready.data);
+    if (!binding) throw new Error('binding');
+    const draft: QueryFilterDraft = { source: applied, snapshot, endpoint: binding.endpoint,
+      binding, filters: structuredClone(binding.filters), composition: structuredClone(binding.composition) };
+    return { binding, ...fixture({ current: applied, initialDraft: draft, selection: null }) };
+  }
+
+  it('requires an actual edit and fresh preview, then reviews all-disabled as exact baseline restoration', () => {
+    const f = boundFixture();
+    preview();
+    expect(apply()).toBeDisabled();
+    expect(screen.getByText('Baseline DSL')).toBeInTheDocument();
+    expect(screen.getByText('Applied in this session')).toHaveAttribute('title', enQueryFilters.sessionOnly);
+    for (const field of ['n', 'status', 'message']) fireEvent.click(screen.getByRole('switch', { name: `Filter enabled for ${field}` }));
+    expect(screen.getByText(enQueryFilters.boundDisabled)).toBeVisible();
+    expect(apply()).toBeDisabled();
+    preview();
+    expect(screen.getByLabelText('Final filtered DSL')).toHaveValue(source.dsl);
+    expect(apply()).toBeEnabled();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    fireEvent.click(apply());
+    expect(f.onCommit).toHaveBeenCalledExactlyOnceWith(f.binding.applied, { dsl: source.dsl });
+  });
+
+  it('reviews last-definition removal, keeping cancellation distinct from changing the DSL', () => {
+    const f = boundFixture();
+    for (const field of ['n', 'status', 'message']) fireEvent.click(screen.getByRole('button', { name: `Remove filter for ${field}` }));
+    expect(screen.getByText(enQueryFilters.boundRemoved)).toBeVisible();
+    expect(apply()).toBeDisabled();
+    preview();
+    expect(screen.getByLabelText('Final filtered DSL')).toHaveValue(source.dsl);
+    expect(apply()).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Discard pending filters' }));
+    expect(f.onDiscard).toHaveBeenCalledOnce();
+    expect(f.onCommit).not.toHaveBeenCalled();
+  });
+
+  it('blocks overwritten or cloned bindings even for removal and all-disabled previews', () => {
+    const f = boundFixture();
+    for (const field of ['n', 'status', 'message']) fireEvent.click(screen.getByRole('switch', { name: `Filter enabled for ${field}` }));
+    preview();
+    expect(apply()).toBeEnabled();
+    f.rerender(<Harness {...f.props} current={{ ...f.binding.applied, dsl: '{}', revision: f.binding.applied.revision + 1 }} />);
+    expect(screen.getByRole('alert')).toHaveTextContent(enQueryFilters.filterBindingChanged);
+    expect(apply()).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Remove filter for n' })).toBeDisabled();
+    expect(f.onCommit).not.toHaveBeenCalled();
+  });
+
+  it('does not apply a toggle cycle that returns to the already bound definitions', () => {
+    const f = boundFixture();
+    const toggle = screen.getByRole('switch', { name: 'Filter enabled for n' });
+    fireEvent.click(toggle);
+    preview();
+    expect(apply()).toBeEnabled();
+    fireEvent.click(toggle);
+    preview();
+    expect(apply()).toBeDisabled();
+    expect(screen.getByLabelText('Final filtered DSL')).toHaveValue(f.binding.applied.dsl);
     expect(f.onCommit).not.toHaveBeenCalled();
   });
 });

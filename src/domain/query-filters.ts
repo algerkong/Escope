@@ -58,13 +58,24 @@ export interface QueryFilterComposition {
   readonly groups: readonly QueryFilterGroup[];
 }
 
-/** Pending filters are session-only. Only their explicitly applied DSL uses draft persistence. */
+/** An explicitly created session binding, never inferred from or restored alongside arbitrary DSL. */
+export interface QueryFilterBinding {
+  readonly baseline: QueryDocument;
+  readonly applied: QueryDocument;
+  readonly snapshot: ExecutionSnapshot;
+  readonly endpoint: string;
+  readonly filters: readonly QueryFilter[];
+  readonly composition?: QueryFilterComposition;
+}
+
+/** Definitions and bindings are session-only. Only the applied DSL uses draft persistence. */
 export interface QueryFilterDraft {
   readonly source: QueryDocument;
   readonly snapshot: ExecutionSnapshot;
   readonly endpoint: string;
   readonly filters: readonly QueryFilter[];
   readonly composition?: QueryFilterComposition;
+  readonly binding?: QueryFilterBinding;
 }
 
 export type QueryFilterProblem = NestedMappingProblem
@@ -74,7 +85,7 @@ export type QueryFilterProblem = NestedMappingProblem
   | 'valueTypeMismatch' | 'valueOutOfRange' | 'valueUnsupported' | 'invalidValue'
   | 'emptyPhrase' | 'tooLarge' | 'tooMany' | 'empty' | 'duplicate'
   | 'invalidDsl' | 'unsupportedDsl' | 'invalidBinding' | 'targetChanged'
-  | 'invalidComposition' | 'tooManyGroups' | 'nestedGroupMismatch' | 'invalidFilterState';
+  | 'invalidComposition' | 'tooManyGroups' | 'nestedGroupMismatch' | 'invalidFilterState' | 'filterBindingChanged';
 
 type Failure = { readonly ok: false; readonly code: QueryFilterProblem };
 type Family = 'keyword' | 'text' | 'number' | 'boolean' | 'existence';

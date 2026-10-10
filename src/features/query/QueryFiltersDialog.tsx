@@ -1,14 +1,14 @@
-import { Check, Eye, ListFilter, ListTree, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { Check, Eye, ListFilter, ListTree, Plus, RefreshCw, Trash2, Unlink } from 'lucide-react';
 import { useId, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { IconButton, Modal, SelectControl } from '../../components/controls';
 import { matchesQueryDraft, type QueryDocument, type QueryDocumentPatch } from '../../domain/query';
-import { formatQueryDsl } from '../../domain/query-dsl';
 import { parseNestedFilterMapping } from '../../domain/query-filter-mapping';
 import {
-  MAX_FILTER_DSL_BYTES, MAX_FILTER_GROUPS, MAX_QUERY_FILTERS, createQueryFilter, filterGroupAccepts, previewQueryFilters, queryFilterDuplicate, queryFilterEnabled, queryFilterFieldEvidence, queryFilterValues,
+  MAX_FILTER_GROUPS, MAX_QUERY_FILTERS, createQueryFilter, filterGroupAccepts, queryFilterDuplicate, queryFilterEnabled, queryFilterFieldEvidence, queryFilterValues,
   type CellFilterSelection, type QueryFilter, type QueryFilterComposition, type QueryFilterDraft, type QueryFilterGroup, type QueryFilterJoin, type QueryFilterOperation, type QueryFilterPreview,
 } from '../../domain/query-filters';
+import { matchesQueryFilterBinding, previewQueryFilterDraft, queryFilterDraftChanged, queryFilterEvidenceSource } from '../../domain/query-filter-session';
 import type { FieldCatalog } from '../../domain/resource';
 import { NestedFilterEditor } from './NestedFilterEditor';
 import type { Loadable, MappingState } from './useQueryResources';
@@ -22,6 +22,21 @@ export function QueryFilterDraftBar({ count, enabled, onReview, onDiscard }: { c
     {enabled < count ? <span className="muted">{t('queryFilters:enabledCount', { enabled, total: count })}</span> : null}
     <span className="muted">{t('queryFilters:sessionDraft')}</span>
     <IconButton icon={Trash2} label={t('queryFilters:discard')} onClick={onDiscard} />
+  </div>;
+}
+
+export function QueryFilterBindingBar({ count, enabled, conflict, onReview, onDetach }: {
+  count: number; enabled: number; conflict: boolean; onReview: () => void; onDetach: () => void;
+}) {
+  const { t } = useTranslation();
+  return <div className="qfilter-draft-bar" role="group" aria-label={t('queryFilters:bound', { count })}>
+    <IconButton icon={ListFilter} label={t('queryFilters:editBound')} onClick={onReview} />
+    <span>{t('queryFilters:bound', { count })}</span>
+    <span className="muted">{t('queryFilters:enabledCount', { enabled, total: count })}</span>
+    <span className={conflict ? 'qfilter-warning' : 'muted'} role="status" title={t('queryFilters:sessionOnly')}>
+      {t(conflict ? 'queryFilters:filterBindingChanged' : 'queryFilters:boundApplied')}
+    </span>
+    <IconButton icon={Unlink} label={t('queryFilters:detach')} onClick={onDetach} />
   </div>;
 }
 
@@ -56,14 +71,12 @@ export function QueryFiltersDialog({ draft, current, initialSelection, initialNe
   const [review, setReview] = useState<{
     result: QueryFilterPreview; filters: readonly QueryFilter[]; composition: QueryFilterComposition | undefined;
     fields: Loadable<FieldCatalog>; mapping: Loadable<MappingState>;
-    discardDisabled: boolean;
     draft: QueryFilterDraft;
   } | null>(null);
   const composition = useMemo<QueryFilterComposition>(() => draft.composition ?? {
     mode: 'all', groups: draft.filters.length ? [{ id: 'default', mode: 'all', filterIds: draft.filters.map((filter) => filter.id) }] : [],
   }, [draft.composition, draft.filters]);
   const enabledIds = useMemo(() => new Set(draft.filters.filter(queryFilterEnabled).map((filter) => filter.id)), [draft.filters]);
-  const disabledCount = draft.filters.length - enabledIds.size;
   const candidateGroup = selectedGroup === 'new' || composition.groups.some((group) => group.id === selectedGroup && !group.nested)
     ? selectedGroup : composition.groups.find((group) => !group.nested)?.id ?? 'new';
   const catalog = fields.status === 'ready' && !fields.refreshing && !fields.refreshError ? fields.data : undefined;
@@ -73,15 +86,17 @@ export function QueryFiltersDialog({ draft, current, initialSelection, initialNe
   const mappingBusy = mapping.status === 'loading' || mapping.status === 'ready' && Boolean(mapping.refreshing);
   const fieldsBusy = fields.status === 'loading' || fields.status === 'ready' && Boolean(fields.refreshing);
   const busy = fieldsBusy || nestedActive && mappingBusy;
-  const currentTarget = targetCurrent && matchesQueryDraft(current, draft.source) && !conflict;
+  const bindingCurrent = !draft.binding || matchesQueryFilterBinding(draft.binding, current, draft.endpoint);
+  const currentTarget = targetCurrent && matchesQueryDraft(current, draft.source) && bindingCurrent && !conflict;
+  const evidenceSource = queryFilterEvidenceSource(draft);
   const field = useMemo(() => selection
-    ? queryFilterFieldEvidence(draft.source, draft.snapshot, selection.field, catalog) : null, [draft.source, draft.snapshot, selection, catalog]);
+    ? queryFilterFieldEvidence(evidenceSource, draft.snapshot, selection.field, catalog) : null, [evidenceSource, draft.snapshot, selection, catalog]);
   const values = useMemo(() => selection ? queryFilterValues(selection.value) : null, [selection]);
   const token = values?.ok ? values.values[valueIndex] ?? null : null;
   const presence = operation === 'exists' || operation === 'missing';
   const proposal = useMemo(() => selection
-    ? createQueryFilter(draft.source, draft.snapshot, selection, operation, token, catalog) : null,
-  [draft.source, draft.snapshot, selection, operation, token, catalog]);
+    ? createQueryFilter(evidenceSource, draft.snapshot, selection, operation, token, catalog) : null,
+  [evidenceSource, draft.snapshot, selection, operation, token, catalog]);
   const candidateProblem = proposal && !proposal.ok ? proposal.code
     : draft.filters.length >= MAX_QUERY_FILTERS ? 'tooMany'
       : candidateGroup === 'new' && composition.groups.length >= MAX_FILTER_GROUPS ? 'tooManyGroups'
@@ -89,13 +104,9 @@ export function QueryFiltersDialog({ draft, current, initialSelection, initialNe
   const reviewed = review?.draft === draft && review.filters === draft.filters && review.composition === draft.composition && review.fields === fields
     && review.mapping === mapping ? review.result : null;
   const preview = reviewed?.ok ? reviewed : null;
-  const formatted = useMemo(() => preview ? formatQueryDsl(preview.dsl) : null, [preview]);
-  const finalDsl = preview?.dsl === draft.source.dsl ? preview.dsl
-    : formatted?.ok && new TextEncoder().encode(formatted.formatted).length <= MAX_FILTER_DSL_BYTES
-    ? formatted.formatted : preview?.dsl ?? '';
-  const applyAllowed = currentTarget && !busy && preview !== null && enabledIds.size > 0
-    && (disabledCount === 0 || review?.discardDisabled === true);
-  const problem = !currentTarget ? 'draftChanged' : reviewed && !reviewed.ok ? reviewed.code : null;
+  const finalDsl = preview?.dsl ?? '';
+  const applyAllowed = currentTarget && !busy && preview !== null && queryFilterDraftChanged(draft);
+  const problem = !bindingCurrent ? 'filterBindingChanged' : !currentTarget ? 'draftChanged' : reviewed && !reviewed.ok ? reviewed.code : null;
   const operationLabel = (item: { operation: QueryFilterOperation; fieldType: string }) =>
     t(`queryFilters:${item.operation}${['text', 'match_only_text'].includes(item.fieldType)
       && (item.operation === 'include' || item.operation === 'exclude') ? 'Phrase' : ''}`);
@@ -124,7 +135,7 @@ export function QueryFiltersDialog({ draft, current, initialSelection, initialNe
     <div className="qfilter-review">
       <div className="qfilter-origin">
         <code>{draft.endpoint}</code><code>{draft.snapshot.index}</code>
-        <span>{t(newQuery ? 'queryFilters:newQuery' : 'queryFilters:sessionDraft')}</span>
+        <span title={t('queryFilters:sessionOnly')}>{t(newQuery ? 'queryFilters:newQuery' : draft.binding ? 'queryFilters:boundApplied' : 'queryFilters:sessionDraft')}</span>
       </div>
       <div className="qfilter-evidence">
         <span className="muted" title={t('queryFilters:evidenceBoundary')}>
@@ -142,7 +153,8 @@ export function QueryFiltersDialog({ draft, current, initialSelection, initialNe
         </span>
         <IconButton icon={RefreshCw} label={t('queryFilters:inspectNested')} disabled={!canInspect || !currentTarget || busy} onClick={onInspectNested} />
       </div> : null}
-      {nestedOpen ? <NestedFilterEditor draft={draft} composition={composition} catalog={catalog} mapping={mappingEvidence}
+      {nestedOpen ? <NestedFilterEditor draft={evidenceSource === draft.source ? draft : { ...draft, source: evidenceSource }}
+        composition={composition} catalog={catalog} mapping={mappingEvidence}
         disabled={!currentTarget || busy} onEdit={() => setReview(null)} onAdd={(proposal, targetGroup) => {
           if (!currentTarget || busy || draft.filters.length >= MAX_QUERY_FILTERS
             || targetGroup === 'new' && composition.groups.length >= MAX_FILTER_GROUPS) return null;
@@ -206,7 +218,7 @@ export function QueryFiltersDialog({ draft, current, initialSelection, initialNe
         <div className="qfilter-context" title={t('queryFilters:scoringBoundary')}>{t('queryFilters:filterContext')}</div>
         <div className="qfilter-state-summary" role="status">
           {t('queryFilters:enabledCount', { enabled: enabledIds.size, total: draft.filters.length })}
-          {enabledIds.size === 0 ? <span>{t('queryFilters:allDisabled')}</span> : null}
+          {enabledIds.size === 0 ? <span>{t(draft.binding ? 'queryFilters:boundDisabled' : 'queryFilters:allDisabled')}</span> : null}
         </div>
         <FilterJoinControl label={t('queryFilters:groupMatch')} mode={composition.mode} disabled={!currentTarget || composition.groups.length < 2}
           onChange={(mode) => changeFilters(draft.filters, { ...composition, mode })} />
@@ -266,33 +278,28 @@ export function QueryFiltersDialog({ draft, current, initialSelection, initialNe
               </option>
             </SelectControl>
           </div>
-          <IconButton icon={Trash2} label={t('queryFilters:remove', { field: item.field })} onClick={() => {
+          <IconButton icon={Trash2} label={t('queryFilters:remove', { field: item.field })} disabled={!currentTarget} onClick={() => {
+            if (!currentTarget) return;
             changeFilters(draft.filters.filter((entry) => entry.id !== item.id), { ...composition,
               groups: composition.groups.map((group) => ({ ...group, filterIds: group.filterIds.filter((id) => id !== item.id) }))
                 .filter((group) => group.filterIds.length) });
           }} />
         </li>)}
       </ul> : null}
+      {draft.binding && draft.filters.length === 0 ? <span className="qfilter-note" role="status">{t('queryFilters:boundRemoved')}</span> : null}
       <div className="qfilter-actions">
-        <button type="button" className="secondary compact-button" disabled={!currentTarget || busy || !draft.filters.length}
-          onClick={() => setReview({ result: previewQueryFilters(draft.source, draft.snapshot, draft.filters, catalog, draft.composition, mappingEvidence),
-            filters: draft.filters, composition: draft.composition, fields, mapping, discardDisabled: false, draft })}>
+        <button type="button" className="secondary compact-button" disabled={!currentTarget || busy || !draft.filters.length && !draft.binding}
+          onClick={() => setReview({ result: previewQueryFilterDraft(draft, catalog, mappingEvidence),
+            filters: draft.filters, composition: draft.composition, fields, mapping, draft })}>
           <Eye size={14} aria-hidden="true" />{t('queryFilters:preview')}
         </button>
         <IconButton icon={Trash2} label={t('queryFilters:discard')} onClick={onDiscard} />
       </div>
       {preview ? <>
         <details><summary>{t('queryFilters:currentDsl')}</summary><pre className="qfilter-current">{draft.source.dsl}</pre></details>
+        {draft.binding ? <details><summary>{t('queryFilters:baselineDsl')}</summary><pre className="qfilter-current">{draft.binding.baseline.dsl}</pre></details> : null}
         <label htmlFor={`${id}-dsl`}>{t('queryFilters:finalDsl')}</label>
         <textarea id={`${id}-dsl`} className="qfilter-code" value={finalDsl} readOnly spellCheck={false} />
-        {disabledCount > 0 && enabledIds.size > 0 ? <label className="qfilter-discard-disabled">
-          <input type="checkbox" checked={review?.discardDisabled ?? false} disabled={!currentTarget || busy}
-            onChange={(event) => {
-              const discardDisabled = event.currentTarget.checked;
-              setReview((current) => current ? { ...current, discardDisabled } : current);
-            }} />
-          <span>{t('queryFilters:discardDisabled', { count: disabledCount })}</span>
-        </label> : null}
       </> : null}
       {problem ? <div className="notice error" role="alert">{t(`queryFilters:${problem}`)}</div> : null}
       <div className="dialog-actions">

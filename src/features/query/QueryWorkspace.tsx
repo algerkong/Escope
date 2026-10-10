@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import type { ConnectionProfile } from '../../domain/connection';
 import type { AiChatBackend } from '../../domain/ai-chat';
 import type { Preferences } from '../../domain/preferences';
-import { createQuery, matchesQueryDraft, type ExecutionState, type QueryDocument, type QueryDocumentPatch, type SnapshotRejection, type WorkspaceState } from '../../domain/query';
+import { createQuery, matchesQueryDraft, updateWorkspaceDocument, type ExecutionState, type QueryDocument, type QueryDocumentPatch, type SnapshotRejection, type WorkspaceState } from '../../domain/query';
 import { selectDataView } from '../../domain/data-views';
 import { IconButton, Modal } from '../../components/controls';
 import { PanelResizeHandle } from '../../components/PanelResizeHandle';
@@ -25,9 +25,11 @@ import { QueryLibraryDialog, SaveDraftDialog, useQueryLibrary, type SaveDraftRes
 import { QueryParametersDialog } from './QueryParametersDialog';
 import { RuntimeFieldsDialog } from './RuntimeFieldsDialog';
 import { QueryTimeRangeDialog, TimeRangeSummary } from './QueryTimeRangeDialog';
-import { QueryFilterDraftBar, QueryFiltersDialog } from './QueryFiltersDialog';
+import { QueryFilterBindingBar, QueryFilterDraftBar, QueryFiltersDialog } from './QueryFiltersDialog';
 import { QuerySortDialog } from './QuerySortDialog';
-import { queryFilterEnabled, type CellFilterSelection, type QueryFilterDraft } from '../../domain/query-filters';
+import { queryFilterEnabled, type CellFilterSelection, type QueryFilterBinding, type QueryFilterDraft } from '../../domain/query-filters';
+import { bindAppliedQueryFilters, hasPendingQueryFilters, matchesQueryFilterBinding, previewQueryFilterDraft, queryFilterDraftChanged } from '../../domain/query-filter-session';
+import { parseNestedFilterMapping } from '../../domain/query-filter-mapping';
 import { copyQueryTimeRange, validTimeRangeZone } from '../../domain/query-time-range';
 import type { FieldCatalog } from '../../domain/resource';
 import { QueryExchangeDialog } from './QueryExchangeDialog';
@@ -125,7 +127,11 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const [timeSource, setTimeSource] = useState<{ query: QueryDocument; endpoint: string; catalog?: FieldCatalog; initialTimeZone: string } | null>(null);
   const [sortSource, setSortSource] = useState<{ query: QueryDocument; endpoint: string } | null>(null);
   const [filterDrafts, setFilterDrafts] = useState<Record<string, QueryFilterDraft>>({});
-  const [filterDialog, setFilterDialog] = useState<{ queryId: string; instanceId: string; selection?: CellFilterSelection; nested?: boolean } | null>(null);
+  const [filterBindings, setFilterBindings] = useState<Record<string, QueryFilterBinding>>({});
+  const [filterDetach, setFilterDetach] = useState<QueryFilterBinding | null>(null);
+  const [filterDialog, setFilterDialog] = useState<{
+    queryId: string; instanceId: string; executionId: string | null; selection?: CellFilterSelection; nested?: boolean;
+  } | null>(null);
   const [savedEntryIds, setSavedEntryIds] = useState<Record<string, string>>({});
   const [exportSource, setExportSource] = useState<SnapshotExportSource | null>(null);
   const [exportVisible, setExportVisible] = useState(false);
@@ -138,7 +144,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   }), [state.activeConnectionId, homeView]);
   const query = tab?.document ?? home;
   const queryId = query.id;
-  const hasPendingFilters = (filterDrafts[queryId]?.filters.length ?? 0) > 0;
+  const hasPendingFilters = hasPendingQueryFilters(filterDrafts[queryId]);
   const reviewingSort = sortSource?.query.id === queryId;
   const showingQuery = tab?.kind === 'query';
   const recoveryTab = recovery?.workspace.tabs.find((item) => item.document.id === queryId);
@@ -156,8 +162,8 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const dirtyVisualIds = useMemo(() => new Set(recovery
     ? recovery.workspace.tabs.filter((tab) => (tab.visualDraft?.problems.length ?? 0) > 0).map((tab) => tab.document.id)
     : Object.entries(visualDrafts).filter(([, draft]) => draft.problems.length > 0).map(([id]) => id)), [visualDrafts, recovery]);
-  const dirtyDraftIds = useMemo(() => new Set([...dirtyVisualIds,
-    ...Object.entries(filterDrafts).filter(([, draft]) => draft.filters.length > 0).map(([id]) => id)]), [dirtyVisualIds, filterDrafts]);
+  const dirtyDraftIds = useMemo(() => new Set([...dirtyVisualIds, ...Object.keys(filterBindings),
+    ...Object.entries(filterDrafts).filter(([, draft]) => hasPendingQueryFilters(draft)).map(([id]) => id)]), [dirtyVisualIds, filterDrafts, filterBindings]);
   // In visual mode an invalid/unsupported draft means the displayed DSL is stale behind it; saving
   // then would silently persist the old text, so the draft actions are disabled until it is fixed
   // or the editor is switched back to JSON, where the textarea is the source of truth.
@@ -220,6 +226,11 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
       const kept = Object.entries(current).filter(([id]) => documentIds.includes(id));
       return kept.length === Object.keys(current).length ? current : Object.fromEntries(kept);
     });
+    setFilterBindings((current) => {
+      const kept = Object.entries(current).filter(([id]) => documentIds.includes(id));
+      return kept.length === Object.keys(current).length ? current : Object.fromEntries(kept);
+    });
+    setFilterDetach((current) => current && !documentIds.includes(current.applied.id) ? null : current);
     setFilterDialog((current) => current && !documentIds.includes(current.queryId) ? null : current);
     setSortSource((current) => current && !documentIds.includes(current.query.id) ? null : current);
   }, [documentIds, release]);
@@ -290,6 +301,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
     setVisualDrafts(prune);
     setSavedEntryIds(prune);
     setFilterDrafts(prune);
+    setFilterBindings(prune);
     requestAnimationFrame(() => {
       if (previousFocus?.isConnected && previousFocus !== document.body
         && !previousFocus.closest('[role="dialog"]') && document.activeElement === previousFocus) return;
@@ -350,13 +362,17 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
     && state.activeTabId === sortSource.query.id
     && profiles.some((profile) => profile.id === sortSource.query.connectionId && profile.endpoint === sortSource.endpoint);
   const pendingFilters = filterDrafts[query.id];
+  const boundFilters = filterBindings[query.id];
   const reviewedFilters = filterDialog ? filterDrafts[filterDialog.queryId] : undefined;
   const filterTab = reviewedFilters ? state.tabs.find((item) => item.document.id === reviewedFilters.source.id) : undefined;
   const filterExecution = reviewedFilters ? entries[reviewedFilters.source.id]?.state : undefined;
   const filterTargetCurrent = reviewedFilters !== undefined && !restoring && active && !saveBlockedByVisual && state.activeTabId === reviewedFilters.source.id
     && profiles.some((profile) => profile.id === reviewedFilters.snapshot.connectionId && profile.endpoint === reviewedFilters.endpoint)
-    && (filterExecution?.status === 'success' || filterExecution?.status === 'partial')
-    && filterExecution.snapshot.requestId === reviewedFilters.snapshot.requestId;
+    && (reviewedFilters.binding
+      ? filterExecution?.status !== 'running'
+        && (filterExecution && 'snapshot' in filterExecution ? filterExecution.snapshot.requestId : null) === filterDialog?.executionId
+      : (filterExecution?.status === 'success' || filterExecution?.status === 'partial')
+        && filterExecution.snapshot.requestId === reviewedFilters.snapshot.requestId);
   const discardFilters = (id: string) => {
     setFilterDrafts((current) => Object.fromEntries(Object.entries(current).filter(([key]) => key !== id)));
     setFilterDialog((current) => current?.queryId === id ? null : current);
@@ -364,12 +380,20 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const canFilterCell = available && active && !restoring && !saveBlockedByVisual && target !== undefined && !endpointChanged
     && Boolean(entry?.endpoint) && (execution.status === 'success' || execution.status === 'partial')
     && (showingQuery || tab?.kind === 'index' && restoreQuery !== undefined);
+  const reviewFilters = (selection?: CellFilterSelection, nested = false) => {
+    const snapshot = execution.status === 'success' || execution.status === 'partial' ? execution.snapshot : pendingFilters?.snapshot ?? boundFilters?.snapshot;
+    if (!active || restoring || !snapshot) return;
+    const draft: QueryFilterDraft = hasPendingQueryFilters(pendingFilters) ? pendingFilters!
+      : boundFilters ? { source: structuredClone(query), snapshot, endpoint: boundFilters.endpoint,
+        filters: structuredClone(boundFilters.filters), composition: structuredClone(boundFilters.composition), binding: boundFilters }
+        : { source: structuredClone(query), snapshot, endpoint: entry?.endpoint ?? '', filters: [] };
+    setFilterDrafts((current) => ({ ...current, [query.id]: draft }));
+    setFilterDialog({ queryId: query.id, instanceId: crypto.randomUUID(),
+      executionId: 'snapshot' in execution ? execution.snapshot.requestId : null, selection, nested });
+  };
   const openCellFilter = (selection?: CellFilterSelection, nested = false) => {
     if (!canFilterCell || !entry?.endpoint || execution.status !== 'success' && execution.status !== 'partial') return;
-    const draft: QueryFilterDraft = pendingFilters?.filters.length ? pendingFilters
-      : { source: structuredClone(query), snapshot: execution.snapshot, endpoint: entry.endpoint, filters: [] };
-    setFilterDrafts((current) => ({ ...current, [query.id]: draft }));
-    setFilterDialog({ queryId: query.id, instanceId: crypto.randomUUID(), selection, nested });
+    reviewFilters(selection, nested);
   };
   const currentCheck = checked[query.id]?.source === query.dsl ? checked[query.id] : null;
   const savedFormat = formatted[query.id];
@@ -546,10 +570,13 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
           {currentCheck && !currentCheck.error ? <span role="status">{t('query:dslValid')}</span> : null}
           <span className="status-spacer" /><span>JSON</span><span>UTF-8</span></div>
       </section> : null}
-      {pendingFilters?.filters.length ? <QueryFilterDraftBar count={pendingFilters.filters.length}
+      {hasPendingFilters && pendingFilters ? <QueryFilterDraftBar count={pendingFilters.filters.length}
         enabled={pendingFilters.filters.filter(queryFilterEnabled).length}
-        onReview={() => setFilterDialog({ queryId: query.id, instanceId: crypto.randomUUID() })}
-        onDiscard={() => discardFilters(query.id)} /> : null}
+        onReview={() => reviewFilters()}
+        onDiscard={() => discardFilters(query.id)} />
+        : boundFilters ? <QueryFilterBindingBar count={boundFilters.filters.length} enabled={boundFilters.filters.filter(queryFilterEnabled).length}
+          conflict={!matchesQueryFilterBinding(boundFilters, query, endpoint)}
+          onReview={() => reviewFilters()} onDetach={() => setFilterDetach(boundFilters)} /> : null}
       {'snapshot' in execution && execution.snapshot.timeRange ? <TimeRangeSummary time={execution.snapshot.timeRange} /> : null}
       <QueryResults kind={showingQuery ? 'query' : 'preview'} query={query} entry={entry}
         available={available} stale={stale} endpointChanged={endpointChanged} documentIds={documentIds} active={active} wrapJson={preferences.wrapJson}
@@ -661,20 +688,51 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
       onFiltersChange={(filters, composition) => setFilterDrafts((current) => current[reviewedFilters.source.id] === reviewedFilters
         ? { ...current, [reviewedFilters.source.id]: { ...reviewedFilters, filters, composition } } : current)}
       onDiscard={() => discardFilters(reviewedFilters.source.id)}
-      onClose={() => setFilterDialog(null)}
+      onClose={() => {
+        if (reviewedFilters.binding && !queryFilterDraftChanged(reviewedFilters)) discardFilters(reviewedFilters.source.id);
+        else setFilterDialog(null);
+      }}
       onCommit={(source, patch) => {
-        if (!filterTargetCurrent || !matchesQueryDraft(filterTab?.document, source) || patch.dsl === undefined) return false;
+        if (!filterTargetCurrent || !matchesQueryDraft(filterTab?.document, source) || patch.dsl === undefined
+          || filterBindings[source.id] !== reviewedFilters.binding || !queryFilterDraftChanged(reviewedFilters)) return false;
+        const fields = fieldsFor(reviewedFilters.snapshot.connectionId, reviewedFilters.endpoint, reviewedFilters.snapshot.index.trim());
+        const mapping = mappingFor(reviewedFilters.snapshot.connectionId, reviewedFilters.endpoint, reviewedFilters.snapshot.index.trim());
+        const catalog = fields.status === 'ready' && !fields.refreshing && !fields.refreshError ? fields.data : undefined;
+        const evidence = mapping.status === 'ready' && !mapping.refreshing && !mapping.refreshError ? parseNestedFilterMapping(mapping.data.raw) : undefined;
+        const verified = previewQueryFilterDraft(reviewedFilters, catalog, evidence);
+        if (!verified.ok || verified.dsl !== patch.dsl || JSON.stringify(verified.patch.timeRange) !== JSON.stringify(patch.timeRange)) return false;
+        const applied = filterTab?.kind === 'index'
+          ? { ...createQuery(source.connectionId, source.resultView), name: source.index, index: source.index, dsl: verified.dsl }
+          : updateWorkspaceDocument(state, source.id, verified.patch).tabs.find((tab) => tab.document.id === source.id)?.document;
+        if (!applied) return false;
+        const binding = reviewedFilters.filters.length ? bindAppliedQueryFilters(reviewedFilters, applied, catalog, evidence) : null;
+        if (reviewedFilters.filters.length && !binding) return false;
         if (filterTab?.kind === 'index') {
           if (!restoreQuery) return false;
-          restoreQuery({ ...createQuery(source.connectionId, source.resultView), name: source.index, index: source.index, dsl: patch.dsl });
+          restoreQuery(applied);
         } else {
-          if (updateQuery(source.id, patch, source) === false) return false;
+          if (updateQuery(source.id, verified.patch, source) === false) return false;
           if (recovery) recovery.setEditorMode(source.id, 'dsl');
           else setEditorModes((current) => ({ ...current, [source.id]: 'dsl' }));
         }
+        setFilterBindings((current) => binding ? { ...current, [applied.id]: binding }
+          : Object.fromEntries(Object.entries(current).filter(([id]) => id !== applied.id)));
         discardFilters(source.id);
         return true;
       }} /> : null}
+    <Modal open={filterDetach !== null} onClose={() => setFilterDetach(null)} title={t('queryFilters:detachTitle')}
+      description={t('queryFilters:detachDetail', { count: filterDetach?.filters.length ?? 0 })}>
+      <div className="dialog-actions">
+        <button type="button" className="secondary" onClick={() => setFilterDetach(null)}>{t('cancel')}</button>
+        <button type="button" className="danger" disabled={!filterDetach || filterBindings[filterDetach.applied.id] !== filterDetach}
+          onClick={() => {
+            if (!filterDetach || filterBindings[filterDetach.applied.id] !== filterDetach) return;
+            setFilterBindings((current) => Object.fromEntries(Object.entries(current).filter(([id]) => id !== filterDetach.applied.id)));
+            discardFilters(filterDetach.applied.id);
+            setFilterDetach(null);
+          }}>{t('queryFilters:detach')}</button>
+      </div>
+    </Modal>
     {exportSource ? <SnapshotExportDialog open={exportVisible && active} source={exportSource} service={snapshotExportService}
       targetAvailable={state.tabs.some((item) => item.document.id === exportSource.queryId)
         && profiles.some((profile) => profile.id === exportSource.connectionId && profile.endpoint === exportSource.endpoint)}

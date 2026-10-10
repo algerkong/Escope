@@ -55,9 +55,6 @@
 .qfilter-enabled:disabled { opacity: .55; }
 .qfilter-list > li[data-filter-disabled="true"] .qfilter-item > strong { color: var(--muted); }
 .qfilter-item > .qfilter-disabled-label { border-bottom: 1px dashed currentColor; }
-.qfilter-discard-disabled { display: flex; align-items: start; gap: 6px; min-width: 0; font-size: .75rem; }
-.qfilter-discard-disabled > input { flex-shrink: 0; margin-top: 2px; }
-.qfilter-discard-disabled > span { min-width: 0; overflow-wrap: anywhere; }
 @media (forced-colors: active) {
   .qfilter-segments input { position: static; opacity: 1; width: 14px; height: 14px; margin-left: 6px; appearance: auto; }
 }

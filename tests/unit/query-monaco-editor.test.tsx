@@ -9,6 +9,7 @@ import { loadQueryEditor, type QueryEditorRuntime } from '../../src/features/que
 import { defaultPreferences } from '../../src/domain/preferences';
 import { i18n } from '../../src/locales';
 import { createEditorView, editorRuntime, failEditorWorker } from './monaco-view-mock';
+import type { CancellationToken, languages } from 'monaco-editor/editor/editor.api';
 
 const original = '{"query":{"term":{"id":9007199254740993}},"v":0.1234567890123456789,"escaped":"\\u0061"}';
 const stores: QueryEditorModels[] = [];
@@ -226,5 +227,87 @@ describe('Monaco view integration with real text models', () => {
     expect(screen.queryByRole('search')).not.toBeInTheDocument();
     fireEvent.keyDown(f.input(), { key: 'f', ctrlKey: true });
     expect(screen.getByRole('searchbox')).toHaveValue('');
+  });
+
+  it('localizes model-scoped suggestions and invalidates displayed suggestions with their evidence', async () => {
+    const registration = vi.spyOn(editorRuntime.languages, 'registerCompletionItemProvider');
+    const target = { connectionId: 'c1', endpoint: 'http://localhost:9200', index: 'logs' };
+    const completions = { target, fields: { target, catalog: { indices: ['logs'], fields: [{
+      name: 'status', conflict: false, types: [{ type: 'keyword', searchable: true, aggregatable: true, metadata: false }],
+    }] } } };
+    const f = setup({ value: '{"fields":["st"]}', completions });
+    const trigger = vi.spyOn(f.view(), 'trigger');
+    const provider = () => registration.mock.calls.at(-1)![1];
+    const model = f.view().getModel()!;
+    const token: CancellationToken = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) };
+    const request = (value = provider()) => value.provideCompletionItems(model, model.getPositionAt(14),
+      { triggerKind: 0 }, token) as languages.CompletionList;
+    expect(request().suggestions[0]?.label).toEqual({ label: 'status', description: 'Field caps: keyword' });
+    const old = provider();
+    await act(() => i18n.changeLanguage('zh-CN'));
+    expect(request(old).suggestions).toEqual([]);
+    expect(request().suggestions[0]?.label).toEqual({ label: 'status', description: '字段证据：keyword' });
+    expect(trigger).toHaveBeenCalledWith('escope', 'hideSuggestWidget', null);
+    const translated = provider();
+    f.update({ completions: { target } });
+    expect(request(translated).suggestions).toEqual([]);
+    expect(request().suggestions).toEqual([]);
+    expect(f.onChange).not.toHaveBeenCalled();
+    registration.mockRestore();
+  });
+
+  it('gates the explicit suggestion command during IME, hidden/read-only views and dialogs', () => {
+    const f = setup({ value: '{"fields":[""]}' });
+    const trigger = vi.spyOn(f.view(), 'trigger');
+    const invoke = () => act(() => f.handle.current?.suggest());
+    invoke();
+    expect(trigger).toHaveBeenCalledWith('escope', 'editor.action.triggerSuggest', null);
+    trigger.mockClear();
+    fireEvent.compositionStart(f.input());
+    invoke();
+    expect(trigger).not.toHaveBeenCalledWith('escope', 'editor.action.triggerSuggest', null);
+    fireEvent.compositionEnd(f.input());
+    f.update({ readOnly: true });
+    invoke();
+    f.update({ readOnly: false, active: false });
+    invoke();
+    f.update({ active: true });
+    const dialog = document.createElement('div');
+    dialog.setAttribute('role', 'dialog');
+    document.body.append(dialog);
+    invoke();
+    dialog.remove();
+    expect(trigger).not.toHaveBeenCalledWith('escope', 'editor.action.triggerSuggest', null);
+    expect(f.onChange).not.toHaveBeenCalled();
+  });
+
+  it('updates native suggestion empty states and accessible names after a language change', async () => {
+    const f = setup();
+    const widget = document.createElement('div');
+    widget.className = 'suggest-widget';
+    const message = document.createElement('div');
+    message.className = 'message';
+    message.textContent = 'No suggestions.';
+    const list = document.createElement('div');
+    list.setAttribute('role', 'listbox');
+    list.setAttribute('aria-label', 'Suggest');
+    const row = document.createElement('div');
+    row.className = 'monaco-list-row';
+    row.setAttribute('aria-label', 'status, Field');
+    list.append(row);
+    widget.append(message, list);
+    f.view().getDomNode()!.append(widget);
+    await waitFor(() => expect(message).toHaveTextContent('No matching local suggestions.'));
+    expect(list).toHaveAttribute('aria-label', 'Local suggestions');
+    await act(() => i18n.changeLanguage('zh-CN'));
+    await waitFor(() => expect(message).toHaveTextContent('没有匹配的本地建议。'));
+    expect(list).toHaveAttribute('aria-label', '本地补全');
+    expect(row).toHaveAttribute('aria-label', 'status, 字段');
+    message.textContent = 'Loading...';
+    await waitFor(() => expect(message).toHaveTextContent('正在加载建议'));
+    await act(() => i18n.changeLanguage('en-US'));
+    expect(message).toHaveTextContent('Loading suggestions');
+    expect(row).toHaveAttribute('aria-label', 'status, Field');
+    expect(f.onChange).not.toHaveBeenCalled();
   });
 });

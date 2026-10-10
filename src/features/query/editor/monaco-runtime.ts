@@ -9,10 +9,12 @@ import 'monaco-editor/features/wordOperations/register';
 import 'monaco-editor/features/linesOperations/register';
 import 'monaco-editor/features/multicursor/register';
 import 'monaco-editor/features/readOnlyMessage/register';
+// In 0.57 the suggest feature entry registers only inline completions, not this widget.
+import 'monaco-editor/editor/contrib/suggest/browser/suggestController';
 import 'monaco-editor/features/tokenization/register';
 import EditorWorker from 'monaco-editor/editor/editor.worker?worker';
 
-export const { editor, Uri, MarkerSeverity } = monaco;
+export const { editor, languages, Uri, MarkerSeverity } = monaco;
 
 const workerFailures = new Set<() => void>();
 let workerFailed = false;

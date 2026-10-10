@@ -15,6 +15,11 @@ describe('Monaco query options and semantic theme', () => {
       suggestOnTriggerCharacters: false, formatOnPaste: false, formatOnType: false,
       autoIndentOnPaste: false, trimAutoWhitespace: false, unusualLineTerminators: 'off',
       dropIntoEditor: { enabled: false }, pasteAs: { enabled: false },
+      acceptSuggestionOnEnter: 'off', acceptSuggestionOnCommitCharacter: false, tabCompletion: 'off',
+      snippetSuggestions: 'none', suggestSelection: 'first', inlineSuggest: { enabled: false }, suggest: {
+        selectionMode: 'never', shareSuggestSelections: false, localityBonus: false,
+        preview: false, showStatusBar: false, insertMode: 'replace',
+      },
     });
   });
 

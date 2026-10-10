@@ -4,11 +4,14 @@ import { useTranslation } from 'react-i18next';
 import type { editor } from 'monaco-editor/editor/editor.api';
 import type { Preferences } from '../../../domain/preferences';
 import type { QueryDslError } from '../../../domain/query-dsl';
+import type { QueryCompletionContext } from '../../../domain/query-completions';
 import { IconButton } from '../../../components/controls';
 import { loadQueryEditor, type QueryEditorRuntime } from './monaco-loader';
 import { queryEditorOptions, queryEditorTheme } from './monaco-options';
 import { QueryEditorModels, type QueryEditorModel } from './query-editor-models';
 import { QueryEditorFind } from './QueryEditorFind';
+import { registerQueryCompletions } from './monaco-completions';
+import { localizeQueryCompletionWidget } from './monaco-completion-labels';
 import '../../../styles/query-editor.css';
 
 export interface QueryEditorHistory {
@@ -22,6 +25,7 @@ export interface QueryDslEditorHandle {
   undo: () => void;
   redo: () => void;
   find: () => void;
+  suggest: () => void;
 }
 
 interface Props {
@@ -33,6 +37,7 @@ interface Props {
   active: boolean;
   readOnly: boolean;
   diagnostic: QueryDslError | null;
+  completions?: QueryCompletionContext;
   onChange: (value: string) => void;
   onHistory: (history: QueryEditorHistory | null) => void;
 }
@@ -72,6 +77,11 @@ export function QueryDslEditor(props: Props) {
   useImperativeHandle(props.ref, () => ({
     focus, undo: () => command('undo'), redo: () => command('redo'),
     find: () => { if (latest.current.active && current.current) setFindFor(latest.current.queryId); },
+    suggest: () => {
+      if (!latest.current.active || latest.current.readOnly || composing.current || document.querySelector('[role="dialog"]')) return;
+      focus();
+      current.current?.instance.trigger('escope', 'editor.action.triggerSuggest', null);
+    },
   }));
 
   useLayoutEffect(() => {
@@ -129,7 +139,11 @@ export function QueryDslEditor(props: Props) {
       latest.current.onHistory({ id: queryId, canUndo: entry.model.canUndo(), canRedo: entry.model.canRedo() });
     };
     const changed = instance.onDidChangeModelContent(() => {
-      if (entry.synchronizing || latest.current.queryId !== queryId || entry.model.isDisposed()) return;
+      if (entry.synchronizing) {
+        instance.trigger('escope', 'hideSuggestWidget', null);
+        return;
+      }
+      if (latest.current.queryId !== queryId || entry.model.isDisposed()) return;
       const source = models.read(entry);
       if (latest.current.active && !latest.current.readOnly) latest.current.onChange(source);
       // Monaco finishes updating the undo/redo stack after its content notification.
@@ -153,6 +167,35 @@ export function QueryDslEditor(props: Props) {
     const model = record.current.model;
     latest.current.onHistory({ id: queryId, canUndo: model.canUndo(), canRedo: model.canRedo() });
   }, [ready, models, queryId, value]);
+
+  useLayoutEffect(() => {
+    if (!ready || !record.current) return;
+    const { instance, runtime } = ready;
+    instance.trigger('escope', 'hideSuggestWidget', null);
+    if (!active || readOnly) return;
+    const model = record.current.model;
+    const registration = registerQueryCompletions(runtime, model, () => {
+      const current = latest.current;
+      if (!current.active || current.readOnly || current.queryId !== queryId || composing.current
+        || instance.getModel() !== model || document.querySelector('[role="dialog"]')) return null;
+      return current.completions ?? { target: null };
+    }, (completion) => t(`query:${completion.origin === 'parameter' ? 'completionParameter'
+      : completion.origin === 'mapped' ? 'completionMapped' : completion.shadows ? 'completionShadow' : 'completionRuntime'}`,
+    { type: completion.type }));
+    return () => {
+      registration.dispose();
+      if (current.current === ready) instance.trigger('escope', 'hideSuggestWidget', null);
+    };
+  }, [ready, models, queryId, active, readOnly, props.completions, t]);
+
+  useLayoutEffect(() => {
+    if (!ready) return;
+    const labels = localizeQueryCompletionWidget(ready.instance, {
+      title: t('query:suggestDsl'), empty: t('query:completionEmpty'), loading: t('query:completionLoading'),
+      field: t('query:completionFieldKind'), parameter: t('query:completionParameterKind'),
+    });
+    return () => labels.dispose();
+  }, [ready, t]);
 
   useLayoutEffect(() => {
     if (!ready || !record.current) return;
@@ -202,7 +245,10 @@ export function QueryDslEditor(props: Props) {
     {ready && findFor === queryId && active ? <QueryEditorFind key={queryId} instance={ready.instance}
       onClose={() => { setFindFor(null); focus(); }} /> : null}
     <div className="dsl-editor" ref={shell} tabIndex={-1} aria-busy={!ready && !failed}
-      onCompositionStart={() => { composing.current = true; }} onCompositionEnd={() => { composing.current = false; }}
+      onCompositionStart={() => {
+        composing.current = true;
+        current.current?.instance.trigger('escope', 'hideSuggestWidget', null);
+      }} onCompositionEnd={() => { composing.current = false; }}
       onFocus={(event) => { if (event.target === event.currentTarget && current.current && active) focus(); }}
       onKeyDownCapture={(event) => {
         if (!active || event.nativeEvent.isComposing || composing.current || event.keyCode === 229

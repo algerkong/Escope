@@ -4,6 +4,9 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import * as runtime from '../../src/features/query/editor/monaco-runtime';
 import { queryEditorOptions } from '../../src/features/query/editor/monaco-options';
 import { defaultPreferences } from '../../src/domain/preferences';
+import { registerQueryCompletions } from '../../src/features/query/editor/monaco-completions';
+import { localizeQueryCompletionWidget } from '../../src/features/query/editor/monaco-completion-labels';
+import type { IDisposable } from 'monaco-editor/editor/editor.api';
 
 afterAll(() => { vi.unstubAllGlobals(); });
 
@@ -73,6 +76,61 @@ describe('bundled Monaco runtime boundary', () => {
     expect(() => environment.getWorker!('', 'editorWorkerService')).toThrow('queryEditorWorkerUnavailable');
     expect(failed).toHaveBeenCalledOnce();
     listener.dispose();
+  });
+
+  it.each(['status', 'st${value}"\\raw'])('shows, explicitly accepts and undoes a literal completion on a real Monaco view: %s', async (name) => {
+    const metrics = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+      font: '', measureText: () => ({ width: 8 }),
+    } as unknown as CanvasRenderingContext2D);
+    const host = document.createElement('div');
+    document.body.append(host);
+    const source = '{"query":{"term":{"st":9007199254740993}},"exact":0.1234567890123456789}';
+    const model = runtime.editor.createModel(source, 'json', runtime.Uri.from({ scheme: 'escope-query', path: '/real-completion.json' }));
+    const target = { connectionId: 'c1', endpoint: 'http://localhost:9200', index: 'logs' };
+    const registration = registerQueryCompletions(runtime, model, () => ({ target, fields: { target, catalog: {
+      indices: ['logs'], fields: [{ name, conflict: false,
+        types: [{ type: 'keyword', searchable: true, aggregatable: true, metadata: false }] }],
+    } } }), (item) => `Field caps: ${item.type}`);
+    let instance: ReturnType<typeof runtime.editor.create> | undefined;
+    let labels: IDisposable | undefined;
+    try {
+      instance = runtime.editor.create(host, {
+        ...queryEditorOptions(defaultPreferences, 'Query DSL', false),
+        automaticLayout: false, dimension: { width: 500, height: 190 }, model,
+      });
+      labels = localizeQueryCompletionWidget(instance, {
+        title: 'Local suggestions', empty: 'No matching local suggestions.', loading: 'Loading suggestions',
+        field: 'Field evidence', parameter: 'Parameter',
+      });
+      instance.focus();
+      instance.setPosition(model.getPositionAt(source.indexOf('"st"') + 3));
+      const action = instance.getAction('editor.action.triggerSuggest');
+      expect(action).not.toBeNull();
+      await action!.run();
+      await vi.waitFor(() => expect(host.querySelector('.suggest-widget .monaco-list-row')?.textContent).toContain(name));
+      await vi.waitFor(() => expect(host.querySelector('.suggest-widget [role="listbox"]')).toHaveAttribute('aria-label', 'Local suggestions'));
+      expect(host.querySelector('.suggest-widget .monaco-list-row')).toHaveAttribute('aria-label', expect.stringContaining('Field evidence'));
+      expect(model.getValue()).toBe(source);
+      instance.trigger('test', 'selectNextSuggestion', null);
+      instance.trigger('test', 'acceptSelectedSuggestion', null);
+      expect(model.getValue()).toBe(source.replace('"st"', () => JSON.stringify(name)));
+      instance.trigger('test', 'undo', null);
+      expect(model.getValue()).toBe(source);
+      instance.trigger('test', 'redo', null);
+      expect(model.getValue()).toBe(source.replace('"st"', () => JSON.stringify(name)));
+      instance.trigger('test', 'hideSuggestWidget', null);
+      model.setValue('{"fields":["missing"]}');
+      instance.setPosition(model.getPositionAt(19));
+      await action!.run();
+      await vi.waitFor(() => expect(host.querySelector('.suggest-widget .message')).toHaveTextContent('No matching local suggestions.'));
+    } finally {
+      labels?.dispose();
+      registration.dispose();
+      instance?.dispose();
+      model.dispose();
+      host.remove();
+      metrics.mockRestore();
+    }
   });
 
   it('permits same-origin workers without allowing remote scripts, blob workers, eval or new network origins', () => {

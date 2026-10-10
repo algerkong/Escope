@@ -15,6 +15,8 @@ import { enLive, zhLive } from '../../src/locales/query-live';
 import type { PitOpenRequest, QueryBackend, QueryRequest, QueryResponse, ResourceRequest, ResourceResponse } from '../../src/services/ipc';
 import type { SnapshotExportService } from '../../src/services/query-export';
 import type { SnapshotExportOutcome, SnapshotExportRequest } from '../../src/domain/query-export';
+import type { CancellationToken, IRange, languages } from 'monaco-editor/editor/editor.api';
+import { createEditorView, editorRuntime } from './monaco-view-mock';
 
 const baseProfile: ConnectionProfile = {
   id: 'c1', displayName: 'Fixture ES', endpoint: 'https://es.test', environment: 'development', sortOrder: 0, auth: 'none',
@@ -116,6 +118,108 @@ const runButton = () => screen.getByRole('button', { name: '执行查询' });
 const fields = () => screen.getByLabelText('查询 DSL');
 
 beforeEach(async () => { await i18n.changeLanguage('zh-CN'); });
+
+describe('workspace local completion evidence', () => {
+  function completions() {
+    const registered = vi.spyOn(editorRuntime.languages, 'registerCompletionItemProvider');
+    const token: CancellationToken = { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) };
+    const latest = () => registered.mock.calls.at(-1)![1];
+    const request = (provider = latest()) => {
+      const model = createEditorView.mock.results.at(-1)!.value.getModel()!;
+      return provider.provideCompletionItems(model, model.getPositionAt(model.getValue().indexOf('""') + 1),
+        { triggerKind: 0 }, token) as languages.CompletionList;
+    };
+    return { registered, latest, request };
+  }
+
+  it('uses an explicit same-target field read, without suggesting or fetching for another tab', async () => {
+    const backend = makeBackend();
+    const f = completions();
+    const { user } = setup(backend, { seeds: [
+      { index: 'orders-1', dsl: '{"fields":[""]}' }, { index: 'other-1', dsl: '{"fields":[""]}' },
+    ] });
+    await waitFor(() => expect(backend.readResource).toHaveBeenCalledOnce());
+    await user.click(screen.getByRole('button', { name: '本地补全' }));
+    expect(f.request().suggestions).toEqual([]);
+    expect(backend.readResource).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole('button', { name: '刷新字段' }));
+    await waitFor(() => expect(f.request().suggestions).toEqual([expect.objectContaining({ label: {
+      label: 'legacy', description: '字段证据：keyword',
+    } })]));
+    const previous = f.latest();
+    await user.click(screen.getAllByRole('tab')[2]!);
+    expect(f.request(previous).suggestions).toEqual([]);
+    expect(f.request().suggestions).toEqual([]);
+    await user.click(screen.getByRole('button', { name: '本地补全' }));
+    expect(backend.readResource).toHaveBeenCalledTimes(2);
+    await user.click(screen.getByRole('button', { name: '刷新字段' }));
+    await waitFor(() => expect(f.request().suggestions).toEqual([expect.objectContaining({ label: {
+      label: 'amount', description: '字段证据：long',
+    } })]));
+    const completion = f.request().suggestions[0]!;
+    const model = createEditorView.mock.results.at(-1)!.value.getModel()!;
+    act(() => {
+      model.pushStackElement();
+      model.pushEditOperations(null, [{ range: completion.range as IRange, text: completion.insertText }], () => null);
+      model.pushStackElement();
+    });
+    expect(fields()).toHaveValue('{"fields":["amount"]}');
+    await user.click(screen.getByRole('button', { name: '撤销编辑' }));
+    expect(fields()).toHaveValue('{"fields":[""]}');
+    expect(backend.execute).not.toHaveBeenCalled();
+    expect(backend.openPit).not.toHaveBeenCalled();
+    f.registered.mockRestore();
+  });
+
+  it('withdraws ready evidence during refresh and after a failed refresh, without falling back to old fields', async () => {
+    const backend = makeBackend();
+    const f = completions();
+    const { user } = setup(backend, { seeds: [{ index: 'orders-1', dsl: '{"fields":[""]}' }] });
+    await user.click(screen.getByRole('button', { name: '刷新字段' }));
+    await waitFor(() => expect(f.request().suggestions).toHaveLength(1));
+    const previous = f.latest();
+    const refresh = deferred<ResourceResponse>();
+    backend.readResource.mockImplementationOnce(() => refresh.promise);
+    await user.click(screen.getByRole('button', { name: '刷新字段' }));
+    expect(f.request(previous).suggestions).toEqual([]);
+    expect(f.request().suggestions).toEqual([]);
+    const sent = backend.readResource.mock.calls.at(-1)![0];
+    await act(async () => {
+      refresh.resolve({ requestId: sent.requestId, connectionId: sent.connectionId, endpoint: baseProfile.endpoint, rawResponse: 'invalid' });
+    });
+    expect(f.request().suggestions).toEqual([]);
+    expect(backend.execute).not.toHaveBeenCalled();
+    expect(backend.openPit).not.toHaveBeenCalled();
+    f.registered.mockRestore();
+  });
+
+  it('drops a replaced endpoint or removed connection and ignores a late old response', async () => {
+    const backend = makeBackend();
+    const f = completions();
+    const { user, control } = setup(backend, { seeds: [{ index: 'orders-1', dsl: '{"fields":[""]}' }] });
+    await user.click(screen.getByRole('button', { name: '刷新字段' }));
+    await waitFor(() => expect(f.request().suggestions).toHaveLength(1));
+    const previous = f.latest();
+    const refresh = deferred<ResourceResponse>();
+    backend.readResource.mockImplementationOnce(() => refresh.promise);
+    await user.click(screen.getByRole('button', { name: '刷新字段' }));
+    const sent = backend.readResource.mock.calls.at(-1)![0];
+    control.setEndpoint('https://replacement.test');
+    expect(f.request(previous).suggestions).toEqual([]);
+    expect(f.request().suggestions).toEqual([]);
+    await act(async () => {
+      refresh.resolve({ requestId: sent.requestId, connectionId: sent.connectionId,
+        endpoint: baseProfile.endpoint, rawResponse: capsOrders });
+    });
+    expect(f.request().suggestions).toEqual([]);
+    control.removeConnection();
+    expect(f.request().suggestions).toEqual([]);
+    expect(fields()).toHaveValue('{"fields":[""]}');
+    expect(backend.execute).not.toHaveBeenCalled();
+    expect(backend.openPit).not.toHaveBeenCalled();
+    f.registered.mockRestore();
+  });
+});
 
 function exportOutcome(request: SnapshotExportRequest): SnapshotExportOutcome {
   return {

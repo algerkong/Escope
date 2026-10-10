@@ -1,4 +1,4 @@
-import { Bookmark, Braces, Clock3, Database, FileCheck2, FileDown, History, Layers, ListOrdered, LoaderCircle, Pin, Play, Plus, Redo2, Save, Search, Settings, ShieldCheck, Star, TriangleAlert, Undo2, Variable } from 'lucide-react';
+import { Bookmark, Braces, Clock3, Database, FileCheck2, FileDown, History, Layers, ListOrdered, ListTree, LoaderCircle, Pin, Play, Plus, Redo2, Save, Search, Settings, ShieldCheck, Star, TriangleAlert, Undo2, Variable } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ConnectionProfile } from '../../domain/connection';
@@ -54,6 +54,7 @@ import { usePinnedFilters } from './usePinnedFilters';
 import { PinFiltersDialog, PinnedFiltersDialog } from './PinnedFiltersDialog';
 import { QueryDslEditor, type QueryDslEditorHandle, type QueryEditorHistory } from './editor/QueryDslEditor';
 import { QueryEditorModels } from './editor/query-editor-models';
+import type { QueryCompletionContext } from '../../domain/query-completions';
 import '../../styles/query-live.css';
 
 const IDLE: ExecutionState = { status: 'idle' };
@@ -367,6 +368,13 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   }, [onCommandReady, command]);
 
   const queryFields = fieldsFor(query.connectionId, endpoint, query.index.trim());
+  const completions = useMemo<QueryCompletionContext>(() => {
+    const target = connectionId !== null && endpoint !== null && indexValue.trim() !== ''
+      ? { connectionId, endpoint, index: indexValue.trim() } : null;
+    return { target, parameters: query.parameters,
+      ...(target && queryFields.status === 'ready' && !queryFields.refreshing && !queryFields.refreshError
+        ? { fields: { target, catalog: queryFields.data } } : {}) };
+  }, [connectionId, endpoint, indexValue, queryFields, query.parameters]);
   const sortTab = sortSource ? state.tabs.find((item) => item.kind === 'query' && item.document.id === sortSource.query.id) : undefined;
   const sortTargetCurrent = sortSource !== null && !restoring && active && !saveBlockedByVisual && !hasPendingFilters
     && state.activeTabId === sortSource.query.id
@@ -504,6 +512,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
           <IconButton icon={Undo2} label={t('query:undoDsl')} disabled={!editorReady || !editorHistory?.canUndo} onClick={() => editor.current?.undo()} />
           <IconButton icon={Redo2} label={t('query:redoDsl')} disabled={!editorReady || !editorHistory?.canRedo} onClick={() => editor.current?.redo()} />
           <IconButton icon={Search} label={t('query:findDsl')} disabled={!editorReady} onClick={() => editor.current?.find()} />
+          <IconButton icon={ListTree} label={t('query:suggestDsl')} disabled={!editorReady} onClick={() => editor.current?.suggest()} />
           <IconButton icon={Save} label={t('queryLibrary:saveDraft')} disabled={!canSaveDraft}
             title={saveBlockedByVisual ? t('queryLibrary:saveBlockedVisual') : hasPendingFilters ? t('queryFilters:pendingAction')
               : reviewingSort ? t('querySort:reviewOpen') : t('queryLibrary:saveDraft')}
@@ -561,6 +570,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
         <div hidden={editorMode !== 'dsl'}>
           <QueryDslEditor ref={editor} models={editorModels} queryId={queryId} value={query.dsl} preferences={preferences}
             active={active && editorMode === 'dsl'} readOnly={Boolean(restoring)} diagnostic={currentCheck?.error ?? null}
+            completions={completions}
             onChange={(dsl) => patchQuery({ dsl })} onHistory={setEditorHistory} />
         </div>
         {currentCheck?.error ? <div id="dsl-diagnostic" className="notice error" role="alert">

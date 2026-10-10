@@ -99,7 +99,7 @@ export const createEditorView = vi.fn((host: HTMLElement, initial: monaco.editor
 const workerListeners = new Set<() => void>();
 export const failEditorWorker = () => { for (const listener of workerListeners) listener(); };
 export const editorRuntime: QueryEditorRuntime = {
-  Uri: monaco.Uri, MarkerSeverity: monaco.MarkerSeverity,
+  Uri: monaco.Uri, MarkerSeverity: monaco.MarkerSeverity, languages: monaco.languages,
   editor: { ...monaco.editor, create: createEditorView, defineTheme: vi.fn(), setTheme: vi.fn(), remeasureFonts: vi.fn() },
   onWorkerFailure: (listener) => {
     workerListeners.add(listener);

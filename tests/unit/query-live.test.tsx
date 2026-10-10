@@ -592,19 +592,31 @@ describe('live query execution and results', () => {
   });
 
   it('opens one document detail and reveals a clipboard failure', async () => {
-    const { user } = setup(makeBackend());
+    const backend = makeBackend();
+    const { user } = setup(backend);
     await user.click(runButton());
     await screen.findByText('已完成');
     await user.click(screen.getByText('9007199254740993'));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '文档 1' }));
     expect(await screen.findByRole('dialog')).toBeInTheDocument();
-    expect(screen.getByText(/"id": 9007199254740993/)).toBeInTheDocument();
+    expect(within(screen.getByRole('dialog')).getByLabelText('原始值：/_source/id')).toHaveTextContent('9007199254740993');
+    const resourceReads = backend.readResource.mock.calls.length;
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: '复制 JSON Pointer：/_source/id' }));
+    expect(await navigator.clipboard.readText()).toBe('/_source/id');
+    await user.type(within(screen.getByRole('dialog')).getByRole('searchbox', { name: '查找 JSON 路径' }), 'id');
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'JSON' }));
+    expect(within(screen.getByRole('dialog')).getByLabelText('原始记录 JSON')).toHaveTextContent('"id": 9007199254740993');
     await user.click(screen.getByRole('button', { name: '复制文档' }));
     expect(await screen.findByText('已复制')).toBeInTheDocument();
     Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
     await user.click(screen.getByRole('button', { name: '复制文档' }));
     expect(await screen.findByText('复制失败，请手动选择文本复制。')).toBeInTheDocument();
+    expect(backend.execute).toHaveBeenCalledTimes(1);
+    expect(backend.readResource).toHaveBeenCalledTimes(resourceReads);
+    expect(backend.openPit).not.toHaveBeenCalled();
+    expect(backend.closePit).not.toHaveBeenCalled();
+    expect(backend.cancel).not.toHaveBeenCalled();
   });
 
   it('stops the request when its tab closes or the workspace unmounts', async () => {
@@ -1065,7 +1077,7 @@ describe('snapshot pagination', () => {
     await user.click(await screen.findByRole('button', { name: '加载更多' }));
     await screen.findByText('已加载 2 行');
     await user.click(screen.getByRole('button', { name: '文档 first-document' }));
-    expect(within(screen.getByRole('dialog')).getByText(/"id": 1/)).toBeInTheDocument();
+    expect(within(screen.getByRole('dialog')).getByLabelText('原始值：/_source/id')).toHaveTextContent('1');
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: '关闭' }));
     await user.click(screen.getByRole('button', { name: 'JSON' }));
     expect(screen.getByText(/"second-document"/)).toBeVisible();

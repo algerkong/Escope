@@ -225,7 +225,7 @@ describe('loaded document comparison UI', () => {
     expect(compareButton()).toBeEnabled();
   });
 
-  it('keeps keyboard selection and JSON view round trips local, and offers the existing detail view unchanged', async () => {
+  it('keeps keyboard selection and JSON view round trips local, and opens original values in structured detail', async () => {
     const f = setup();
     fireEvent.keyDown(gridRow(0), { key: ' ' });
     fireEvent.keyDown(gridRow(1), { key: ' ' });
@@ -236,9 +236,9 @@ describe('loaded document comparison UI', () => {
     await f.user.keyboard('{Escape}');
     await f.user.click(screen.getAllByRole('button', { name: 'Document same' })[0]!);
     const detail = screen.getByRole('dialog', { name: 'Document same' });
-    const rawBlocks = within(detail).getAllByText(/9007199254740993/, { selector: 'pre' });
-    expect(rawBlocks).toHaveLength(2);
-    for (const block of rawBlocks) expect(block).toBeVisible();
+    expect(within(detail).getByLabelText('Original value: /_source/n')).toHaveTextContent('9007199254740993');
+    await f.user.click(within(detail).getByRole('button', { name: 'JSON' }));
+    expect(within(detail).getByLabelText('Raw hit JSON')).toHaveTextContent('"rank": [ 9007199254740993 ]');
     expect(f.onRun).not.toHaveBeenCalled();
     expect(f.onLoadMore).not.toHaveBeenCalled();
   });

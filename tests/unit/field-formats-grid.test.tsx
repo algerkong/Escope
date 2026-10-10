@@ -104,6 +104,11 @@ describe('execution-bound field format grid', () => {
     const entry = result();
     render(<Harness entry={entry} />);
     await user.click(screen.getByRole('button', { name: 'Document first' }));
+    const detail = within(screen.getByRole('dialog'));
+    expect(detail.getByLabelText('Original value: /_source/sequence')).toHaveTextContent('9007199254740993');
+    expect(detail.getByLabelText('Original value: /_source/ratio')).toHaveTextContent('0.123456789012345678901');
+    expect(detail.queryByText('9,007,199,254,740,993')).toBeNull();
+    expect(detail.queryByText('12.3456789012345678901%')).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Copy document' }));
     expect(clipboard).toHaveBeenLastCalledWith(expect.stringContaining('"sequence":9007199254740993'));
     expect(clipboard).toHaveBeenLastCalledWith(expect.stringContaining('"ratio":0.123456789012345678901'));

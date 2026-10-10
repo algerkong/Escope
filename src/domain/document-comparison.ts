@@ -1,35 +1,29 @@
-import { createScanner, type Node } from 'jsonc-parser';
+import type { Node } from 'jsonc-parser';
 import type { ExecutionSnapshot } from './query';
-import { parseRawJson, property, sliceRaw, type QuerySummary } from './query-result';
+import { property, sliceRaw } from './query-result';
 import { compareDecimalText, type ResultGridRow } from './result-grid';
 import { runtimeFieldNamesFromDsl } from './runtime-fields-dsl';
+import {
+  loadedDocumentOrigin, loadedDocumentValue as valueOf, readLoadedDocument,
+  type LoadedDocument, type LoadedDocumentError, type LoadedDocumentKind, type LoadedDocumentOrigin,
+  type LoadedDocumentPage, type LoadedDocumentSection, type LoadedDocumentValue,
+} from './loaded-document';
 
-export const MAX_COMPARISON_HIT_BYTES = 1024 * 1024;
-export const MAX_COMPARISON_DEPTH = 64;
-export const MAX_COMPARISON_TOKENS = 100_000;
+export {
+  MAX_LOADED_DOCUMENT_BYTES as MAX_COMPARISON_HIT_BYTES,
+  MAX_LOADED_DOCUMENT_DEPTH as MAX_COMPARISON_DEPTH,
+  MAX_LOADED_DOCUMENT_TOKENS as MAX_COMPARISON_TOKENS,
+  MAX_LOADED_DOCUMENT_NUMBER_LENGTH as MAX_COMPARISON_NUMBER_LENGTH,
+} from './loaded-document';
 export const MAX_COMPARISON_FIELDS = 4096;
-export const MAX_COMPARISON_NUMBER_LENGTH = 4096;
 export const COMPARISON_PAGE_SIZE = 50;
 
-export type ComparisonSection = 'source' | 'fields' | 'metadata';
-export type ComparisonKind = Exclude<Node['type'], 'property'> | 'missing';
+export type ComparisonSection = LoadedDocumentSection;
+export type ComparisonKind = LoadedDocumentKind;
 export type ComparisonStatus = 'equal' | 'changed' | 'typeChanged' | 'leftOnly' | 'rightOnly' | 'unavailable';
-export type ComparisonError = 'selection' | 'unavailable' | 'tooLarge' | 'tooDeep' | 'tooComplex' | 'invalidDocument';
-
-export interface ComparisonValue {
-  readonly kind: ComparisonKind;
-  /** A JSON token or container, never a decoded/re-serialized number or formatted field value. */
-  readonly raw: string | null;
-}
-
-export interface ComparedDocument {
-  readonly pageIndex: number;
-  readonly position: number;
-  readonly raw: string;
-  readonly index: ComparisonValue;
-  readonly id: ComparisonValue;
-  readonly partial: boolean;
-}
+export type ComparisonError = 'selection' | LoadedDocumentError;
+export type ComparisonValue = LoadedDocumentValue;
+export type ComparedDocument = LoadedDocument;
 
 export interface ComparisonRow {
   readonly key: string;
@@ -43,8 +37,7 @@ export interface ComparisonRow {
 }
 
 export interface DocumentComparison {
-  readonly origin: Readonly<Pick<ExecutionSnapshot, 'queryId' | 'requestId' | 'connectionId' | 'index' | 'startedAt'>
-    & { endpoint: string | null }>;
+  readonly origin: LoadedDocumentOrigin;
   readonly left: ComparedDocument;
   readonly right: ComparedDocument;
   readonly rows: readonly ComparisonRow[];
@@ -53,66 +46,6 @@ export interface DocumentComparison {
 export type DocumentComparisonResult =
   | { readonly ok: true; readonly comparison: DocumentComparison }
   | { readonly ok: false; readonly code: ComparisonError };
-
-interface LoadedPage {
-  readonly rawResponse: string;
-  readonly summary: QuerySummary;
-  readonly partial: boolean;
-}
-
-interface ReadDocument {
-  readonly document: ComparedDocument;
-  readonly root: Node;
-}
-
-const MISSING: ComparisonValue = Object.freeze({ kind: 'missing', raw: null });
-const encoder = new TextEncoder();
-// jsonc-parser publishes ambient const enums, which isolatedModules cannot import as values.
-const TOKEN = { objectOpen: 1, objectClose: 2, arrayOpen: 3, arrayClose: 4, number: 11, eof: 17 } as const;
-
-function valueOf(raw: string, node: Node | undefined): ComparisonValue {
-  return node === undefined ? MISSING : Object.freeze({
-    kind: node.type as Exclude<ComparisonKind, 'missing'>, raw: sliceRaw(raw, node),
-  });
-}
-
-/** Bound the selected hit before building another syntax tree; the response as a whole is not read again. */
-function inspect(raw: string): ComparisonError | Node {
-  if (raw.length > MAX_COMPARISON_HIT_BYTES || encoder.encode(raw).length > MAX_COMPARISON_HIT_BYTES) return 'tooLarge';
-  const scanner = createScanner(raw, true);
-  let depth = 0;
-  let count = 0;
-  for (let token = scanner.scan(); token !== TOKEN.eof; token = scanner.scan()) {
-    if (++count > MAX_COMPARISON_TOKENS) return 'tooComplex';
-    if (token === TOKEN.objectOpen || token === TOKEN.arrayOpen) {
-      if (++depth > MAX_COMPARISON_DEPTH) return 'tooDeep';
-    } else if (token === TOKEN.objectClose || token === TOKEN.arrayClose) depth--;
-    if (token === TOKEN.number && scanner.getTokenLength() > MAX_COMPARISON_NUMBER_LENGTH) return 'tooComplex';
-  }
-  const root = parseRawJson(raw);
-  return root?.type === 'object' ? root : 'invalidDocument';
-}
-
-function readDocument(pages: readonly LoadedPage[], row: ResultGridRow): ReadDocument | ComparisonError {
-  if (!Number.isSafeInteger(row.pageIndex) || row.pageIndex < 0
-    || !Number.isSafeInteger(row.position) || row.position < 0) return 'unavailable';
-  const page = pages[row.pageIndex];
-  if (!page || page.summary.hits[row.position] !== row.hit) return 'unavailable';
-  const range = row.hit.raw;
-  if (!range || !Number.isSafeInteger(range.offset) || !Number.isSafeInteger(range.length)
-    || range.offset < 0 || range.length <= 0 || range.offset + range.length > page.rawResponse.length) return 'unavailable';
-  if (range.length > MAX_COMPARISON_HIT_BYTES) return 'tooLarge';
-  const raw = sliceRaw(page.rawResponse, range);
-  const root = inspect(raw);
-  if (typeof root === 'string') return root;
-  return {
-    root,
-    document: Object.freeze({
-      pageIndex: row.pageIndex, position: row.position, raw, partial: page.partial,
-      index: valueOf(raw, property(root, '_index')), id: valueOf(raw, property(root, '_id')),
-    }),
-  };
-}
 
 function properties(node: Node | undefined): Map<string, Node> {
   const result = new Map<string, Node>();
@@ -160,15 +93,15 @@ export function isComparisonDifference(status: ComparisonStatus): boolean {
 export function compareLoadedDocuments(
   snapshot: ExecutionSnapshot,
   endpoint: string | null,
-  pages: readonly LoadedPage[],
+  pages: readonly LoadedDocumentPage[],
   selection: readonly ResultGridRow[],
 ): DocumentComparisonResult {
   if (selection.length !== 2) return { ok: false, code: 'selection' };
   const [a, b] = selection as readonly [ResultGridRow, ResultGridRow];
   if (a.pageIndex === b.pageIndex && a.position === b.position) return { ok: false, code: 'selection' };
-  const left = readDocument(pages, a);
+  const left = readLoadedDocument(pages, a);
   if (typeof left === 'string') return { ok: false, code: left };
-  const right = readDocument(pages, b);
+  const right = readLoadedDocument(pages, b);
   if (typeof right === 'string') return { ok: false, code: right };
   const rows: ComparisonRow[] = [];
   const runtime = new Set(runtimeFieldNamesFromDsl(snapshot.rawDsl));
@@ -206,10 +139,7 @@ export function compareLoadedDocuments(
   return {
     ok: true,
     comparison: Object.freeze({
-      origin: Object.freeze({
-        queryId: snapshot.queryId, requestId: snapshot.requestId, connectionId: snapshot.connectionId,
-        index: snapshot.index, startedAt: snapshot.startedAt, endpoint,
-      }),
+      origin: loadedDocumentOrigin(snapshot, endpoint),
       left: left.document, right: right.document, rows: Object.freeze(rows),
     }),
   };

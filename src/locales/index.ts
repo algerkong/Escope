@@ -9,6 +9,7 @@ import { enAiChat, zhAiChat } from './ai-chat';
 import { enVisualQuery, zhVisualQuery } from './visual-query';
 import { enResultGrid, zhResultGrid } from './result-grid';
 import { enDocumentComparison, zhDocumentComparison } from './document-comparison';
+import { enDocumentDetail, zhDocumentDetail } from './document-detail';
 import { enConnectionSettings, zhConnectionSettings } from './connection-settings';
 import { enConnectionAccess, zhConnectionAccess } from './connection-access';
 import { enQueryLibrary, zhQueryLibrary } from './query-library';
@@ -27,10 +28,10 @@ export const i18n = i18next.createInstance();
 void i18n.use(initReactI18next).init({
   resources: {
     'zh-CN': { ...zh, queryLive: zhLive, cluster: zhCluster, models: zhModels, aiChat: zhAiChat, visualQuery: zhVisualQuery, resultGrid: zhResultGrid,
-      documentComparison: zhDocumentComparison, connectionSettings: zhConnectionSettings, connectionAccess: zhConnectionAccess, queryLibrary: zhQueryLibrary, queryParameters: zhQueryParameters, queryExchange: zhQueryExchange,
+      documentComparison: zhDocumentComparison, documentDetail: zhDocumentDetail, connectionSettings: zhConnectionSettings, connectionAccess: zhConnectionAccess, queryLibrary: zhQueryLibrary, queryParameters: zhQueryParameters, queryExchange: zhQueryExchange,
       workspaceRecovery: zhWorkspaceRecovery, queryHistory: zhQueryHistory, queryExport: zhQueryExport, dataViews: zhDataViews, runtimeFields: zhRuntimeFields, timeRange: zhTimeRange, queryFilters: zhQueryFilters, querySort: zhQuerySort, pinnedFilters: zhPinnedFilters },
     'en-US': { ...en, queryLive: enLive, cluster: enCluster, models: enModels, aiChat: enAiChat, visualQuery: enVisualQuery, resultGrid: enResultGrid,
-      documentComparison: enDocumentComparison, connectionSettings: enConnectionSettings, connectionAccess: enConnectionAccess, queryLibrary: enQueryLibrary, queryParameters: enQueryParameters, queryExchange: enQueryExchange,
+      documentComparison: enDocumentComparison, documentDetail: enDocumentDetail, connectionSettings: enConnectionSettings, connectionAccess: enConnectionAccess, queryLibrary: enQueryLibrary, queryParameters: enQueryParameters, queryExchange: enQueryExchange,
       workspaceRecovery: enWorkspaceRecovery, queryHistory: enQueryHistory, queryExport: enQueryExport, dataViews: enDataViews, runtimeFields: enRuntimeFields, timeRange: enTimeRange, queryFilters: enQueryFilters, querySort: enQuerySort, pinnedFilters: enPinnedFilters },
   },
   lng: navigator.language.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US',

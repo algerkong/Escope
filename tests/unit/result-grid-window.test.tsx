@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { I18nextProvider } from 'react-i18next';
@@ -414,6 +414,7 @@ describe('loaded result column window', () => {
     fireEvent.click(bodyRows()[0]!);
     fireEvent.click(bodyRows()[1]!, { ctrlKey: true });
     fireEvent.doubleClick(fieldCell(65, 1)!);
+    await user.click(within(screen.getByRole('dialog', { name: 'Document same' })).getByRole('button', { name: 'JSON' }));
     expect(screen.getByRole('dialog', { name: 'Document same' })).toHaveTextContent(`"field065": ${small.value(65, 1)}`);
     await user.keyboard('{Escape}');
     fireEvent.click(screen.getByRole('button', { name: 'Compare two selected documents' }));

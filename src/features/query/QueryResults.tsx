@@ -1,9 +1,9 @@
 import { Check, CheckCheck, ChevronDown, Copy, Download, FileDown, Info, ListTree, LoaderCircle, MonitorX, Search, TriangleAlert, XCircle } from 'lucide-react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { EmptyState, IconButton, Modal } from '../../components/controls';
+import { EmptyState, IconButton } from '../../components/controls';
 import type { ExecutionSnapshot, ExecutionState, QueryDocument } from '../../domain/query';
-import { formatRawJson, sliceRaw, type ResultHit } from '../../domain/query-result';
+import { formatRawJson } from '../../domain/query-result';
 import { supportsSnapshotPaging } from '../../domain/query-pagination';
 import { INITIAL_RESULT_GRID_STATE, type ResultGridState } from '../../domain/result-grid';
 import type { ResultGridLayout } from '../../domain/workspace-recovery';
@@ -16,6 +16,8 @@ import type { QueryLibraryService } from '../../services/query-library';
 import type { CellFilterSelection } from '../../domain/query-filters';
 import { compareLoadedDocuments, type DocumentComparisonResult } from '../../domain/document-comparison';
 import { DocumentComparisonDialog } from './DocumentComparisonDialog';
+import { inspectLoadedDocument, type DocumentDetailResult } from '../../domain/document-detail';
+import { DocumentDetailDialog } from './DocumentDetailDialog';
 
 const IDLE: ExecutionState = { status: 'idle' };
 const EMPTY_PAGES: readonly ExecutionPage[] = [];
@@ -59,7 +61,7 @@ export function QueryResults({ kind = 'query', active = true, documentIds, wrapJ
   const { t, i18n } = useTranslation();
   const copy = useCopyText(query.id);
   const [gridStates, setGridStates] = useState<Record<string, { executionKey: string; value: ResultGridState }>>({});
-  const [selectedDetail, setDetail] = useState<{ hit: ResultHit; page: number; queryId: string; requestKey: string | null } | null>(null);
+  const [selectedDetail, setDetail] = useState<{ snapshot: ExecutionSnapshot; result: DocumentDetailResult } | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [selectedComparison, setComparison] = useState<{ snapshot: ExecutionSnapshot; result: DocumentComparisonResult } | null>(null);
   const scroll = useRef(new Map<string, { executionKey: string; table?: GridScrollPosition; json?: GridScrollPosition }>());
@@ -70,8 +72,9 @@ export function QueryResults({ kind = 'query', active = true, documentIds, wrapJ
   const continuing = entry?.continuing ?? false;
   const continuationError = entry?.continuationError ?? null;
   const requestKey = 'snapshot' in state ? state.snapshot.requestId : null;
-  const detail = selectedDetail?.queryId === query.id && selectedDetail.requestKey === requestKey && active ? selectedDetail : null;
-  useEffect(() => { setDetail(null); }, [query.id, requestKey, active]);
+  const detailSnapshot = state.status === 'success' || state.status === 'partial' ? state.snapshot : null;
+  const detail = active && detailSnapshot?.queryId === query.id && selectedDetail?.snapshot === detailSnapshot ? selectedDetail : null;
+  useEffect(() => { setDetail(null); }, [query.id, detailSnapshot, active]);
   const comparison = active && (state.status === 'success' || state.status === 'partial')
     && state.snapshot.queryId === query.id && selectedComparison?.snapshot === state.snapshot ? selectedComparison : null;
   useEffect(() => { setComparison(null); }, [query.id, requestKey, active]);
@@ -136,14 +139,6 @@ export function QueryResults({ kind = 'query', active = true, documentIds, wrapJ
   const allLoaded = lastPage?.summary.hits.length === 0 || (totals?.relation === 'eq' && totals.text === String(hits.length));
   const hasSnapshot = entry?.pitId != null && continuationError !== 'notFound' && !endpointChanged;
   const managedPaging = useMemo(() => 'snapshot' in state && supportsSnapshotPaging(state.snapshot.rawDsl), [state]);
-  const detailRaw = detail ? pages[detail.page]?.rawResponse ?? null : null;
-  const documentText = detail && detailRaw
-    ? detail.hit.source ? sliceRaw(detailRaw, detail.hit.source) : detail.hit.fields ? sliceRaw(detailRaw, detail.hit.fields) : ''
-    : '';
-  const sourceText = detail?.hit.source && detailRaw ? sliceRaw(detailRaw, detail.hit.source) : null;
-  const fieldsText = detail?.hit.fields && detailRaw ? sliceRaw(detailRaw, detail.hit.fields) : null;
-  const formattedSource = useMemo(() => sourceText === null ? null : formatRawJson(sourceText), [sourceText]);
-  const formattedFields = useMemo(() => fieldsText === null ? null : formatRawJson(fieldsText), [fieldsText]);
   const title = t(kind === 'preview' ? 'queryLive:dataPreview' : 'query:results');
   const errorKey = (code: string) => executionErrorKey(code, (key) => i18n.exists(key));
 
@@ -177,7 +172,10 @@ export function QueryResults({ kind = 'query', active = true, documentIds, wrapJ
       setGridStates((current) => ({ ...current, [query.id]: { executionKey, value } }));
       onLayoutChange?.(value);
     }}
-    onDocument={({ hit, pageIndex }) => setDetail({ hit, page: pageIndex, queryId: query.id, requestKey })}
+    onDocument={(row) => {
+      if (!active || (state.status !== 'success' && state.status !== 'partial') || state.snapshot.queryId !== query.id) return;
+      setDetail({ snapshot: state.snapshot, result: inspectLoadedDocument(state.snapshot, entry?.endpoint ?? null, pages, row) });
+    }}
     onCompare={(selection) => {
       if (!active || (state.status !== 'success' && state.status !== 'partial') || state.snapshot.queryId !== query.id) return;
       setComparison({ snapshot: state.snapshot, result: compareLoadedDocuments(state.snapshot, entry?.endpoint ?? null, pages, selection) });
@@ -285,31 +283,8 @@ export function QueryResults({ kind = 'query', active = true, documentIds, wrapJ
       </div></div> : null}
     </div> : null}
     <div className="ql-results-body">{content}</div>
-    <Modal open={detail !== null} onClose={() => setDetail(null)}
-      title={t('queryLive:documentDetail', { id: detail?.hit.id ?? '' })} description={t('queryLive:detailHint')}>
-      {detail ? <>
-        <dl className="ql-detail-meta">
-          <dt>_index</dt><dd>{detail.hit.index ?? '—'}</dd>
-          <dt>_id</dt><dd>{detail.hit.id}</dd>
-          <dt>_score</dt><dd>{detail.hit.score ?? '—'}</dd>
-        </dl>
-        {detail.hit.hasSource && detail.hit.source && detailRaw ? <>
-          <h3 className="subheading">{t('queryLive:detailSource')}</h3>
-          <pre className="ql-pre" data-wrap={wrapJson}>{formattedSource}</pre>
-        </> : <p className="muted small">{t('queryLive:noSource')}</p>}
-        {detail.hit.fields && detailRaw ? <>
-          <h3 className="subheading">{t('queryLive:detailFields')}</h3>
-          <pre className="ql-pre" data-wrap={wrapJson}>{formattedFields}</pre>
-        </> : null}
-        <div className="ql-detail-actions">
-          <button type="button" className="secondary compact-button" disabled={documentText === ''}
-            onClick={() => copy.copy(documentText)}>{t('queryLive:copyDocument')}</button>
-          <button type="button" className="secondary compact-button" disabled={detailRaw === null}
-            onClick={() => { if (detailRaw !== null) copy.copy(detailRaw); }}>{t('queryLive:copyResponse')}</button>
-          {copyNote}
-        </div>
-      </> : null}
-    </Modal>
+    {detail ? <DocumentDetailDialog result={detail.result} stale={stale} endpointChanged={endpointChanged}
+      partial={state.status === 'partial'} wrapJson={wrapJson} onClose={() => setDetail(null)} /> : null}
     {exportService ? <ResultExportDialog open={exportOpen} service={exportService} hits={exportHits} pages={pages}
       baseName={'snapshot' in state ? state.snapshot.index : ''} partial={state.status === 'partial'}
       onClose={() => setExportOpen(false)} /> : null}

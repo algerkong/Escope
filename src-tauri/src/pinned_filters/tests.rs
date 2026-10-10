@@ -56,7 +56,7 @@ fn shared_contract_preserves_literals_boolean_states_and_groups_without_executio
 fn unknown_fields_duplicate_keys_future_versions_and_missing_fields_fail_closed() {
     for raw in [
         r#"{"version":1,"version":1,"entries":[]}"#,
-        r#"{"version":3,"entries":[]}"#,
+        r#"{"version":4,"entries":[]}"#,
         r#"{"version":1,"entries":[],"binding":{}}"#,
     ] {
         assert_eq!(decode_stored(raw).unwrap_err().code, "invalidResponse");
@@ -339,7 +339,7 @@ fn malformed_or_future_storage_is_not_overwritten_even_with_the_matching_revisio
     let raw = Connection::open(&path).unwrap();
     for invalid in [
         "not-json",
-        r#"{"version":3,"entries":[]}"#,
+        r#"{"version":4,"entries":[]}"#,
         r#"{"version":1,"entries":[],"entries":[]}"#,
         r#"{"version":1,"entries":[],"auth":{}}"#,
     ] {
@@ -535,7 +535,7 @@ fn nested_group_shape_is_strict_and_never_silently_drops_parent_negation() {
     for raw in [
         r#"{"version":2,"entries":[],"nested":{}}"#,
         r#"{"version":2,"version":2,"entries":[]}"#,
-        r#"{"version":3,"entries":[]}"#,
+        r#"{"version":4,"entries":[]}"#,
     ] {
         assert!(decode_stored(raw).is_err());
     }

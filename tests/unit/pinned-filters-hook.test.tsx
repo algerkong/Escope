@@ -3,6 +3,7 @@ import { StrictMode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import fixture from '../fixtures/pinned-filters-v1.json';
 import nestedFixture from '../fixtures/pinned-filters-v2.json';
+import runtimeFixture from '../fixtures/pinned-filters-v3.json';
 import { emptyPinnedFilters, parsePinnedFilterLibrary, type PinnedFilterRecord } from '../../src/domain/pinned-filters';
 import { usePinnedFilters } from '../../src/features/query/usePinnedFilters';
 import { createSessionPinnedFilterService, type PinnedFilterService } from '../../src/services/pinned-filters';
@@ -140,16 +141,37 @@ describe('pinned filter persistence controller', () => {
       Object.assign(captured.composition.groups[1]!.nested!, { match: 'exclude' });
       expect(await saving).toBe(true);
     });
-    expect((await memory.load()).library).toEqual({ version: 2, entries: [definition, nested] });
-    expect(service.save).toHaveBeenCalledExactlyOnceWith(1, { version: 2, entries: [definition, nested] });
+    expect((await memory.load()).library).toEqual({ version: 3, entries: [definition, nested] });
+    expect(service.save).toHaveBeenCalledExactlyOnceWith(1, { version: 3, entries: [definition, nested] });
   });
 
-  it('deletes legacy entries without an automatic envelope upgrade', async () => {
+  it.each([fixture, nestedFixture])('deletes v$version entries without an automatic envelope upgrade', async (legacy) => {
     const { service, memory } = store();
-    await memory.save(0, library);
+    const previous = parsePinnedFilterLibrary(legacy)!;
+    await memory.save(0, previous);
     const { result } = renderHook(() => usePinnedFilters(service));
     await waitFor(() => expect(result.current.status).toBe('ready'));
-    await act(async () => { expect(await result.current.remove(definition)).toBe(true); });
-    expect((await memory.load()).library).toEqual({ version: 1, entries: [] });
+    await act(async () => { expect(await result.current.remove(previous.entries[0]!)).toBe(true); });
+    expect((await memory.load()).library).toEqual({ version: previous.version, entries: [] });
+  });
+
+  it.each([fixture, nestedFixture])('upgrades v$version only on an explicit add and captures runtime scripts before queued work', async (legacy) => {
+    const { service, memory } = store();
+    const previous = parsePinnedFilterLibrary(legacy)!;
+    await memory.save(0, previous);
+    const runtime = parsePinnedFilterLibrary(runtimeFixture)!.entries[0]!;
+    const { result } = renderHook(() => usePinnedFilters(service));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    expect(service.save).not.toHaveBeenCalled();
+    expect((await memory.load()).library).toEqual(previous);
+    const copy = structuredClone(runtime);
+    await act(async () => {
+      const saving = result.current.save(copy);
+      Object.assign(copy.filters[0]!.runtimeMapping!.script!, { source: 'changed' });
+      expect(await saving).toBe(true);
+    });
+    expect((await memory.load()).library).toEqual({ version: 3, entries: [...previous.entries, runtime] });
+    await act(async () => { expect(await result.current.remove(runtime)).toBe(true); });
+    expect((await memory.load()).library).toEqual({ version: 3, entries: previous.entries });
   });
 });

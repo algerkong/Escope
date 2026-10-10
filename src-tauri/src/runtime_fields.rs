@@ -20,6 +20,20 @@ pub enum RuntimeType {
     GeoPoint,
 }
 
+impl RuntimeType {
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            Self::Keyword => "keyword",
+            Self::Long => "long",
+            Self::Double => "double",
+            Self::Boolean => "boolean",
+            Self::Date => "date",
+            Self::Ip => "ip",
+            Self::GeoPoint => "geo_point",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeLanguage {
@@ -142,7 +156,19 @@ impl RuntimeFields {
     }
 }
 
-type RuntimeMappings = BTreeMap<String, RuntimeMapping>;
+pub(crate) type RuntimeMappings = BTreeMap<String, RuntimeMapping>;
+
+pub(crate) fn validate_mappings(mappings: &RuntimeMappings) -> Result<(), AppError> {
+    if mappings.len() > MAX_ENTRIES
+        || !bounded(mappings)
+        || mappings
+            .iter()
+            .any(|(name, mapping)| !valid_name(name) || !valid_script(&mapping.script))
+    {
+        return Err(AppError::new("invalidRuntimeFields"));
+    }
+    Ok(())
+}
 
 #[derive(Deserialize)]
 struct Body {
@@ -161,14 +187,7 @@ pub(crate) fn validate_body(raw: &str) -> Result<(), AppError> {
     let body: Body =
         serde_json::from_str(raw).map_err(|_| AppError::new("invalidRuntimeFields"))?;
     if let Some(mappings) = body.runtime_mappings {
-        if mappings.len() > MAX_ENTRIES
-            || !bounded(&mappings)
-            || mappings
-                .iter()
-                .any(|(name, mapping)| !valid_name(name) || !valid_script(&mapping.script))
-        {
-            return Err(AppError::new("invalidRuntimeFields"));
-        }
+        validate_mappings(&mappings)?;
     }
     Ok(())
 }

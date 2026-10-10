@@ -69,6 +69,11 @@ export function runtimeMappingPayload(value: RuntimeMapping): RuntimeMapping {
   } }) };
 }
 
+/** Pinned declarations retain explicit language and exact source text, not just equivalent types. */
+export function sameRuntimeMapping(left: RuntimeMapping, right: RuntimeMapping): boolean {
+  return left.type === right.type && left.script?.source === right.script?.source && left.script?.lang === right.script?.lang;
+}
+
 export function runtimeFieldsPayload(value: DataViewRuntimeFields): DataViewRuntimeFields {
   return { version: value.version, entries: value.entries.map((entry) => ({ field: entry.field, ...runtimeMappingPayload(entry) })) };
 }

@@ -2,6 +2,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import fixture from '../fixtures/pinned-filters-v1.json';
 import nestedFixture from '../fixtures/pinned-filters-v2.json';
+import runtimeFixture from '../fixtures/pinned-filters-v3.json';
 import { emptyPinnedFilters, parsePinnedFilterLibrary } from '../../src/domain/pinned-filters';
 import { createPinnedFilterService, createSessionPinnedFilterService, desktopPinnedFilterService as desktop } from '../../src/services/pinned-filters';
 
@@ -28,7 +29,7 @@ describe('pinned filter IPC', () => {
     expect(invoke).not.toHaveBeenCalled();
     for (const record of [
       { revision: 0, library }, { revision: -1, library }, { revision: 1, library: invalid },
-      { revision: 1, library: { ...library, version: 3 } }, { revision: 1, library, headers: {} },
+      { revision: 1, library: { ...library, version: 4 } }, { revision: 1, library, headers: {} },
     ]) {
       vi.mocked(invoke).mockResolvedValue(record);
       await expect(desktop.load()).rejects.toMatchObject({ code: 'invalidResponse' });
@@ -83,5 +84,38 @@ describe('pinned filter IPC', () => {
     Object.assign(changed.entries[1]!.composition.groups[1]!.nested!, { match: 'exclude' });
     await expect(session.save(2, changed)).rejects.toMatchObject({ code: 'invalidInput' });
     expect((await session.load()).library).toEqual(next);
+  });
+
+  it('uses the existing IPC for v3 and deeply validates runtime declarations before dispatch', async () => {
+    const runtime = parsePinnedFilterLibrary(runtimeFixture)!;
+    vi.mocked(invoke).mockResolvedValue({ revision: 1, library: runtime });
+    const loaded = await desktop.load();
+    Object.assign(loaded.library.entries[0]!.filters[0]!.runtimeMapping!.script!, { source: 'changed' });
+    expect(runtime.entries[0]!.filters[0]!.runtimeMapping!.script!.source).toBe('emit(9007199254740995L);');
+    vi.mocked(invoke).mockResolvedValue({ revision: 2 });
+    await expect(desktop.save(1, runtime)).resolves.toBe(2);
+    expect(invoke).toHaveBeenLastCalledWith('pinned_filters_save', { expectedRevision: 1, library: runtime });
+    const invalid = structuredClone(runtime);
+    Object.assign(invalid.entries[0]!.filters[0]!.runtimeMapping!.script!, { params: {} });
+    const calls = vi.mocked(invoke).mock.calls.length;
+    await expect(desktop.save(1, invalid)).rejects.toMatchObject({ code: 'invalidInput' });
+    expect(invoke).toHaveBeenCalledTimes(calls);
+  });
+
+  it('preserves v3 session script copies, refuses immutable declaration changes and never downgrades on deletion', async () => {
+    const runtime = parsePinnedFilterLibrary(runtimeFixture)!;
+    const service = createSessionPinnedFilterService();
+    await service.save(0, runtime);
+    for (const patch of [{ source: 'emit(1);' }, { lang: 'painless' }]) {
+      const copy = await service.load();
+      Object.assign(copy.library.entries[0]!.filters[0]!.runtimeMapping!.script!, patch);
+      await expect(service.save(1, copy.library)).rejects.toMatchObject({ code: 'invalidInput' });
+    }
+    for (const version of [1, 2]) {
+      await expect(service.save(1, { version, entries: [] })).rejects.toMatchObject({ code: 'invalidInput' });
+    }
+    expect((await service.load()).library).toEqual(runtime);
+    await expect(service.save(1, { version: 3, entries: [] })).resolves.toBe(2);
+    expect(invoke).not.toHaveBeenCalled();
   });
 });

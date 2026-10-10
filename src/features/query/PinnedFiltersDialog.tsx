@@ -1,5 +1,5 @@
 import { ListFilter, Pin, RefreshCw, Trash2 } from 'lucide-react';
-import { useId, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { IconButton, Modal } from '../../components/controls';
 import type { ConnectionProfile } from '../../domain/connection';
@@ -32,11 +32,16 @@ export function PinFiltersDialog({ draft, currentTarget, library, kind, onClose 
   const id = useId();
   const [definitionId] = useState(() => crypto.randomUUID());
   const [name, setName] = useState('');
-  const [accepted, setAccepted] = useState<string | null>(null);
+  const [accepted, setAccepted] = useState<{ draft: QueryFilterDraft; payload: string } | null>(null);
+  const [scriptsAccepted, setScriptsAccepted] = useState<{ draft: QueryFilterDraft; payload: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const proposal = pinFilterDefinition(draft, definitionId, name);
+  const proposal = useMemo(() => pinFilterDefinition(draft, definitionId, name), [draft, definitionId, name]);
   const payload = proposal.ok ? JSON.stringify(proposal.definition, null, 2) : '';
-  const canSave = currentTarget && proposal.ok && payload === accepted && !submitting && !library.saving
+  const scripts = proposal.ok ? [...new Map(proposal.definition.filters.flatMap((filter) =>
+    filter.runtimeMapping?.script ? [[filter.field, filter.runtimeMapping.script.source] as const] : [])).entries()] : [];
+  const literalsReviewed = accepted?.draft === draft && accepted.payload === payload;
+  const scriptsReviewed = scriptsAccepted?.draft === draft && scriptsAccepted.payload === payload;
+  const canSave = currentTarget && proposal.ok && literalsReviewed && (!scripts.length || scriptsReviewed) && !submitting && !library.saving
     && library.status === 'ready' && !library.error && library.entries.length < MAX_PINNED_FILTERS;
   const close = () => { if (!submitting) onClose(); };
   return <Modal open onClose={close} title={t('pinnedFilters:pin')}>
@@ -46,16 +51,26 @@ export function PinFiltersDialog({ draft, currentTarget, library, kind, onClose 
       <LibraryStatus library={library} />
       <label htmlFor={`${id}-name`}>{t('pinnedFilters:name')}</label>
       <input id={`${id}-name`} value={name} maxLength={MAX_PINNED_FILTER_NAME_CHARS} disabled={submitting}
-        onChange={(event) => { setName(event.target.value); setAccepted(null); }} />
+        onChange={(event) => { setName(event.target.value); setAccepted(null); setScriptsAccepted(null); }} />
       {!proposal.ok && (proposal.code !== 'invalid' || name !== '') ? <span className="qfilter-warning" role="status">
         {t(`pinnedFilters:${proposal.code}`)}</span> : null}
       {proposal.ok ? <>
         <label htmlFor={`${id}-definition`}>{t('pinnedFilters:definition')}</label>
         <textarea id={`${id}-definition`} className="qfilter-code" readOnly spellCheck={false} value={payload} />
-        <label className="pinned-confirm"><input type="checkbox" checked={accepted === payload}
-          disabled={!currentTarget || submitting} onChange={(event) => setAccepted(event.target.checked ? payload : null)} />
+        {scripts.length ? <div className="pinned-scripts">
+          {scripts.map(([field, source], index) => <div className="pinned-script" key={field}>
+            <label htmlFor={`${id}-script-${index}`}>{t('pinnedFilters:scriptSource', { field })}</label>
+            <textarea id={`${id}-script-${index}`} className="qfilter-value" readOnly spellCheck={false} value={source} />
+          </div>)}
+        </div> : null}
+        <label className="pinned-confirm"><input type="checkbox" checked={literalsReviewed}
+          disabled={!currentTarget || submitting} onChange={(event) => setAccepted(event.target.checked ? { draft, payload } : null)} />
           <span>{t('pinnedFilters:literalConsent')}</span>
         </label>
+        {scripts.length ? <label className="pinned-confirm"><input type="checkbox" checked={scriptsReviewed}
+          disabled={!currentTarget || submitting} onChange={(event) => setScriptsAccepted(event.target.checked ? { draft, payload } : null)} />
+          <span>{t('pinnedFilters:scriptConsent')}</span>
+        </label> : null}
       </> : null}
       {!currentTarget ? <span className="qfilter-warning" role="alert">{t('pinnedFilters:changed')}</span> : null}
       {library.entries.length >= MAX_PINNED_FILTERS ? <span className="qfilter-warning" role="status">{t('pinnedFilters:limit')}</span> : null}

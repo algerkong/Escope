@@ -1,0 +1,84 @@
+{
+  "version": 3,
+  "entries": [
+    {
+      "id": "runtime-set",
+      "name": "Runtime set",
+      "connectionId": "conn-a",
+      "index": "events",
+      "filters": [
+        {
+          "id": "n",
+          "field": "n",
+          "fieldType": "long",
+          "operation": "include",
+          "value": "9007199254740995",
+          "enabled": true,
+          "runtimeMapping": { "type": "long", "script": { "source": "emit(9007199254740995L);" } }
+        },
+        {
+          "id": "label",
+          "field": "label",
+          "fieldType": "keyword",
+          "operation": "exclude",
+          "value": "\"r\\u0065ady\"",
+          "enabled": true,
+          "runtimeMapping": { "type": "keyword" }
+        },
+        {
+          "id": "ratio",
+          "field": "ratio",
+          "fieldType": "double",
+          "operation": "include",
+          "value": "1.2300e-8",
+          "enabled": true,
+          "runtimeMapping": { "type": "double", "script": { "source": "double n = 1.23e-8;\n\temit(n);", "lang": "painless" } }
+        },
+        {
+          "id": "active",
+          "field": "active",
+          "fieldType": "boolean",
+          "operation": "include",
+          "value": "true",
+          "enabled": true,
+          "runtimeMapping": { "type": "boolean" }
+        },
+        {
+          "id": "date",
+          "field": "date",
+          "fieldType": "date",
+          "operation": "exists",
+          "value": null,
+          "enabled": true,
+          "runtimeMapping": { "type": "date" }
+        },
+        {
+          "id": "address",
+          "field": "address",
+          "fieldType": "ip",
+          "operation": "missing",
+          "value": null,
+          "enabled": false,
+          "runtimeMapping": { "type": "ip" }
+        },
+        {
+          "id": "point",
+          "field": "point",
+          "fieldType": "geo_point",
+          "operation": "exists",
+          "value": null,
+          "enabled": false,
+          "runtimeMapping": { "type": "geo_point" }
+        }
+      ],
+      "composition": {
+        "mode": "any",
+        "groups": [
+          { "id": "g1", "mode": "any", "filterIds": ["n", "label"] },
+          { "id": "g2", "mode": "all", "filterIds": ["ratio", "active", "date"] },
+          { "id": "g3", "mode": "all", "filterIds": ["address", "point"] }
+        ]
+      }
+    }
+  ]
+}

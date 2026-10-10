@@ -1,6 +1,7 @@
-//! Local, immutable mapped filter literals. This module never reads Elasticsearch or executes DSL.
+//! Local, immutable filter literals and runtime declarations. Never reads ES or executes DSL.
 use crate::error::AppError;
 use crate::operation::IndexTarget;
+use crate::runtime_fields::{validate_mappings, RuntimeMapping, RuntimeMappings};
 use crate::workspace_recovery::Nullable;
 use crate::{with_database, StorageState};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -8,7 +9,7 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use tauri::State;
 
-pub(crate) const VERSION: u32 = 2;
+pub(crate) const VERSION: u32 = 3;
 pub(crate) const MAX_BYTES: usize = 256 * 1024;
 pub(crate) const MAX_REVISION: u64 = 9_007_199_254_740_991;
 const MAX_ENTRIES: usize = 100;
@@ -46,6 +47,12 @@ pub struct PinnedFilter {
         deserialize_with = "non_null"
     )]
     nested_path: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "non_null"
+    )]
+    runtime_mapping: Option<RuntimeMapping>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
@@ -194,6 +201,13 @@ impl PinnedFilter {
             None if self.field.contains('.') => return Err(invalid()),
             _ => {}
         }
+        if self.runtime_mapping.as_ref().is_some_and(|mapping| {
+            version < 3
+                || self.nested_path.is_some()
+                || mapping.field_type.as_str() != self.field_type
+        }) {
+            return Err(invalid());
+        }
         let keyword = matches!(
             self.field_type.as_str(),
             "keyword" | "constant_keyword" | "wildcard"
@@ -205,7 +219,8 @@ impl PinnedFilter {
             "half_float" | "float" | "double" | "scaled_float"
         );
         let boolean = self.field_type == "boolean";
-        let presence_only = matches!(self.field_type.as_str(), "date" | "date_nanos" | "ip");
+        let presence_only = matches!(self.field_type.as_str(), "date" | "date_nanos" | "ip")
+            || self.runtime_mapping.is_some() && self.field_type == "geo_point";
         if !(keyword || text || integer.is_some() || float || boolean || presence_only) {
             return Err(invalid());
         }
@@ -265,8 +280,20 @@ impl PinnedFilterDefinition {
         IndexTarget::parse(&self.index).map_err(|_| invalid())?;
         let mut filters = HashMap::new();
         let mut definitions = HashSet::new();
+        let mut declarations = HashMap::new();
+        let mut mappings = RuntimeMappings::new();
         for filter in &self.filters {
             filter.validate(version)?;
+            if let Some(previous) = declarations.insert(&filter.field, &filter.runtime_mapping) {
+                if (previous.is_some() || filter.runtime_mapping.is_some())
+                    && previous != &filter.runtime_mapping
+                {
+                    return Err(invalid());
+                }
+            }
+            if let Some(mapping) = &filter.runtime_mapping {
+                mappings.insert(filter.field.clone(), mapping.clone());
+            }
             if filters.insert(&filter.id, filter).is_some()
                 || filter.nested_path.is_none()
                     && !definitions.insert((&filter.field, filter.operation, &filter.value.0))
@@ -274,6 +301,7 @@ impl PinnedFilterDefinition {
                 return Err(invalid());
             }
         }
+        validate_mappings(&mappings).map_err(|_| invalid())?;
         let mut group_ids = HashSet::new();
         for group in &self.composition.groups {
             if !valid_id(&group.id)
@@ -326,7 +354,7 @@ impl PinnedFilterLibrary {
     }
 
     pub(crate) fn validate(&self) -> Result<(), AppError> {
-        if self.version != 1 && self.version != VERSION || self.entries.len() > MAX_ENTRIES {
+        if !matches!(self.version, 1..=VERSION) || self.entries.len() > MAX_ENTRIES {
             return Err(AppError::new("invalidInput"));
         }
         let mut ids = HashSet::new();
@@ -391,5 +419,7 @@ pub(crate) fn pinned_filters_save(
     })
 }
 
+#[cfg(test)]
+mod runtime_tests;
 #[cfg(test)]
 mod tests;

@@ -3,7 +3,7 @@ import { formatQueryDsl, validateQueryDsl } from './query-dsl';
 import { boundedParameterJson } from './query-parameters';
 import { parseRawJson, property } from './query-result';
 import {
-  parseRuntimeFields, parseRuntimeMappings, runtimeMappingPayload, type DataViewRuntimeFields,
+  parseRuntimeFields, parseRuntimeMappings, runtimeMappingPayload, type DataViewRuntimeFields, type RuntimeField,
 } from './runtime-fields';
 
 export const MAX_RUNTIME_DSL_BYTES = 256 * 1024;
@@ -13,6 +13,15 @@ export type RuntimeDslPreview =
   | { readonly ok: false; readonly code: RuntimeDslError; readonly field?: string };
 
 const bytes = (value: string) => new TextEncoder().encode(value).length;
+
+/** Full DSL validation is required when persisting declarations, including disabled filters. */
+export function runtimeMappingsFromDsl(source: string): readonly RuntimeField[] | null {
+  if (bytes(source) > MAX_RUNTIME_DSL_BYTES || !validateQueryDsl(source).ok) return null;
+  const root = boundedParameterJson(source);
+  if (!root || root.type !== 'object') return null;
+  const mappings = property(root, 'runtime_mappings');
+  return mappings ? parseRuntimeMappings(getNodeValue(mappings)) : [];
+}
 
 /** Read only the immutable executed DSL, never the current library or an unapplied definition. */
 export function runtimeFieldNamesFromDsl(source: string): readonly string[] {

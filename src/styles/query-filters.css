@@ -55,6 +55,9 @@
 .qfilter-enabled:disabled { opacity: .55; }
 .qfilter-list > li[data-filter-disabled="true"] .qfilter-item > strong { color: var(--muted); }
 .qfilter-item > .qfilter-disabled-label { border-bottom: 1px dashed currentColor; }
+.qfilter-item > .qfilter-saved-runtime { flex-basis: 100%; max-width: 100%; }
+.qfilter-saved-runtime > summary { cursor: pointer; overflow-wrap: anywhere; }
+.qfilter-saved-runtime > summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 @media (forced-colors: active) {
   .qfilter-segments input { position: static; opacity: 1; width: 14px; height: 14px; margin-left: 6px; appearance: auto; }
 }

@@ -34,7 +34,7 @@ describe('versioned mapped nested pinned definitions', () => {
       .toEqual({ version: 2, entries: [...legacy.entries, ...fixture.entries] });
     expect(parsePinnedFilterLibrary({ ...fixture, version: 1 })).toBeNull();
     expect(parsePinnedFilterDefinition(definition, 1)).toBeNull();
-    for (const version of [0, 3, null, '2', 2.1]) expect(parsePinnedFilterLibrary({ ...fixture, version })).toBeNull();
+    for (const version of [0, 4, null, '2', 2.1]) expect(parsePinnedFilterLibrary({ ...fixture, version })).toBeNull();
     const copy = parsePinnedFilterLibrary(fixture)!;
     Object.assign(copy.entries[0]!.composition.groups[1]!.nested!, { match: 'exclude' });
     Object.assign(copy.entries[0]!.filters[1]!, { nestedPath: 'other' });

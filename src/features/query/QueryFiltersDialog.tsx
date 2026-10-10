@@ -277,9 +277,14 @@ export function QueryFiltersDialog({ draft, current, initialSelection, initialNe
               ? 'queryFilters:nestedInnerBoundary' : 'queryFilters:nestedSameObject')
               : item.operation === 'exclude' ? t('queryFilters:excludeBoundary') : undefined}>{operationLabel(item)}</span>
             {item.nestedPath ? <code className="qfilter-path" title={t('queryFilters:nestedSameObject')}>{item.nestedPath}</code> : null}
-            {item.evidence === 'runtime' ? <span title={t('queryFilters:runtimeBoundary')}>{t('queryFilters:runtime')}</span> : null}
+            {item.evidence === 'runtime' ? <span title={t(item.origin === 'saved' ? 'pinnedFilters:runtimeBoundary' : 'queryFilters:runtimeBoundary')}>
+              {t(item.origin === 'saved' ? 'pinnedFilters:runtime' : 'queryFilters:runtime')}</span> : null}
             {item.origin === 'saved' ? <span title={t('pinnedFilters:literalBoundary')}>{t('pinnedFilters:literal')}</span> : null}
             {item.value !== null ? <code id={`${id}-token-${position}`} title={item.value}>{item.value}</code> : null}
+            {item.origin === 'saved' && item.runtimeMapping ? <details className="qfilter-saved-runtime">
+              <summary>{t('pinnedFilters:runtimeDeclaration', { field: item.field })}</summary>
+              <pre className="qfilter-current">{JSON.stringify(item.runtimeMapping, null, 2)}</pre>
+            </details> : null}
             <SelectControl aria-label={t('queryFilters:filterGroup', { field: item.field })} disabled={!currentTarget}
               value={composition.groups.find((group) => group.filterIds.includes(item.id))?.id ?? ''}
               onChange={(event) => moveFilter(item.id, event.target.value)}>

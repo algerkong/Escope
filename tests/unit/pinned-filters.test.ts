@@ -40,7 +40,7 @@ describe('bounded pinned filter definitions', () => {
     });
 
   it('rejects newer versions, malformed states, duplicates, dotted fields and nested groups including disabled entries', () => {
-    expect(parsePinnedFilterLibrary({ ...fixture, version: 3 })).toBeNull();
+    expect(parsePinnedFilterLibrary({ ...fixture, version: 4 })).toBeNull();
     for (const patch of [
       { id: '' }, { name: ' bad' }, { name: 'x'.repeat(121) }, { connectionId: null }, { index: 'remote:orders' },
       { filters: [] }, { composition: null },

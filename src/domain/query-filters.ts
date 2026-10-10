@@ -10,7 +10,7 @@ import { parseRawJson, property, sliceRaw, type ResultColumn } from './query-res
 import { copyQueryTimeRange, parseQueryTimeRange, validTimeRangeField } from './query-time-range';
 import type { FieldCatalog } from './resource';
 import { compareDecimalText, parseDecimalToken } from './result-grid';
-import { parseRuntimeMappings } from './runtime-fields';
+import { parseRuntimeMapping, parseRuntimeMappings, RUNTIME_FIELD_TYPES, sameRuntimeMapping, type RuntimeMapping } from './runtime-fields';
 
 export const MAX_QUERY_FILTERS = 32;
 export const MAX_FILTER_GROUPS = 8;
@@ -39,6 +39,8 @@ export interface QueryFilter {
   readonly origin: FilterValueOrigin | 'input' | 'saved';
   /** Explicit Mapping-proven scope, never inferred from a cell's object or array shape. */
   readonly nestedPath?: string;
+  /** Only saved runtime literals carry a declaration; it is never injected into the query. */
+  readonly runtimeMapping?: RuntimeMapping;
   /** Omitted means enabled. Disabled definitions retain their membership and still count toward limits. */
   readonly enabled?: boolean;
 }
@@ -120,12 +122,12 @@ function readBody(source: string): Node | null {
   return bytes(source) <= MAX_FILTER_DSL_BYTES && validateQueryDsl(source).ok ? boundedParameterJson(source) : null;
 }
 
-function familyOf(type: string): Family | null {
+function familyOf(type: string, runtime = false): Family | null {
   if (['keyword', 'constant_keyword', 'wildcard'].includes(type)) return 'keyword';
   if (['text', 'match_only_text'].includes(type)) return 'text';
   if (Object.hasOwn(INTEGER_BOUNDS, type) || ['half_float', 'float', 'double', 'scaled_float'].includes(type)) return 'number';
   if (type === 'boolean') return 'boolean';
-  if (['date', 'date_nanos', 'ip'].includes(type)) return 'existence';
+  if (['date', 'date_nanos', 'ip'].includes(type) || runtime && type === 'geo_point') return 'existence';
   return null;
 }
 
@@ -156,7 +158,7 @@ function fieldEvidence(executed: Node, current: Node, field: string, catalog?: F
     return { ok: false, code: 'runtimeChanged' };
   }
   if (before) {
-    const family = familyOf(before.type);
+    const family = familyOf(before.type, true);
     return family ? { ok: true, family, fieldType: before.type, evidence: 'runtime' } : { ok: false, code: 'fieldUnsupported' };
   }
   return mappedFieldEvidence(field, catalog);
@@ -302,13 +304,18 @@ export function queryFilterDefinitionProblem(filter: QueryFilter): QueryFilterPr
       || !validNestedFilterSegment(filter.field.slice(filter.nestedPath.length + 1))) return 'fieldPath';
   if (filter.evidence !== 'mapped' && filter.evidence !== 'runtime'
     || filter.origin !== 'source' && filter.origin !== 'fields' && filter.origin !== 'input' && filter.origin !== 'saved') return 'invalidValue';
-  if (filter.origin === 'saved' && filter.evidence !== 'mapped') return 'savedFilterUnsupported';
-  const family = familyOf(filter.fieldType);
+  const runtime = filter.evidence === 'runtime';
+  if (filter.origin === 'saved' && runtime) {
+    const mapping = parseRuntimeMapping(filter.runtimeMapping);
+    if (!mapping || mapping.type !== filter.fieldType || filter.nestedPath !== undefined) return 'savedFilterUnsupported';
+  } else if (Object.hasOwn(filter, 'runtimeMapping')) return 'savedFilterUnsupported';
+  if (runtime && (filter.nestedPath !== undefined || !RUNTIME_FIELD_TYPES.some((type) => type === filter.fieldType))) return 'fieldUnsupported';
+  const family = familyOf(filter.fieldType, runtime);
   if (!family) return 'fieldUnsupported';
   const presence = filter.operation === 'exists' || filter.operation === 'missing';
   if (presence) return filter.value === null ? null : 'invalidValue';
   if (filter.operation !== 'include' && filter.operation !== 'exclude' || typeof filter.value !== 'string') return 'invalidValue';
-  if (filter.evidence === 'runtime' && filter.origin !== 'fields') return 'runtimeValueRequired';
+  if (runtime && filter.origin !== 'fields' && filter.origin !== 'saved') return 'runtimeValueRequired';
   return checkValue(filter.value, { ok: true, fieldType: filter.fieldType, evidence: filter.evidence, family });
 }
 
@@ -406,8 +413,9 @@ export function previewQueryFilters(source: QueryDocument, snapshot: ExecutionSn
   for (let index = 0; index < filters.length; index += 1) {
     const filter = filters[index]!;
     if (!snapshot && filter.origin !== 'saved') return { ok: false, code: 'targetChanged' };
-    if (filter.origin === 'saved' && filter.evidence !== 'mapped') {
-      return { ok: false, code: 'savedFilterUnsupported' };
+    if (filter.origin === 'saved' || Object.hasOwn(filter, 'runtimeMapping')) {
+      const problem = queryFilterDefinitionProblem(filter);
+      if (problem) return { ok: false, code: problem };
     }
     if (Object.hasOwn(filter, 'enabled') && typeof filter.enabled !== 'boolean') return { ok: false, code: 'invalidFilterState' };
     if (filterIds.has(filter.id) || filter.nestedPath === undefined && queryFilterDuplicate(filters.slice(0, index), filter)) {
@@ -423,10 +431,13 @@ export function previewQueryFilters(source: QueryDocument, snapshot: ExecutionSn
       if (problem) return { ok: false, code: problem };
       continue;
     }
-    // Saved values are literals, not values observed in the latest execution. Only current mapped
-    // evidence may validate them; a runtime declaration shadowing the field is never substituted.
-    if (filter.origin === 'saved' && filter.nestedPath === undefined && runtimeField(root, filter.field)) {
-      return { ok: false, code: 'savedFilterUnsupported' };
+    // Saved values are not execution observations. Match their saved declaration to the current
+    // body, or require mapped evidence; neither an old result nor a local view may substitute it.
+    if (filter.origin === 'saved' && filter.nestedPath === undefined) {
+      const current = runtimeField(root, filter.field);
+      if (filter.evidence === 'runtime') {
+        if (!current || !sameRuntimeMapping(current, filter.runtimeMapping!)) return { ok: false, code: 'runtimeChanged' };
+      } else if (current) return { ok: false, code: 'savedFilterUnsupported' };
     }
     const field = filter.nestedPath === undefined ? fieldEvidence(filter.origin === 'saved' ? root : roots.executed, root, filter.field, catalog)
       : nestedFieldEvidence(filter.origin === 'saved' ? root : roots.executed, root, filter.nestedPath, filter.field, catalog, mapping);
@@ -437,7 +448,7 @@ export function previewQueryFilters(source: QueryDocument, snapshot: ExecutionSn
       return { ok: false, code: 'invalidValue' };
     }
     if (!presence) {
-      if (field.evidence === 'runtime' && filter.origin !== 'fields') return { ok: false, code: 'runtimeValueRequired' };
+      if (field.evidence === 'runtime' && filter.origin !== 'fields' && filter.origin !== 'saved') return { ok: false, code: 'runtimeValueRequired' };
       const problem = checkValue(filter.value!, field);
       if (problem) return { ok: false, code: problem };
     }

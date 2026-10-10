@@ -12,3 +12,6 @@
 .pinned-confirm > span, .pinned-filters > p, .pinned-filters > label { overflow-wrap: anywhere; min-width: 0; }
 .pinned-filters .dialog-actions { flex-wrap: wrap; }
 .pinned-filters .icon-button { flex: 0 0 28px; width: 28px; height: 28px; }
+.pinned-scripts { display: flex; flex-direction: column; gap: 8px; min-width: 0; max-height: 28vh; overflow: auto; }
+.pinned-script { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.pinned-script > label { overflow-wrap: anywhere; }

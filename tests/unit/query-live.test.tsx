@@ -684,6 +684,21 @@ describe('live query execution and results', () => {
 });
 
 describe('live resource sidebar', () => {
+  it('allows explicit query execution when the field capabilities read is denied', async () => {
+    const backend = makeBackend();
+    const read = backend.readResource.getMockImplementation()!;
+    backend.readResource.mockImplementation((request) => request.resource === 'fieldCaps'
+      ? Promise.reject({ code: 'serverForbidden' }) : read(request));
+    const { user } = setup(backend);
+    await user.click(screen.getByRole('button', { name: '刷新字段' }));
+    expect(await screen.findByText('字段能力读取被拒绝；查询权限由实际请求单独校验。')).toBeVisible();
+    expect(runButton()).toBeEnabled();
+    expect(backend.execute).not.toHaveBeenCalled();
+    await user.click(runButton());
+    await screen.findByText('已完成');
+    expect(backend.execute).toHaveBeenCalledOnce();
+  });
+
   it('uses one trimmed target for field loading, refresh and index selection state', async () => {
     const backend = makeBackend();
     const { user } = setup(backend, { seeds: [{ index: ' orders-1 ' }] });
@@ -719,15 +734,15 @@ describe('live resource sidebar', () => {
     expect(backend.execute).not.toHaveBeenCalled();
   });
 
-  it('keeps field metadata after a failed refresh and clears it when the endpoint changes', async () => {
+  it('withholds field metadata after a failed refresh and keeps the execution when the endpoint changes', async () => {
     const backend = makeBackend();
     const { user, control } = setup(backend, { surface: 'preview' });
     await user.click(await screen.findByRole('button', { name: 'orders-1' }));
     await screen.findByText('legacy');
     backend.readResource.mockRejectedValueOnce({ code: 'networkError' });
     await user.click(screen.getByRole('button', { name: '刷新字段' }));
-    expect(await screen.findByText(/刷新失败，仍显示上次加载的元数据/)).toBeVisible();
-    expect(screen.getByText('legacy')).toBeVisible();
+    expect(await screen.findByText(/字段刷新失败，暂不显示旧能力/)).toBeVisible();
+    expect(screen.queryByText('legacy')).not.toBeInTheDocument();
     control.setEndpoint('https://replacement.test');
     expect(screen.queryByText('legacy')).not.toBeInTheDocument();
     expect(backend.execute).toHaveBeenCalledTimes(1);

@@ -444,7 +444,8 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
       <button className="resource-connection" onClick={() => onSettings('connections')}><Database size={17} />
         <span>{resourceTarget?.displayName ?? t('noConnection')}</span></button>
       <div className="sidebar-status"><span className="status-dot" />{t(resourceTarget ? connectionTestLabel(testResults[resourceTarget.id]) : 'notConnected')}</div>
-      <ResourceSidebar key={resourceConnectionId ?? 'none'} active={active} available={available} connectionId={resourceConnectionId} index={resourceIndex}
+      <ResourceSidebar key={JSON.stringify([resourceConnectionId, resourceEndpoint])} active={active} available={available}
+        connectionId={resourceConnectionId} endpoint={resourceEndpoint} index={resourceIndex}
         indices={indicesFor(resourceConnectionId, resourceEndpoint)} fields={fieldsFor(resourceConnectionId, resourceEndpoint, resourceIndex.trim())}
         mappingFor={(name) => mappingFor(resourceConnectionId, resourceEndpoint, name)}
         onSelectIndex={selectIndex}

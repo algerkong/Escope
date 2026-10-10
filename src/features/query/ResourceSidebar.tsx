@@ -3,9 +3,10 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { IconButton, Modal } from '../../components/controls';
 import type { FieldCapability, FieldCatalog, IndexCatalog } from '../../domain/resource';
-import type { Loadable, MappingState } from './useQueryResources';
+import { resourceKey, type Loadable, type MappingState } from './useQueryResources';
 import { resourceErrorKey } from './error-message';
 import { useCopyText } from './useCopyText';
+import { FieldCapabilityDetails, FieldCapabilitySource } from './FieldCapabilityDetails';
 
 /** Bound the rendered lists: the filters narrow a large cluster without unbounded DOM. */
 const MAX_VISIBLE_INDICES = 200;
@@ -16,6 +17,7 @@ interface Props {
   active?: boolean;
   available: boolean;
   connectionId: string | null;
+  endpoint: string | null;
   index: string;
   indices: Loadable<IndexCatalog>;
   fields: Loadable<FieldCatalog>;
@@ -34,7 +36,7 @@ interface Props {
  * edit. Capability details are on demand and metadata fields start collapsed.
  * When live reads are unavailable nothing is requested and no retry is offered.
  */
-export function ResourceSidebar({ active = true, available, connectionId, index, indices, fields, mappingFor, onSelectIndex, onRefreshIndices, onLoadFields, onLoadMapping }: Props) {
+export function ResourceSidebar({ active = true, available, connectionId, endpoint, index, indices, fields, mappingFor, onSelectIndex, onRefreshIndices, onLoadFields, onLoadMapping }: Props) {
   const { t, i18n } = useTranslation();
   const [filter, setFilter] = useState('');
   const [fieldFilters, setFieldFilters] = useState<Record<string, string>>({});
@@ -43,6 +45,8 @@ export function ResourceSidebar({ active = true, available, connectionId, index,
   const copy = useCopyText(`${connectionId}:${mappingIndex}`);
   useEffect(() => { if (!active) setMappingIndex(null); }, [active]);
   const errorKey = (code: string) => resourceErrorKey(code, (key) => i18n.exists(key));
+  const fieldErrorKey = (code: string) => code === 'permissionDenied' || code === 'serverForbidden'
+    ? 'queryLive:fieldEvidenceDenied' : errorKey(code);
 
   const catalog = indices.status === 'ready' ? indices.data : null;
   const needle = filter.trim().toLowerCase();
@@ -52,14 +56,20 @@ export function ResourceSidebar({ active = true, available, connectionId, index,
       || entry.aliases.some((alias) => alias.toLowerCase().includes(needle)))
     : [];
   const visibleIndices = matchedIndices.slice(0, MAX_VISIBLE_INDICES);
-  const allFields = fields.status === 'ready' ? fields.data.fields : [];
+  const scope = index.trim();
+  const fieldSource = fields.status === 'ready' ? fields.source : undefined;
+  const sourceMatches = connectionId !== null && endpoint !== null && scope !== ''
+    && fieldSource?.connectionId === connectionId && fieldSource.endpoint === endpoint
+    && fieldSource.resource === 'fieldCaps' && fieldSource.index === scope;
+  const currentFields = fields.status === 'ready' && !fields.refreshing && !fields.refreshError && sourceMatches
+    ? fields.data : null;
+  const allFields = currentFields?.fields ?? [];
   const fieldNeedle = fieldFilter.trim().toLowerCase();
   const matchedFields = fieldNeedle === '' ? allFields : allFields.filter((field) => field.name.toLowerCase().includes(fieldNeedle));
   const visibleFields = matchedFields.slice(0, MAX_VISIBLE_FIELDS);
   const isMetadata = (field: FieldCapability) => field.types.length > 0 && field.types.every((type) => type.metadata);
   const documentFields = visibleFields.filter((field) => !isMetadata(field));
   const metadataFields = visibleFields.filter(isMetadata);
-  const scope = index.trim();
   const mappingState = mappingIndex !== null ? mappingFor(mappingIndex) : null;
   const mappingRows = mappingState?.status === 'ready' ? mappingState.data.fields.slice(0, MAX_MAPPING_ROWS) : [];
   const mappingTotal = mappingState?.status === 'ready' ? mappingState.data.fields.length : 0;
@@ -75,7 +85,7 @@ export function ResourceSidebar({ active = true, available, connectionId, index,
   };
 
   const fieldRow = (field: FieldCapability) => {
-    const typeText = field.types.map((type) => type.type).join(' / ');
+    const typeText = field.types.map((type) => type.type).join(' / ') || t('queryLive:fieldTypesUnknown');
     return <li key={field.name}>
       <details className="ql-field">
         <summary aria-label={t('queryLive:fieldDetails', { name: field.name })}>
@@ -84,14 +94,7 @@ export function ResourceSidebar({ active = true, available, connectionId, index,
           {field.conflict ? <TriangleAlert size={12} className="ql-field-conflict" aria-label={t('queryLive:fieldConflict')} /> : null}
           <ChevronRight size={12} className="ql-field-toggle" aria-hidden="true" />
         </summary>
-        <div className="ql-field-details">
-          {field.types.map((type) => <div key={type.type}>
-            <span className="ql-field-type">{type.type}</span>
-            <span className="ql-cap" data-on={String(type.searchable)}>{t(type.searchable ? 'queryLive:searchable' : 'queryLive:notSearchable')}</span>
-            <span className="ql-cap" data-on={String(type.aggregatable)}>{t(type.aggregatable ? 'queryLive:aggregatable' : 'queryLive:notAggregatable')}</span>
-            {type.metadata ? <span className="ql-cap">{t('queryLive:metadataField')}</span> : null}
-          </div>)}
-        </div>
+        <FieldCapabilityDetails key={fieldSource?.requestId} field={field} />
       </details>
     </li>;
   };
@@ -140,20 +143,27 @@ export function ResourceSidebar({ active = true, available, connectionId, index,
             ? <p className="muted small">{t('queryLive:indexListCapped', { shown: visibleIndices.length, total: matchedIndices.length })}</p> : null}
         </>) : null}
     </div>
-    <div className="resource-section">
+    <div className="resource-section" key={resourceKey(connectionId ?? '', endpoint ?? '', 'fieldCaps', scope)}>
       <div className="ql-section-head">
         <h2>{scope === '' ? t('query:fields') : t('queryLive:fieldsFor', { index: scope })}</h2>
         <IconButton icon={refreshingFields ? LoaderCircle : RefreshCw} className={refreshingFields ? 'spin' : ''}
           label={t('queryLive:refreshFields')}
-          disabled={connectionId === null || scope === '' || fields.status === 'loading' || refreshingFields} onClick={onLoadFields} />
+          disabled={connectionId === null || endpoint === null || scope === '' || fields.status === 'loading' || refreshingFields} onClick={onLoadFields} />
       </div>
-      {fields.status === 'loading' ? <div className="ql-state muted" role="status"><LoaderCircle size={14} className="spin" />{t('queryLive:loading')}</div> : null}
-      {fields.status === 'error' ? <div className="ql-state error" role="status"><span>{t(errorKey(fields.code))}</span>
+      {fields.status === 'loading' || refreshingFields ? <div className="ql-state muted" role="status">
+        <LoaderCircle size={14} className="spin" aria-hidden="true" />
+        {t(refreshingFields ? 'queryLive:fieldEvidenceRefreshing' : 'queryLive:loading')}</div> : null}
+      {fields.status === 'error' ? <div className="ql-state error" role="status"><span>{t(fieldErrorKey(fields.code))}</span>
         <button type="button" className="secondary compact-button" onClick={onLoadFields}>{t('queryLive:reload')}</button></div> : null}
       {fields.status === 'idle' ? <div className="muted resource-empty">{t('queryLive:noFields')}</div> : null}
-      {refreshNotice(fields)}
-      {fields.status === 'ready' ? (allFields.length === 0
-        ? <div className="ql-state muted">{t('queryLive:noFieldsDetail')}</div>
+      {fields.status === 'ready' && fields.refreshError ? <div className="ql-refresh-warning" role="status">
+        <TriangleAlert size={14} aria-hidden="true" /><span>{t('queryLive:fieldEvidenceRefreshFailed')} {t(fieldErrorKey(fields.refreshError))}</span>
+      </div> : null}
+      {fields.status === 'ready' && !fields.refreshing && !fields.refreshError && !sourceMatches
+        ? <div className="ql-state muted" role="status">{t('queryLive:fieldEvidenceUnverified')}</div> : null}
+      {currentFields && fieldSource ? <FieldCapabilitySource key={fieldSource.requestId} source={fieldSource} catalog={currentFields} /> : null}
+      {currentFields ? (allFields.length === 0
+        ? <div className="ql-state muted">{t('queryLive:fieldEvidenceEmpty')}</div>
         : <>
           <label className="ql-filter"><Search size={13} />
             <input aria-label={t('queryLive:fieldFilter')} placeholder={t('queryLive:fieldFilter')} spellCheck={false}

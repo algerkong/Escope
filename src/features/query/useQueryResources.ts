@@ -9,8 +9,18 @@ import { errorCode, type QueryBackend, type ResourceKind } from '../../services/
 export type Loadable<T> =
   | { readonly status: 'idle' }
   | { readonly status: 'loading' }
-  | { readonly status: 'ready'; readonly data: T; readonly refreshing?: boolean; readonly refreshError?: string }
+  | { readonly status: 'ready'; readonly data: T; readonly source?: ResourceReadSource;
+    readonly refreshing?: boolean; readonly refreshError?: string }
   | { readonly status: 'error'; readonly code: string };
+
+export interface ResourceReadSource {
+  readonly requestId: string;
+  readonly connectionId: string;
+  readonly endpoint: string;
+  readonly resource: ResourceKind;
+  /** The exact requested scope, not an inference from returned index names. */
+  readonly index: string | undefined;
+}
 
 export interface MappingState {
   /** Verbatim mapping response, kept for the detail view and copy. */
@@ -113,7 +123,8 @@ export function useQueryResources(backend: QueryBackend) {
         return;
       }
       const parsed = parse(response.rawResponse);
-      settle(parsed.ok ? { status: 'ready', data: parsed.value } : { status: 'error', code: 'invalidResponse' });
+      settle(parsed.ok ? { status: 'ready', data: parsed.value,
+        source: { requestId, connectionId, endpoint, resource, index } } : { status: 'error', code: 'invalidResponse' });
     } catch (error) {
       if (!alive.current || inFlight.current.get(key)?.requestId !== requestId) return;
       inFlight.current.delete(key);

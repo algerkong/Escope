@@ -35,23 +35,42 @@ export interface IndexCatalog {
   readonly dataStreams: readonly DataStreamEntry[];
 }
 
+export type FieldIndexEvidence =
+  | { readonly status: 'notReported' | 'invalid' }
+  | { readonly status: 'reported'; readonly indices: readonly string[] };
+
+export interface FieldCapabilityReport {
+  readonly searchable: boolean | null;
+  readonly aggregatable: boolean | null;
+  readonly metadata: boolean | null;
+  readonly indices: FieldIndexEvidence;
+  readonly nonSearchableIndices: FieldIndexEvidence;
+  readonly nonAggregatableIndices: FieldIndexEvidence;
+}
+
+export type FieldCapabilityStatus = 'supported' | 'unsupported' | 'restricted' | 'unknown';
+
 export interface FieldTypeCapability {
   readonly type: string;
+  /** Conservative gates, not permission checks or the original reported flags. */
   readonly searchable: boolean;
   readonly aggregatable: boolean;
   readonly metadata: boolean;
+  /** Present on parsed field caps; optional for existing local capability projections. */
+  readonly report?: FieldCapabilityReport;
 }
 
 export interface FieldCapability {
   readonly name: string;
   readonly types: readonly FieldTypeCapability[];
-  /** More than one type across the resolved indices: values are not comparable as one field. */
+  /** More than one reported type; capability evidence must stay separate for each. */
   readonly conflict: boolean;
 }
 
 export interface FieldCatalog {
   readonly indices: readonly string[];
   readonly fields: readonly FieldCapability[];
+  readonly indexEvidence?: FieldIndexEvidence;
 }
 
 export interface MappingField {
@@ -70,6 +89,29 @@ function byName(a: { name: string }, b: { name: string }): number {
 
 function stringList(node: ReturnType<typeof property>): string[] {
   return items(node).map(textOf).filter((value): value is string => value !== undefined);
+}
+
+function fieldIndexEvidence(node: ReturnType<typeof property>): FieldIndexEvidence {
+  if (node === undefined) return { status: 'notReported' };
+  if (node.type !== 'array') return { status: 'invalid' };
+  const indices: string[] = [];
+  const seen = new Set<string>();
+  for (const child of node.children ?? []) {
+    const name = textOf(child);
+    if (name === undefined || name === '' || seen.has(name)) return { status: 'invalid' };
+    seen.add(name);
+    indices.push(name);
+  }
+  return { status: 'reported', indices };
+}
+
+export function fieldCapabilityStatus(report: FieldCapabilityReport | undefined,
+  capability: 'searchable' | 'aggregatable'): FieldCapabilityStatus {
+  if (!report || report[capability] === null || report.indices.status === 'invalid') return 'unknown';
+  const exceptions = capability === 'searchable' ? report.nonSearchableIndices : report.nonAggregatableIndices;
+  if (exceptions.status === 'invalid') return 'unknown';
+  if (exceptions.status === 'reported' && exceptions.indices.length > 0) return 'restricted';
+  return report[capability] ? 'supported' : 'unsupported';
 }
 
 /**
@@ -123,29 +165,42 @@ export function parseFieldCaps(raw: string): ResourceParse<FieldCatalog> {
   if (!root || root.type !== 'object') return { ok: false, code: 'invalidResponse' };
   const fieldsNode = property(root, 'fields');
   if (!fieldsNode || fieldsNode.type !== 'object') return { ok: false, code: 'invalidResponse' };
-  const fields: FieldCapability[] = (fieldsNode.children ?? []).flatMap((entry) => {
-    if (entry.type !== 'property') return [];
+  const indexEvidence = fieldIndexEvidence(property(root, 'indices'));
+  if (indexEvidence.status === 'invalid') return { ok: false, code: 'invalidResponse' };
+  const fields: FieldCapability[] = [];
+  for (const entry of fieldsNode.children ?? []) {
     const name = textOf(entry.children?.[0]);
     const caps = entry.children?.[1];
-    if (name === undefined || caps?.type !== 'object') return [];
-    const types: FieldTypeCapability[] = (caps.children ?? []).flatMap((cap) => {
-      if (cap.type !== 'property') return [];
+    if (name === undefined || caps?.type !== 'object') return { ok: false, code: 'invalidResponse' };
+    const types: FieldTypeCapability[] = [];
+    for (const cap of caps.children ?? []) {
       const typeName = textOf(cap.children?.[0]);
       const body = cap.children?.[1];
-      if (typeName === undefined) return [];
-      const nonAggregatable = property(body, 'non_aggregatable_indices');
-      return [{
-        type: textOf(property(body, 'type')) ?? typeName,
-        searchable: boolOf(property(body, 'searchable')) === true
-          && stringList(property(body, 'non_searchable_indices')).length === 0,
-        aggregatable: boolOf(property(body, 'aggregatable')) === true
-          && (nonAggregatable === undefined || nonAggregatable.type === 'array' && (nonAggregatable.children?.length ?? 0) === 0),
-        metadata: boolOf(property(body, 'metadata_field')) ?? false,
-      }];
-    });
-    return [{ name, types, conflict: types.length > 1 }];
-  });
-  return { ok: true, value: { indices: stringList(property(root, 'indices')), fields: fields.sort(byName) } };
+      if (typeName === undefined || typeName === '' || body?.type !== 'object') return { ok: false, code: 'invalidResponse' };
+      const declaredType = property(body, 'type');
+      if (declaredType !== undefined && textOf(declaredType) !== typeName) return { ok: false, code: 'invalidResponse' };
+      const report: FieldCapabilityReport = {
+        searchable: boolOf(property(body, 'searchable')) ?? null,
+        aggregatable: boolOf(property(body, 'aggregatable')) ?? null,
+        metadata: boolOf(property(body, 'metadata_field')) ?? null,
+        indices: fieldIndexEvidence(property(body, 'indices')),
+        nonSearchableIndices: fieldIndexEvidence(property(body, 'non_searchable_indices')),
+        nonAggregatableIndices: fieldIndexEvidence(property(body, 'non_aggregatable_indices')),
+      };
+      types.push({
+        type: typeName,
+        searchable: fieldCapabilityStatus(report, 'searchable') === 'supported',
+        aggregatable: fieldCapabilityStatus(report, 'aggregatable') === 'supported',
+        metadata: report.metadata === true,
+        report,
+      });
+    }
+    fields.push({ name, types, conflict: types.length > 1 });
+  }
+  return { ok: true, value: {
+    indices: indexEvidence.status === 'reported' ? indexEvidence.indices : [],
+    indexEvidence, fields: fields.sort(byName),
+  } };
 }
 
 function flattenProperties(index: string, prefix: string, properties: ReturnType<typeof property>, out: MappingField[]): void {

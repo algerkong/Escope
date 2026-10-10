@@ -302,7 +302,7 @@ export function queryFilterDefinitionProblem(filter: QueryFilter): QueryFilterPr
       || !validNestedFilterSegment(filter.field.slice(filter.nestedPath.length + 1))) return 'fieldPath';
   if (filter.evidence !== 'mapped' && filter.evidence !== 'runtime'
     || filter.origin !== 'source' && filter.origin !== 'fields' && filter.origin !== 'input' && filter.origin !== 'saved') return 'invalidValue';
-  if (filter.origin === 'saved' && (filter.evidence !== 'mapped' || filter.nestedPath !== undefined)) return 'savedFilterUnsupported';
+  if (filter.origin === 'saved' && filter.evidence !== 'mapped') return 'savedFilterUnsupported';
   const family = familyOf(filter.fieldType);
   if (!family) return 'fieldUnsupported';
   const presence = filter.operation === 'exists' || filter.operation === 'missing';
@@ -406,7 +406,7 @@ export function previewQueryFilters(source: QueryDocument, snapshot: ExecutionSn
   for (let index = 0; index < filters.length; index += 1) {
     const filter = filters[index]!;
     if (!snapshot && filter.origin !== 'saved') return { ok: false, code: 'targetChanged' };
-    if (filter.origin === 'saved' && (filter.evidence !== 'mapped' || filter.nestedPath !== undefined)) {
+    if (filter.origin === 'saved' && filter.evidence !== 'mapped') {
       return { ok: false, code: 'savedFilterUnsupported' };
     }
     if (Object.hasOwn(filter, 'enabled') && typeof filter.enabled !== 'boolean') return { ok: false, code: 'invalidFilterState' };
@@ -414,7 +414,9 @@ export function previewQueryFilters(source: QueryDocument, snapshot: ExecutionSn
       return { ok: false, code: 'duplicate' };
     }
     filterIds.add(filter.id);
-    if (filter.nestedPath !== undefined && (filter.origin !== 'input' || filter.evidence !== 'mapped')) return { ok: false, code: 'nestedGroupMismatch' };
+    if (filter.nestedPath !== undefined && (filter.origin !== 'input' && filter.origin !== 'saved' || filter.evidence !== 'mapped')) {
+      return { ok: false, code: 'nestedGroupMismatch' };
+    }
     if (!queryFilterEnabled(filter)) {
       // Disabled leaves need no current field evidence, but are not a way to hide malformed definitions.
       const problem = queryFilterDefinitionProblem(filter);
@@ -423,9 +425,11 @@ export function previewQueryFilters(source: QueryDocument, snapshot: ExecutionSn
     }
     // Saved values are literals, not values observed in the latest execution. Only current mapped
     // evidence may validate them; a runtime declaration shadowing the field is never substituted.
-    if (filter.origin === 'saved' && runtimeField(root, filter.field)) return { ok: false, code: 'savedFilterUnsupported' };
+    if (filter.origin === 'saved' && filter.nestedPath === undefined && runtimeField(root, filter.field)) {
+      return { ok: false, code: 'savedFilterUnsupported' };
+    }
     const field = filter.nestedPath === undefined ? fieldEvidence(filter.origin === 'saved' ? root : roots.executed, root, filter.field, catalog)
-      : nestedFieldEvidence(roots.executed, root, filter.nestedPath, filter.field, catalog, mapping);
+      : nestedFieldEvidence(filter.origin === 'saved' ? root : roots.executed, root, filter.nestedPath, filter.field, catalog, mapping);
     if (!field.ok) return field;
     if (field.fieldType !== filter.fieldType || field.evidence !== filter.evidence) return { ok: false, code: 'fieldChanged' };
     const presence = filter.operation === 'exists' || filter.operation === 'missing';

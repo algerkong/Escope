@@ -3,12 +3,12 @@ use crate::error::AppError;
 use crate::operation::IndexTarget;
 use crate::workspace_recovery::Nullable;
 use crate::{with_database, StorageState};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use tauri::State;
 
-pub(crate) const VERSION: u32 = 1;
+pub(crate) const VERSION: u32 = 2;
 pub(crate) const MAX_BYTES: usize = 256 * 1024;
 pub(crate) const MAX_REVISION: u64 = 9_007_199_254_740_991;
 const MAX_ENTRIES: usize = 100;
@@ -40,6 +40,26 @@ pub struct PinnedFilter {
     operation: FilterOperation,
     value: Nullable<String>,
     enabled: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "non_null"
+    )]
+    nested_path: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ParentMatch {
+    Include,
+    Exclude,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NestedScope {
+    path: String,
+    r#match: ParentMatch,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -48,6 +68,12 @@ pub struct FilterGroup {
     id: String,
     mode: Join,
     filter_ids: Vec<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "non_null"
+    )]
+    nested: Option<NestedScope>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -68,12 +94,34 @@ pub struct PinnedFilterDefinition {
     composition: Composition,
 }
 
+fn non_null<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
 fn valid_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 64
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
+}
+
+fn valid_field(value: &str) -> bool {
+    !value.is_empty()
+        && value.trim() == value
+        && value.len() <= 1024
+        && value != "$param"
+        && !value.starts_with('_')
+        && !value.contains(['*', '?'])
+        && !value.chars().any(char::is_control)
+}
+
+fn valid_segment(value: &str) -> bool {
+    valid_field(value) && !value.contains(['.', '[', ']', '/', '\\'])
 }
 
 fn integer_bounds(field_type: &str) -> Option<(i128, i128)> {
@@ -126,18 +174,25 @@ fn exact_integer(raw: &str) -> Option<i128> {
 }
 
 impl PinnedFilter {
-    fn validate(&self) -> Result<(), AppError> {
+    fn validate(&self, version: u32) -> Result<(), AppError> {
         let invalid = || AppError::new("invalidInput");
-        if !valid_id(&self.id)
-            || self.field.is_empty()
-            || self.field.trim() != self.field
-            || self.field.len() > 1024
-            || self.field == "$param"
-            || self.field.starts_with('_')
-            || self.field.contains(['.', '*', '?'])
-            || self.field.chars().any(char::is_control)
-        {
+        if !valid_id(&self.id) || !valid_field(&self.field) {
             return Err(invalid());
+        }
+        match &self.nested_path {
+            Some(path)
+                if version < 2
+                    || !valid_segment(path)
+                    || !self
+                        .field
+                        .strip_prefix(path)
+                        .and_then(|suffix| suffix.strip_prefix('.'))
+                        .is_some_and(valid_segment) =>
+            {
+                return Err(invalid());
+            }
+            None if self.field.contains('.') => return Err(invalid()),
+            _ => {}
         }
         let keyword = matches!(
             self.field_type.as_str(),
@@ -190,7 +245,7 @@ impl PinnedFilter {
 }
 
 impl PinnedFilterDefinition {
-    fn validate(&self) -> Result<(), AppError> {
+    fn validate(&self, version: u32) -> Result<(), AppError> {
         let invalid = || AppError::new("invalidInput");
         if !valid_id(&self.id)
             || !valid_id(&self.connection_id)
@@ -211,9 +266,10 @@ impl PinnedFilterDefinition {
         let mut filters = HashMap::new();
         let mut definitions = HashSet::new();
         for filter in &self.filters {
-            filter.validate()?;
+            filter.validate(version)?;
             if filters.insert(&filter.id, filter).is_some()
-                || !definitions.insert((&filter.field, filter.operation, &filter.value.0))
+                || filter.nested_path.is_none()
+                    && !definitions.insert((&filter.field, filter.operation, &filter.value.0))
             {
                 return Err(invalid());
             }
@@ -227,8 +283,21 @@ impl PinnedFilterDefinition {
             {
                 return Err(invalid());
             }
+            if group
+                .nested
+                .as_ref()
+                .is_some_and(|scope| version < 2 || !valid_segment(&scope.path))
+            {
+                return Err(invalid());
+            }
+            let mut members = HashSet::new();
             for id in &group.filter_ids {
-                if filters.remove(id).is_none() {
+                let filter = filters.remove(id).ok_or_else(invalid)?;
+                if filter.nested_path.as_deref()
+                    != group.nested.as_ref().map(|scope| scope.path.as_str())
+                    || group.nested.is_some()
+                        && !members.insert((&filter.field, filter.operation, &filter.value.0))
+                {
                     return Err(invalid());
                 }
             }
@@ -257,12 +326,12 @@ impl PinnedFilterLibrary {
     }
 
     pub(crate) fn validate(&self) -> Result<(), AppError> {
-        if self.version != VERSION || self.entries.len() > MAX_ENTRIES {
+        if self.version != 1 && self.version != VERSION || self.entries.len() > MAX_ENTRIES {
             return Err(AppError::new("invalidInput"));
         }
         let mut ids = HashSet::new();
         for entry in &self.entries {
-            entry.validate()?;
+            entry.validate(self.version)?;
             if !ids.insert(&entry.id) {
                 return Err(AppError::new("invalidInput"));
             }

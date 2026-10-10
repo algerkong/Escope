@@ -1,0 +1,28 @@
+{
+  "version": 2,
+  "entries": [
+    {
+      "id": "pinned-nested",
+      "name": "Nested set",
+      "connectionId": "connection-a",
+      "index": "events-*",
+      "filters": [
+        { "id": "status", "field": "status", "fieldType": "keyword", "operation": "include", "value": "\"ready\"", "enabled": true },
+        { "id": "author", "field": "comments.author", "fieldType": "keyword", "operation": "include", "value": "\"a\\u006cice\"", "enabled": true, "nestedPath": "comments" },
+        { "id": "n", "field": "comments.n", "fieldType": "long", "operation": "exclude", "value": "9007199254740993", "enabled": true, "nestedPath": "comments" },
+        { "id": "other-author", "field": "comments.author", "fieldType": "keyword", "operation": "include", "value": "\"a\\u006cice\"", "enabled": true, "nestedPath": "comments" },
+        { "id": "missing", "field": "comments.message", "fieldType": "text", "operation": "missing", "value": null, "enabled": false, "nestedPath": "comments" },
+        { "id": "tag", "field": "tags.name", "fieldType": "keyword", "operation": "include", "value": "\"archived\"", "enabled": false, "nestedPath": "tags" }
+      ],
+      "composition": {
+        "mode": "any",
+        "groups": [
+          { "id": "flat", "mode": "all", "filterIds": ["status"] },
+          { "id": "same-object", "mode": "all", "filterIds": ["author", "n"], "nested": { "path": "comments", "match": "include" } },
+          { "id": "without-object", "mode": "any", "filterIds": ["other-author", "missing"], "nested": { "path": "comments", "match": "exclude" } },
+          { "id": "inactive", "mode": "all", "filterIds": ["tag"], "nested": { "path": "tags", "match": "exclude" } }
+        ]
+      }
+    }
+  ]
+}

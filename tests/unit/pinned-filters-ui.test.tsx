@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { I18nextProvider } from 'react-i18next';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import fixture from '../fixtures/pinned-filters-v1.json';
+import nestedFixture from '../fixtures/pinned-filters-v2.json';
 import { createQuery } from '../../src/domain/query';
 import { draftFromPinnedFilters, parsePinnedFilterLibrary } from '../../src/domain/pinned-filters';
 import { PinFiltersDialog, PinnedFiltersDialog } from '../../src/features/query/PinnedFiltersDialog';
@@ -44,7 +45,7 @@ describe('pinned filter review dialogs', () => {
     expect(vi.mocked(library.save).mock.calls[0]![0]).toMatchObject({ name: 'Final set', filters: definition.filters });
   });
 
-  it('keeps all disabled definitions but explicitly refuses any disabled runtime/nested entry', () => {
+  it('keeps all disabled definitions but refuses disabled runtime or malformed nested entries', () => {
     const library = controller();
     const changed = { ...draft, filters: draft.filters.map((filter, index) => index === 2
       ? { ...filter, evidence: 'runtime' as const, origin: 'fields' as const } : filter) };
@@ -55,7 +56,7 @@ describe('pinned filter review dialogs', () => {
     expect(screen.getByRole('button', { name: enPinnedFilters.save })).toBeDisabled();
     const nested = { ...draft, filters: draft.filters.map((filter, index) => index === 2 ? { ...filter, nestedPath: 'comments' } : filter) };
     view.rerender(wrap(<PinFiltersDialog draft={nested} currentTarget library={library} kind="session" onClose={vi.fn()} />));
-    expect(screen.getByRole('status')).toHaveTextContent(enPinnedFilters.unsupported);
+    expect(screen.getByRole('status')).toHaveTextContent(enPinnedFilters.invalid);
     expect(library.save).not.toHaveBeenCalled();
   });
 
@@ -138,5 +139,22 @@ describe('pinned filter review dialogs', () => {
   it('keeps every added label and error translated', () => {
     expect(Object.keys(zhPinnedFilters).sort()).toEqual(Object.keys(enPinnedFilters).sort());
     expect(Object.values(zhPinnedFilters).every((value) => value.trim().length > 0)).toBe(true);
+  });
+
+  it('reviews and saves every nested path, parent exclusion and disabled literal without flattening the set', async () => {
+    const nested = parsePinnedFilterLibrary(nestedFixture)!.entries[0]!;
+    const pending = draftFromPinnedFilters(nested, { ...source, index: nested.index }, draft.endpoint)!;
+    const library = controller();
+    const close = vi.fn();
+    render(wrap(<PinFiltersDialog draft={pending} currentTarget library={library} kind="desktop" onClose={close} />));
+    fireEvent.change(screen.getByLabelText(enPinnedFilters.name), { target: { value: 'Nested copy' } });
+    const payload = JSON.parse((screen.getByLabelText(enPinnedFilters.definition) as HTMLTextAreaElement).value);
+    expect(payload).toMatchObject({ filters: nested.filters, composition: nested.composition });
+    expect(payload).not.toHaveProperty('snapshot');
+    expect(screen.getByRole('button', { name: enPinnedFilters.save })).toBeDisabled();
+    fireEvent.click(screen.getByRole('checkbox', { name: enPinnedFilters.literalConsent }));
+    fireEvent.click(screen.getByRole('button', { name: enPinnedFilters.save }));
+    await waitFor(() => expect(close).toHaveBeenCalledOnce());
+    expect(library.save).toHaveBeenCalledExactlyOnceWith(payload);
   });
 });

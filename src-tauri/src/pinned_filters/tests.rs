@@ -10,6 +10,13 @@ fn fixture() -> PinnedFilterLibrary {
     .unwrap()
 }
 
+fn nested_fixture() -> PinnedFilterLibrary {
+    serde_json::from_str(include_str!(
+        "../../../tests/fixtures/pinned-filters-v2.json"
+    ))
+    .unwrap()
+}
+
 fn populated(database: &mut Database) -> PinnedFilterLibrary {
     let profile = database
         .save_connection(
@@ -49,7 +56,7 @@ fn shared_contract_preserves_literals_boolean_states_and_groups_without_executio
 fn unknown_fields_duplicate_keys_future_versions_and_missing_fields_fail_closed() {
     for raw in [
         r#"{"version":1,"version":1,"entries":[]}"#,
-        r#"{"version":2,"entries":[]}"#,
+        r#"{"version":3,"entries":[]}"#,
         r#"{"version":1,"entries":[],"binding":{}}"#,
     ] {
         assert_eq!(decode_stored(raw).unwrap_err().code, "invalidResponse");
@@ -216,6 +223,7 @@ fn count_group_membership_and_serialized_utf8_bytes_have_no_partial_acceptance()
             id: "g".into(),
             mode: Join::Any,
             filter_ids: members.into_iter().map(str::to_owned).collect(),
+            nested: None,
         }];
         assert!(library.validate().is_err());
     }
@@ -331,7 +339,7 @@ fn malformed_or_future_storage_is_not_overwritten_even_with_the_matching_revisio
     let raw = Connection::open(&path).unwrap();
     for invalid in [
         "not-json",
-        r#"{"version":2,"entries":[]}"#,
+        r#"{"version":3,"entries":[]}"#,
         r#"{"version":1,"entries":[],"entries":[]}"#,
         r#"{"version":1,"entries":[],"auth":{}}"#,
     ] {
@@ -421,4 +429,269 @@ fn revision_sql_byte_bounds_and_read_only_failures_do_not_claim_success() {
         "storageUnavailable"
     );
     assert_eq!(database.pinned_filters().unwrap().library, library);
+}
+
+#[test]
+fn shared_v2_contract_round_trips_explicit_scopes_negation_and_disabled_literals() {
+    let library = nested_fixture();
+    library.validate().unwrap();
+    let raw: Value = serde_json::from_str(include_str!(
+        "../../../tests/fixtures/pinned-filters-v2.json"
+    ))
+    .unwrap();
+    assert_eq!(serde_json::to_value(&library).unwrap(), raw);
+    assert_eq!(
+        library.entries[0].filters[2].value.0.as_deref(),
+        Some("9007199254740993")
+    );
+    assert_eq!(
+        library.entries[0].filters[1].value.0.as_deref(),
+        Some(r#""a\u006cice""#)
+    );
+    assert_eq!(
+        library.entries[0].composition.groups[2].nested,
+        Some(NestedScope {
+            path: "comments".into(),
+            r#match: ParentMatch::Exclude
+        })
+    );
+    assert!(!library.entries[0].filters[5].enabled);
+    let mut downgraded = library.clone();
+    downgraded.version = 1;
+    assert!(downgraded.validate().is_err());
+    let mut mixed = fixture();
+    mixed.version = VERSION;
+    mixed.entries.extend(library.entries);
+    mixed.validate().unwrap();
+}
+
+#[test]
+fn nested_leaf_scope_requires_explicit_direct_paths_even_when_disabled() {
+    let base = serde_json::to_value(nested_fixture()).unwrap();
+    for (key, value) in [
+        ("nestedPath", Value::Null),
+        ("nestedPath", json!(["comments"])),
+        ("nestedPath", json!("")),
+        ("nestedPath", json!("comments.author")),
+        ("nestedPath", json!("comments[0]")),
+        ("nestedPath", json!("comments/child")),
+        ("nestedPath", json!("_comments")),
+        ("nestedPath", json!("$param")),
+        ("nestedPath", json!("other")),
+        ("field", json!("comments.author.name")),
+        ("field", json!("comments.")),
+        ("field", json!("comments.author[0]")),
+        ("field", json!("comments.$param")),
+        ("field", json!("comments._id")),
+        ("field", json!("comments.author/name")),
+        ("field", json!(format!("comments.{}", "x".repeat(1024)))),
+        ("fieldType", json!("nested")),
+        ("evidence", json!("runtime")),
+        ("origin", json!("saved")),
+        ("runtime_mappings", json!({})),
+        ("value", json!("{}")),
+        ("value", json!("[]")),
+        ("value", json!("null")),
+        ("value", json!(format!("\"{}\"", "x".repeat(4096)))),
+    ] {
+        let mut copy = base.clone();
+        copy["entries"][0]["filters"][1]["enabled"] = json!(false);
+        copy["entries"][0]["filters"][1][key] = value;
+        assert!(decode_stored(&copy.to_string()).is_err(), "{key}");
+    }
+    let mut unscoped = base;
+    unscoped["entries"][0]["filters"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("nestedPath");
+    assert!(decode_stored(&unscoped.to_string()).is_err());
+}
+
+#[test]
+fn nested_group_shape_is_strict_and_never_silently_drops_parent_negation() {
+    let base = serde_json::to_value(nested_fixture()).unwrap();
+    for nested in [
+        Value::Null,
+        json!([]),
+        json!({}),
+        json!({"path":"comments","match":["include"]}),
+        json!({"path":"comments","match":"all"}),
+        json!({"path":"comments.author","match":"include"}),
+        json!({"path":"other","match":"include"}),
+        json!({"path":"comments","match":"include","score_mode":"avg"}),
+        json!({"path":"comments","match":"exclude","ignore_unmapped":true}),
+        json!({"path":"comments","match":"exclude","minimum_should_match":2}),
+    ] {
+        let mut value = base.clone();
+        value["entries"][0]["composition"]["groups"][1]["nested"] = nested;
+        assert!(decode_stored(&value.to_string()).is_err());
+    }
+    let mut value = base;
+    value["entries"][0]["composition"]["groups"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("nested");
+    assert!(decode_stored(&value.to_string()).is_err());
+    for raw in [
+        r#"{"version":2,"entries":[],"nested":{}}"#,
+        r#"{"version":2,"version":2,"entries":[]}"#,
+        r#"{"version":3,"entries":[]}"#,
+    ] {
+        assert!(decode_stored(raw).is_err());
+    }
+}
+
+#[test]
+fn independent_nested_groups_may_repeat_literals_but_same_object_duplicates_are_rejected() {
+    let mut library = nested_fixture();
+    library.validate().unwrap();
+    let entry = &mut library.entries[0];
+    entry.filters[3].enabled = false;
+    entry.composition.groups[1]
+        .filter_ids
+        .push("other-author".into());
+    entry.composition.groups[2].filter_ids = vec!["missing".into()];
+    assert!(library.validate().is_err());
+    for members in [
+        vec!["status", "n"],
+        vec!["author", "tag"],
+        vec!["author", "author"],
+        vec!["author", "absent"],
+    ] {
+        let mut library = nested_fixture();
+        library.entries[0].composition.groups[1].filter_ids =
+            members.into_iter().map(str::to_owned).collect();
+        assert!(library.validate().is_err());
+    }
+}
+
+#[test]
+fn v2_disabled_scopes_still_count_toward_definition_and_serialized_byte_limits() {
+    let mut library = nested_fixture();
+    let definition = library.entries[0].clone();
+    library.entries = (0..MAX_ENTRIES)
+        .map(|index| PinnedFilterDefinition {
+            id: format!("set-{index}"),
+            ..definition.clone()
+        })
+        .collect();
+    library.validate().unwrap();
+    library.entries.push(PinnedFilterDefinition {
+        id: "extra".into(),
+        ..definition.clone()
+    });
+    assert!(library.validate().is_err());
+    library.entries.pop();
+    for entry in &mut library.entries {
+        entry.filters[5].value = Nullable(Some(serde_json::to_string(&"\"".repeat(1000)).unwrap()));
+    }
+    assert!(serde_json::to_vec(&library).unwrap().len() > MAX_BYTES);
+    assert!(library.validate().is_err());
+    library.entries = vec![definition.clone()];
+    library.entries[0].filters = vec![definition.filters[1].clone(); MAX_FILTERS + 1];
+    assert!(library.validate().is_err());
+    library.entries[0] = definition.clone();
+    library.entries[0].composition.groups =
+        vec![definition.composition.groups[1].clone(); MAX_GROUPS + 1];
+    assert!(library.validate().is_err());
+}
+
+#[test]
+fn legacy_reads_do_not_rewrite_storage_and_explicit_upgrade_keeps_every_old_definition() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("upgrade.sqlite");
+    let mut database = Database::open(&path).unwrap();
+    let legacy = populated(&mut database);
+    database.save_pinned_filters(0, &legacy).unwrap();
+    let raw = Connection::open(&path).unwrap();
+    let original = serde_json::to_string_pretty(&legacy).unwrap();
+    raw.execute("UPDATE pinned_filter_library SET json=?1", [&original])
+        .unwrap();
+    assert_eq!(database.pinned_filters().unwrap().library, legacy);
+    drop(database);
+    let mut database = Database::open(&path).unwrap();
+    assert_eq!(database.pinned_filters().unwrap().library.version, 1);
+    assert_eq!(
+        raw.query_row("SELECT json FROM pinned_filter_library", [], |row| row
+            .get::<_, String>(
+            0
+        ))
+        .unwrap(),
+        original
+    );
+    let mut upgraded = nested_fixture();
+    upgraded.entries[0].connection_id = legacy.entries[0].connection_id.clone();
+    upgraded.entries.insert(0, legacy.entries[0].clone());
+    assert_eq!(database.save_pinned_filters(1, &upgraded).unwrap(), 2);
+    drop(database);
+    let mut database = Database::open(&path).unwrap();
+    assert_eq!(database.pinned_filters().unwrap().library, upgraded);
+    assert_eq!(
+        database.save_pinned_filters(1, &legacy).unwrap_err().code,
+        "pinnedFilterConflict"
+    );
+    for candidate in [
+        legacy.clone(),
+        PinnedFilterLibrary {
+            version: 1,
+            entries: vec![],
+        },
+    ] {
+        assert_eq!(
+            database
+                .save_pinned_filters(2, &candidate)
+                .unwrap_err()
+                .code,
+            "invalidInput"
+        );
+    }
+    assert_eq!(database.pinned_filters().unwrap().library, upgraded);
+}
+
+#[test]
+fn nested_existing_ids_remain_immutable_across_group_mode_enabled_and_scope_changes() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut database = Database::open(&directory.path().join("immutable.sqlite")).unwrap();
+    let legacy = populated(&mut database);
+    let mut library = nested_fixture();
+    library.entries[0].connection_id = legacy.entries[0].connection_id.clone();
+    database.save_pinned_filters(0, &library).unwrap();
+    for field in ["parent", "enabled", "mode", "value"] {
+        let mut changed = library.clone();
+        let entry = &mut changed.entries[0];
+        match field {
+            "parent" => {
+                entry.composition.groups[1].nested.as_mut().unwrap().r#match = ParentMatch::Exclude
+            }
+            "enabled" => entry.filters[1].enabled = false,
+            "mode" => entry.composition.groups[1].mode = Join::Any,
+            _ => entry.filters[1].value = Nullable(Some(r#""different""#.into())),
+        }
+        changed.validate().unwrap();
+        assert_eq!(
+            database.save_pinned_filters(1, &changed).unwrap_err().code,
+            "invalidInput"
+        );
+    }
+    assert_eq!(database.pinned_filters().unwrap().library, library);
+    database
+        .delete_connection(&library.entries[0].connection_id)
+        .unwrap();
+    assert_eq!(database.save_pinned_filters(1, &library).unwrap(), 2);
+    let mut changed = library.clone();
+    changed.entries[0].id = "new".into();
+    assert_eq!(
+        database.save_pinned_filters(2, &changed).unwrap_err().code,
+        "pinnedFilterConnectionMissing"
+    );
+    assert_eq!(database.pinned_filters().unwrap().library, library);
+    database
+        .save_pinned_filters(2, &PinnedFilterLibrary::empty())
+        .unwrap();
+    assert!(database
+        .pinned_filters()
+        .unwrap()
+        .library
+        .entries
+        .is_empty());
 }

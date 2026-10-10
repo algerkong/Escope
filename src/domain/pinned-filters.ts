@@ -6,7 +6,7 @@ import {
 } from './query-filters';
 import { matchesQueryFilterBinding } from './query-filter-session';
 
-export const PINNED_FILTERS_VERSION = 1;
+export const PINNED_FILTERS_VERSION = 2;
 export const MAX_PINNED_FILTERS = 100;
 export const MAX_PINNED_FILTERS_BYTES = 256 * 1024;
 export const MAX_PINNED_FILTER_NAME_CHARS = 120;
@@ -19,6 +19,7 @@ export interface PinnedFilter {
   readonly operation: QueryFilterOperation;
   readonly value: string | null;
   readonly enabled: boolean;
+  readonly nestedPath?: string;
 }
 
 export interface PinnedFilterDefinition {
@@ -43,9 +44,9 @@ export interface PinnedFilterRecord {
 const encoder = new TextEncoder();
 const bytes = (text: string) => encoder.encode(text).length;
 const id = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value);
-function shape(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
+function shape(value: unknown, keys: readonly string[], optional: readonly string[] = []): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
-    && keys.every((key) => Object.hasOwn(value, key)) && Object.keys(value).every((key) => keys.includes(key));
+    && keys.every((key) => Object.hasOwn(value, key)) && Object.keys(value).every((key) => keys.includes(key) || optional.includes(key));
 }
 
 export function validPinnedFilterName(value: unknown): value is string {
@@ -58,33 +59,37 @@ function literal(filter: PinnedFilter): QueryFilter {
   return { ...filter, evidence: 'mapped', origin: 'saved' };
 }
 
-export function parsePinnedFilterDefinition(value: unknown): PinnedFilterDefinition | null {
-  if (!shape(value, ['id', 'name', 'connectionId', 'index', 'filters', 'composition'])
+export function parsePinnedFilterDefinition(value: unknown, version = PINNED_FILTERS_VERSION): PinnedFilterDefinition | null {
+  if (version !== 1 && version !== PINNED_FILTERS_VERSION
+    || !shape(value, ['id', 'name', 'connectionId', 'index', 'filters', 'composition'])
     || !id(value.id) || !id(value.connectionId) || !validPinnedFilterName(value.name)
     || typeof value.index !== 'string' || !validDataViewIndex(value.index)
     || !Array.isArray(value.filters) || !value.filters.length || value.filters.length > MAX_QUERY_FILTERS) return null;
   const filters: PinnedFilter[] = [];
   const ids = new Set<string>();
   for (const entry of value.filters) {
-    if (!shape(entry, ['id', 'field', 'fieldType', 'operation', 'value', 'enabled'])
+    if (!shape(entry, ['id', 'field', 'fieldType', 'operation', 'value', 'enabled'], version === 2 ? ['nestedPath'] : [])
       || !id(entry.id) || ids.has(entry.id) || typeof entry.field !== 'string' || typeof entry.fieldType !== 'string'
       || !['include', 'exclude', 'exists', 'missing'].includes(String(entry.operation))
       || typeof entry.operation !== 'string' || entry.value !== null && typeof entry.value !== 'string'
-      || typeof entry.enabled !== 'boolean') return null;
+      || typeof entry.enabled !== 'boolean' || Object.hasOwn(entry, 'nestedPath') && typeof entry.nestedPath !== 'string') return null;
     const filter: PinnedFilter = { id: entry.id, field: entry.field, fieldType: entry.fieldType,
-      operation: entry.operation as QueryFilterOperation, value: entry.value, enabled: entry.enabled };
-    if (queryFilterDefinitionProblem(literal(filter)) || queryFilterDuplicate(filters.map(literal), literal(filter))) return null;
+      operation: entry.operation as QueryFilterOperation, value: entry.value, enabled: entry.enabled,
+      ...(typeof entry.nestedPath === 'string' ? { nestedPath: entry.nestedPath } : {}) };
+    if (queryFilterDefinitionProblem(literal(filter))
+      || filter.nestedPath === undefined && queryFilterDuplicate(filters.map(literal), literal(filter))) return null;
     filters.push(filter);
     ids.add(filter.id);
   }
   const input = value.composition;
   if (!shape(input, ['mode', 'groups']) || !Array.isArray(input.groups) || input.groups.length > MAX_FILTER_GROUPS
-    || input.groups.some((group) => !shape(group, ['id', 'mode', 'filterIds']) || !id(group.id))) return null;
+    || input.groups.some((group) => !shape(group, ['id', 'mode', 'filterIds'], version === 2 ? ['nested'] : []) || !id(group.id))) return null;
   const composition = input as unknown as QueryFilterComposition;
   if (queryFilterCompositionProblem(composition, filters.map(literal))) return null;
   const definition = { id: value.id, name: value.name, connectionId: value.connectionId, index: value.index, filters,
     composition: { mode: composition.mode, groups: composition.groups.map((group) => ({
       id: group.id, mode: group.mode, filterIds: [...group.filterIds],
+      ...(group.nested ? { nested: { ...group.nested } } : {}),
     })) } };
   return bytes(JSON.stringify(definition)) <= MAX_PINNED_FILTERS_BYTES ? definition : null;
 }
@@ -94,17 +99,17 @@ export function emptyPinnedFilters(): PinnedFilterLibrary {
 }
 
 export function parsePinnedFilterLibrary(value: unknown): PinnedFilterLibrary | null {
-  if (!shape(value, ['version', 'entries']) || value.version !== PINNED_FILTERS_VERSION
+  if (!shape(value, ['version', 'entries']) || value.version !== 1 && value.version !== PINNED_FILTERS_VERSION
     || !Array.isArray(value.entries) || value.entries.length > MAX_PINNED_FILTERS) return null;
   const entries: PinnedFilterDefinition[] = [];
   const ids = new Set<string>();
   for (const candidate of value.entries) {
-    const entry = parsePinnedFilterDefinition(candidate);
+    const entry = parsePinnedFilterDefinition(candidate, value.version);
     if (!entry || ids.has(entry.id)) return null;
     entries.push(entry);
     ids.add(entry.id);
   }
-  const library = { version: PINNED_FILTERS_VERSION, entries };
+  const library = { version: value.version, entries };
   return bytes(JSON.stringify(library)) <= MAX_PINNED_FILTERS_BYTES ? library : null;
 }
 
@@ -122,8 +127,7 @@ export function samePinnedFilter(left: PinnedFilterDefinition, right: PinnedFilt
 export type PinFilterProblem = 'unsupported' | 'invalid' | 'changed';
 export function pinFilterDefinition(draft: QueryFilterDraft, definitionId: string, name: string):
   { ok: true; definition: PinnedFilterDefinition } | { ok: false; code: PinFilterProblem } {
-  if (draft.filters.some((filter) => filter.evidence !== 'mapped' || filter.nestedPath !== undefined)
-    || draft.composition?.groups.some((group) => group.nested !== undefined)) return { ok: false, code: 'unsupported' };
+  if (draft.filters.some((filter) => filter.evidence !== 'mapped')) return { ok: false, code: 'unsupported' };
   if (draft.binding && !matchesQueryFilterBinding(draft.binding, draft.source, draft.endpoint)) return { ok: false, code: 'changed' };
   if (draft.filters.some((filter) => Object.hasOwn(filter, 'enabled') && typeof filter.enabled !== 'boolean'
     || queryFilterDefinitionProblem(filter))) return { ok: false, code: 'invalid' };
@@ -132,6 +136,7 @@ export function pinFilterDefinition(draft: QueryFilterDraft, definitionId: strin
     filters: draft.filters.map((filter) => ({
       id: filter.id, field: filter.field, fieldType: filter.fieldType, operation: filter.operation,
       value: filter.value, enabled: queryFilterEnabled(filter),
+      ...(filter.nestedPath === undefined ? {} : { nestedPath: filter.nestedPath }),
     })),
     composition: draft.composition ?? { mode: 'all',
       groups: [{ id: 'default', mode: 'all', filterIds: draft.filters.map((filter) => filter.id) }] },

@@ -955,6 +955,9 @@ impl Database {
         if expected_revision != current.revision {
             return Err(AppError::new("pinnedFilterConflict"));
         }
+        if current.revision > 0 && library.version < current.library.version {
+            return Err(AppError::new("invalidInput"));
+        }
         for entry in &library.entries {
             if let Some(previous) = current
                 .library

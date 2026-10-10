@@ -69,6 +69,9 @@ export function QueryFiltersDialog({ draft, current, initialSelection, initialNe
   const [valueIndex, setValueIndex] = useState(0);
   const [selectedGroup, setSelectedGroup] = useState('');
   const [conflict, setConflict] = useState(false);
+  const [nestedInspection, setNestedInspection] = useState<{
+    fields: Loadable<FieldCatalog>; mapping: Loadable<MappingState>;
+  } | null>(null);
   const [review, setReview] = useState<{
     result: QueryFilterPreview; filters: readonly QueryFilter[]; composition: QueryFilterComposition | undefined;
     fields: Loadable<FieldCatalog>; mapping: Loadable<MappingState>;
@@ -80,9 +83,14 @@ export function QueryFiltersDialog({ draft, current, initialSelection, initialNe
   const enabledIds = useMemo(() => new Set(draft.filters.filter(queryFilterEnabled).map((filter) => filter.id)), [draft.filters]);
   const candidateGroup = selectedGroup === 'new' || composition.groups.some((group) => group.id === selectedGroup && !group.nested)
     ? selectedGroup : composition.groups.find((group) => !group.nested)?.id ?? 'new';
-  const catalog = fields.status === 'ready' && !fields.refreshing && !fields.refreshError ? fields.data : undefined;
+  // Loaded scopes require this review's explicit check, not cached or previously in-flight reads.
+  const freshNestedRequired = !draft.binding && draft.filters.some((filter) =>
+    filter.origin === 'saved' && filter.nestedPath !== undefined && queryFilterEnabled(filter));
+  const catalog = fields.status === 'ready' && !fields.refreshing && !fields.refreshError
+    && (!freshNestedRequired || nestedInspection !== null && fields !== nestedInspection.fields) ? fields.data : undefined;
   const mappingEvidence = useMemo(() => mapping.status === 'ready' && !mapping.refreshing && !mapping.refreshError
-    ? parseNestedFilterMapping(mapping.data.raw) : undefined, [mapping]);
+    && (!freshNestedRequired || nestedInspection !== null && mapping !== nestedInspection.mapping) ? parseNestedFilterMapping(mapping.data.raw) : undefined,
+  [mapping, freshNestedRequired, nestedInspection]);
   const nestedActive = nestedOpen || composition.groups.some((group) => group.nested);
   const mappingBusy = mapping.status === 'loading' || mapping.status === 'ready' && Boolean(mapping.refreshing);
   const fieldsBusy = fields.status === 'loading' || fields.status === 'ready' && Boolean(fields.refreshing);
@@ -152,7 +160,12 @@ export function QueryFiltersDialog({ draft, current, initialSelection, initialNe
           {mapping.status === 'error' || mapping.status === 'ready' && mapping.refreshError ? t('queryFilters:mappingFailed')
             : mappingBusy ? t('queryFilters:mappingLoading') : t('queryFilters:mappingEvidence')}
         </span>
-        <IconButton icon={RefreshCw} label={t('queryFilters:inspectNested')} disabled={!canInspect || !currentTarget || busy} onClick={onInspectNested} />
+        <IconButton icon={RefreshCw} label={t('queryFilters:inspectNested')} disabled={!canInspect || !currentTarget || busy} onClick={() => {
+          if (!canInspect || !currentTarget || busy) return;
+          setNestedInspection({ fields, mapping });
+          setReview(null);
+          onInspectNested();
+        }} />
       </div> : null}
       {nestedOpen ? <NestedFilterEditor draft={evidenceSource === draft.source ? draft : { ...draft, source: evidenceSource }}
         composition={composition} catalog={catalog} mapping={mappingEvidence}

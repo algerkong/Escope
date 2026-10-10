@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  parsePinnedFilterLibrary, parsePinnedFilterRecord, samePinnedFilter,
+  PINNED_FILTERS_VERSION, parsePinnedFilterLibrary, parsePinnedFilterRecord, samePinnedFilter,
   type PinnedFilterDefinition, type PinnedFilterLibrary, type PinnedFilterRecord,
 } from '../../domain/pinned-filters';
 import type { PinnedFilterService } from '../../services/pinned-filters';
@@ -66,7 +66,7 @@ export function usePinnedFilters(service: PinnedFilterService) {
     const captured = structuredClone(entry);
     return mutate((library) => {
       if (library.entries.some((item) => item.id === captured.id)) throw { code: 'pinnedFilterConflict' };
-      return { ...library, entries: [...library.entries, captured] };
+      return { version: PINNED_FILTERS_VERSION, entries: [...library.entries, captured] };
     });
   }, [mutate]);
   const remove = useCallback((entry: PinnedFilterDefinition) => {

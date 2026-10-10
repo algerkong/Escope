@@ -40,7 +40,7 @@ describe('bounded pinned filter definitions', () => {
     });
 
   it('rejects newer versions, malformed states, duplicates, dotted fields and nested groups including disabled entries', () => {
-    expect(parsePinnedFilterLibrary({ ...fixture, version: 2 })).toBeNull();
+    expect(parsePinnedFilterLibrary({ ...fixture, version: 3 })).toBeNull();
     for (const patch of [
       { id: '' }, { name: ' bad' }, { name: 'x'.repeat(121) }, { connectionId: null }, { index: 'remote:orders' },
       { filters: [] }, { composition: null },
@@ -133,16 +133,18 @@ describe('saved literals versus execution values', () => {
     expect(previewQueryFilterDraft(runtime, catalog)).toEqual({ ok: false, code: 'savedFilterUnsupported' });
   });
 
-  it('saves the entire set or rejects it, never serializes a binding or silently removes runtime/nested', () => {
+  it('saves the entire set or rejects it, never serializes a binding or silently removes runtime/invalid nested', () => {
     const pinned = pinFilterDefinition(draft(), 'copy', 'Copy');
     expect(pinned.ok).toBe(true);
     if (pinned.ok) {
       expect(pinned.definition).toEqual({ ...definition, id: 'copy', name: 'Copy' });
       expect(Object.keys(pinned.definition)).toEqual(['id', 'name', 'connectionId', 'index', 'filters', 'composition']);
     }
-    for (const patch of [{ evidence: 'runtime', origin: 'fields' }, { nestedPath: 'comments', origin: 'input' }]) {
+    for (const [patch, code] of [
+      [{ evidence: 'runtime', origin: 'fields' }, 'unsupported'], [{ nestedPath: 'comments', origin: 'input' }, 'invalid'],
+    ] as const) {
       const filters = draft().filters.map((filter, index) => index === 2 ? { ...filter, ...patch, enabled: false } : filter);
-      expect(pinFilterDefinition({ ...draft(), filters } as ReturnType<typeof draft>, 'copy', 'Copy')).toEqual({ ok: false, code: 'unsupported' });
+      expect(pinFilterDefinition({ ...draft(), filters } as ReturnType<typeof draft>, 'copy', 'Copy')).toEqual({ ok: false, code });
     }
   });
 

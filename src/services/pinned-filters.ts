@@ -49,6 +49,7 @@ export function createSessionPinnedFilterService(): PinnedFilterService {
     save: async (expectedRevision, library) => {
       const checked = validateWrite(expectedRevision, library);
       if (expectedRevision !== record.revision) fail('pinnedFilterConflict');
+      if (record.revision > 0 && checked.version < record.library.version) fail('invalidInput');
       for (const entry of checked.entries) {
         const previous = record.library.entries.find((item) => item.id === entry.id);
         if (previous && !samePinnedFilter(previous, entry)) fail('invalidInput');

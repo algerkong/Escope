@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import fixture from '../fixtures/pinned-filters-v1.json';
+import nestedFixture from '../fixtures/pinned-filters-v2.json';
 import { emptyPinnedFilters, parsePinnedFilterLibrary, type PinnedFilterRecord } from '../../src/domain/pinned-filters';
 import { usePinnedFilters } from '../../src/features/query/usePinnedFilters';
 import { createSessionPinnedFilterService, type PinnedFilterService } from '../../src/services/pinned-filters';
@@ -123,5 +124,32 @@ describe('pinned filter persistence controller', () => {
     await waitFor(() => expect(next.result.current.status).toBe('ready'));
     expect(next.result.current.entries).toEqual([]);
     expect(replacement.save).not.toHaveBeenCalled();
+  });
+
+  it('upgrades v1 only on explicit save and deeply captures nested scopes without altering retained definitions', async () => {
+    const { service, memory } = store();
+    await memory.save(0, library);
+    const { result } = renderHook(() => usePinnedFilters(service));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    expect(service.save).not.toHaveBeenCalled();
+    expect((await memory.load()).library.version).toBe(1);
+    const nested = parsePinnedFilterLibrary(nestedFixture)!.entries[0]!;
+    const captured = structuredClone(nested);
+    await act(async () => {
+      const saving = result.current.save(captured);
+      Object.assign(captured.composition.groups[1]!.nested!, { match: 'exclude' });
+      expect(await saving).toBe(true);
+    });
+    expect((await memory.load()).library).toEqual({ version: 2, entries: [definition, nested] });
+    expect(service.save).toHaveBeenCalledExactlyOnceWith(1, { version: 2, entries: [definition, nested] });
+  });
+
+  it('deletes legacy entries without an automatic envelope upgrade', async () => {
+    const { service, memory } = store();
+    await memory.save(0, library);
+    const { result } = renderHook(() => usePinnedFilters(service));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    await act(async () => { expect(await result.current.remove(definition)).toBe(true); });
+    expect((await memory.load()).library).toEqual({ version: 1, entries: [] });
   });
 });

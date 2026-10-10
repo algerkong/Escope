@@ -1,6 +1,7 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import fixture from '../fixtures/pinned-filters-v1.json';
+import nestedFixture from '../fixtures/pinned-filters-v2.json';
 import { emptyPinnedFilters, parsePinnedFilterLibrary } from '../../src/domain/pinned-filters';
 import { createPinnedFilterService, createSessionPinnedFilterService, desktopPinnedFilterService as desktop } from '../../src/services/pinned-filters';
 
@@ -27,7 +28,7 @@ describe('pinned filter IPC', () => {
     expect(invoke).not.toHaveBeenCalled();
     for (const record of [
       { revision: 0, library }, { revision: -1, library }, { revision: 1, library: invalid },
-      { revision: 1, library: { ...library, version: 2 } }, { revision: 1, library, headers: {} },
+      { revision: 1, library: { ...library, version: 3 } }, { revision: 1, library, headers: {} },
     ]) {
       vi.mocked(invoke).mockResolvedValue(record);
       await expect(desktop.load()).rejects.toMatchObject({ code: 'invalidResponse' });
@@ -63,5 +64,24 @@ describe('pinned filter IPC', () => {
     expect((await createSessionPinnedFilterService().load()).library).toEqual(emptyPinnedFilters());
     await expect(service.save(1, emptyPinnedFilters())).resolves.toBe(2);
     expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('preserves v1 reads and sends v2 scopes without execution metadata or a compatibility downgrade', async () => {
+    vi.mocked(invoke).mockResolvedValue({ revision: 1, library });
+    await expect(desktop.load()).resolves.toEqual({ revision: 1, library });
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('pinned_filters_load');
+    const nested = parsePinnedFilterLibrary(nestedFixture)!;
+    const next = { version: 2, entries: [...library.entries, ...nested.entries] };
+    vi.mocked(invoke).mockResolvedValue({ revision: 2 });
+    await expect(desktop.save(1, next)).resolves.toBe(2);
+    expect(invoke).toHaveBeenLastCalledWith('pinned_filters_save', { expectedRevision: 1, library: next });
+    const session = createSessionPinnedFilterService();
+    await session.save(0, library);
+    await session.save(1, next);
+    await expect(session.save(2, { version: 1, entries: [] })).rejects.toMatchObject({ code: 'invalidInput' });
+    const changed = structuredClone(next);
+    Object.assign(changed.entries[1]!.composition.groups[1]!.nested!, { match: 'exclude' });
+    await expect(session.save(2, changed)).rejects.toMatchObject({ code: 'invalidInput' });
+    expect((await session.load()).library).toEqual(next);
   });
 });

@@ -2,7 +2,7 @@ import { Check, CheckCheck, ChevronDown, Copy, Download, FileDown, Info, ListTre
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { EmptyState, IconButton, Modal } from '../../components/controls';
-import type { ExecutionState, QueryDocument } from '../../domain/query';
+import type { ExecutionSnapshot, ExecutionState, QueryDocument } from '../../domain/query';
 import { formatRawJson, sliceRaw, type ResultHit } from '../../domain/query-result';
 import { supportsSnapshotPaging } from '../../domain/query-pagination';
 import { INITIAL_RESULT_GRID_STATE, type ResultGridState } from '../../domain/result-grid';
@@ -14,6 +14,8 @@ import { executionErrorKey } from './error-message';
 import { useCopyText } from './useCopyText';
 import type { QueryLibraryService } from '../../services/query-library';
 import type { CellFilterSelection } from '../../domain/query-filters';
+import { compareLoadedDocuments, type DocumentComparisonResult } from '../../domain/document-comparison';
+import { DocumentComparisonDialog } from './DocumentComparisonDialog';
 
 const IDLE: ExecutionState = { status: 'idle' };
 const EMPTY_PAGES: readonly ExecutionPage[] = [];
@@ -59,6 +61,7 @@ export function QueryResults({ kind = 'query', active = true, documentIds, wrapJ
   const [gridStates, setGridStates] = useState<Record<string, { executionKey: string; value: ResultGridState }>>({});
   const [selectedDetail, setDetail] = useState<{ hit: ResultHit; page: number; queryId: string; requestKey: string | null } | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
+  const [selectedComparison, setComparison] = useState<{ snapshot: ExecutionSnapshot; result: DocumentComparisonResult } | null>(null);
   const scroll = useRef(new Map<string, { executionKey: string; table?: GridScrollPosition; json?: GridScrollPosition }>());
   const jsonViewport = useRef<HTMLPreElement>(null);
   const state = entry?.state ?? IDLE;
@@ -69,6 +72,9 @@ export function QueryResults({ kind = 'query', active = true, documentIds, wrapJ
   const requestKey = 'snapshot' in state ? state.snapshot.requestId : null;
   const detail = selectedDetail?.queryId === query.id && selectedDetail.requestKey === requestKey && active ? selectedDetail : null;
   useEffect(() => { setDetail(null); }, [query.id, requestKey, active]);
+  const comparison = active && (state.status === 'success' || state.status === 'partial')
+    && state.snapshot.queryId === query.id && selectedComparison?.snapshot === state.snapshot ? selectedComparison : null;
+  useEffect(() => { setComparison(null); }, [query.id, requestKey, active]);
   const executionKey = requestKey ?? query.id;
   const savedGrid = gridStates[query.id];
   const liveGrid = savedGrid?.executionKey === executionKey ? savedGrid.value
@@ -171,6 +177,10 @@ export function QueryResults({ kind = 'query', active = true, documentIds, wrapJ
       onLayoutChange?.(value);
     }}
     onDocument={({ hit, pageIndex }) => setDetail({ hit, page: pageIndex, queryId: query.id, requestKey })}
+    onCompare={(selection) => {
+      if (!active || (state.status !== 'success' && state.status !== 'partial') || state.snapshot.queryId !== query.id) return;
+      setComparison({ snapshot: state.snapshot, result: compareLoadedDocuments(state.snapshot, entry?.endpoint ?? null, pages, selection) });
+    }}
     onFilterCell={onFilterCell ? ({ hit }, field) => {
       const column = hit.columns.find((item) => item.name === field);
       onFilterCell({ field, value: column?.value, origin: column?.runtime || !hit.hasSource ? 'fields' : 'source' });
@@ -302,5 +312,7 @@ export function QueryResults({ kind = 'query', active = true, documentIds, wrapJ
     {exportService ? <ResultExportDialog open={exportOpen} service={exportService} hits={exportHits} pages={pages}
       baseName={'snapshot' in state ? state.snapshot.index : ''} partial={state.status === 'partial'}
       onClose={() => setExportOpen(false)} /> : null}
+    {comparison ? <DocumentComparisonDialog result={comparison.result} stale={stale} endpointChanged={endpointChanged}
+      partial={state.status === 'partial'} onClose={() => setComparison(null)} /> : null}
   </section>;
 }

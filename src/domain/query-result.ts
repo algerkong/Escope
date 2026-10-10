@@ -159,6 +159,8 @@ export interface ResultColumn {
 }
 
 export interface ResultHit {
+  /** Complete hit in its received page, including the distinction between absent and null keys. */
+  readonly raw: RawRange;
   /** `_id` when present, otherwise the position in the returned array. */
   readonly id: string;
   readonly index: string | null;
@@ -245,6 +247,7 @@ function parseHit(raw: string, node: Node, position: number, runtime: ReadonlySe
   const sortNode = property(node, 'sort');
   const sort = sortNode?.type === 'array' ? sortNode : undefined;
   return {
+    raw: { offset: node.offset, length: node.length },
     id: textOf(property(node, '_id')) ?? String(position),
     index: textOf(property(node, '_index')) ?? null,
     score: rawTextOf(raw, property(node, '_score')),

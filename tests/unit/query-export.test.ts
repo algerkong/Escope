@@ -22,6 +22,7 @@ function hitsOf(raw: string): readonly ResultHit[] {
 
 function hit(columns: readonly { name: string; kind: ColumnKind; text: string }[], overrides: Partial<ResultHit> = {}): ResultHit {
   return {
+    raw: { offset: 0, length: 0 },
     id: '1', index: 'orders-1', score: null, source: null, fields: null, sort: null, hasSource: false,
     columns: columns.map((column) => ({
       name: column.name, preview: '', nested: false, value: { kind: column.kind, text: column.text },

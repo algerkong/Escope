@@ -8,7 +8,7 @@ import {
 } from '@tanstack/react-table';
 import {
   ALargeSmall, ArrowLeft, ArrowRight, ChevronDown, ChevronLeft, ChevronRight, ChevronsUpDown, ChevronUp, Columns3,
-  FileSearch, Filter, GripVertical, ListRestart, RotateCcw,
+  FileDiff, FileSearch, Filter, GripVertical, ListRestart, RotateCcw,
 } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -45,6 +45,7 @@ interface Props {
   state: ResultGridState;
   onStateChange: (next: ResultGridState) => void;
   onDocument: (row: ResultGridRow) => void;
+  onCompare?: (rows: readonly ResultGridRow[]) => void;
   onFilterCell?: (row: ResultGridRow, field: string) => void;
   executionKey: string;
   fieldFormats?: DataViewFieldFormats;
@@ -151,7 +152,7 @@ function GridHeaderCell({ header, label, chromeLabel, sortDirection, sortable, m
   </th>;
 }
 
-export function QueryResultGrid({ active = true, scrollPosition, onScrollPositionChange, rows, fieldNames, state, onStateChange, onDocument, onFilterCell, executionKey, fieldFormats, footerActions }: Props) {
+export function QueryResultGrid({ active = true, scrollPosition, onScrollPositionChange, rows, fieldNames, state, onStateChange, onDocument, onCompare, onFilterCell, executionKey, fieldFormats, footerActions }: Props) {
   const { t } = useTranslation();
   const [chooserOpen, setChooserOpen] = useState(false);
   const [rawExecution, setRawExecution] = useState<string | null>(null);
@@ -431,6 +432,9 @@ export function QueryResultGrid({ active = true, scrollPosition, onScrollPositio
     rowIds: orderedRowIds, visibleRowIds, scope: executionKey, active,
     selection: { value: state.rowSelection, onChange: (value) => table.setRowSelection(value) },
   });
+  const selectedForComparison = useMemo(() => rowSelection.selectedCount === 2
+    ? rows.filter((row) => rowSelection.value[`${row.pageIndex}:${row.position}`] === true) : [],
+  [rows, rowSelection.value, rowSelection.selectedCount]);
 
   const renderCell = (columnId: string, row: ResultGridRow, displayNumber: number) => {
     if (columnId === ROW_COLUMN_ID) return <span className="rg-cell">{displayNumber}</span>;
@@ -541,6 +545,9 @@ export function QueryResultGrid({ active = true, scrollPosition, onScrollPositio
       </div> : null}
       <div className="rg-toolbar-end">
         <TableSelectionStatus count={rowSelection.selectedCount} onClear={rowSelection.clear} />
+        {onCompare ? <IconButton icon={FileDiff} label={t('documentComparison:open')} aria-haspopup="dialog"
+          disabled={!active || rowSelection.selectedCount !== 2 || selectedForComparison.length !== 2}
+          onClick={() => onCompare(selectedForComparison)} /> : null}
         {sorting.length > 0 ? <IconButton icon={ListRestart} label={t('resultGrid:clearSort')}
           onClick={() => emit({ sorting: [], pageIndex: 0 })} /> : null}
         {formats.size > 0 ? <IconButton icon={ALargeSmall} label={t('dataViews:toggleFormats')} aria-pressed={formatsEnabled}

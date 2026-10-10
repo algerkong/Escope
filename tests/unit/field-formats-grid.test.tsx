@@ -120,6 +120,28 @@ describe('execution-bound field format grid', () => {
     expect(noAction).not.toHaveBeenCalled();
   });
 
+  it('compares and copies executed raw values while the grid keeps its presentation formats', async () => {
+    const user = userEvent.setup();
+    const clipboard = vi.spyOn(navigator.clipboard, 'writeText');
+    const entry = result();
+    render(<Harness entry={entry} />);
+    expect(cells('sequence')[0]).toHaveTextContent('9,007,199,254,740,993');
+    expect(cells('ratio')[0]).toHaveTextContent('12.3456789012345678901%');
+    fireEvent.click(rows()[0]!);
+    fireEvent.click(rows()[1]!, { ctrlKey: true });
+    await user.click(screen.getByRole('button', { name: 'Compare two selected documents' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Document comparison' }));
+    expect(dialog.getByLabelText('Left value: _source / sequence')).toHaveTextContent('9007199254740993');
+    expect(dialog.getByLabelText('Left value: _source / ratio')).toHaveTextContent('0.123456789012345678901');
+    expect(dialog.queryByText('9,007,199,254,740,993')).toBeNull();
+    expect(dialog.queryByText('12.3456789012345678901%')).toBeNull();
+    await user.click(dialog.getByRole('button', { name: 'Copy Left value: _source / sequence' }));
+    expect(clipboard).toHaveBeenLastCalledWith('9007199254740993');
+    await user.keyboard('{Escape}');
+    expect(cells('ratio')[0]).toHaveTextContent('12.3456789012345678901%');
+    expect(noAction).not.toHaveBeenCalled();
+  });
+
   it('does not derive result formats from a newer selected draft when the execution has no format copy', () => {
     render(<Harness entry={result(false)} />);
     expect(cells('sequence')[0]).toHaveTextContent('9007199254740993');

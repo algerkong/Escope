@@ -1,4 +1,4 @@
-import { Bookmark, Braces, Clock3, Database, FileCheck2, FileDown, History, Layers, ListOrdered, ListTree, LoaderCircle, Pin, Play, Plus, Redo2, Save, Search, Settings, ShieldCheck, Star, TriangleAlert, Undo2, Variable } from 'lucide-react';
+import { Bookmark, Braces, Clock3, Database, FileCheck2, FileDown, History, Layers, ListOrdered, ListTree, LoaderCircle, Pin, Play, Plus, Redo2, Save, Search, Settings, ShieldCheck, Sigma, Star, TriangleAlert, Undo2, Variable } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ConnectionProfile } from '../../domain/connection';
@@ -27,6 +27,7 @@ import { RuntimeFieldsDialog } from './RuntimeFieldsDialog';
 import { QueryTimeRangeDialog, TimeRangeSummary } from './QueryTimeRangeDialog';
 import { QueryFilterBindingBar, QueryFilterDraftBar, QueryFiltersDialog } from './QueryFiltersDialog';
 import { QuerySortDialog } from './QuerySortDialog';
+import { QueryAggregationBuildDialog } from './QueryAggregationBuildDialog';
 import { queryFilterEnabled, type CellFilterSelection, type QueryFilterBinding, type QueryFilterDraft } from '../../domain/query-filters';
 import { bindAppliedQueryFilters, hasPendingQueryFilters, matchesQueryFilterBinding, previewQueryFilterDraft, queryFilterDraftChanged } from '../../domain/query-filter-session';
 import { parseNestedFilterMapping } from '../../domain/query-filter-mapping';
@@ -138,6 +139,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const [runtimeSource, setRuntimeSource] = useState<{ query: QueryDocument; endpoint: string; catalog?: FieldCatalog } | null>(null);
   const [timeSource, setTimeSource] = useState<{ query: QueryDocument; endpoint: string; catalog?: FieldCatalog; initialTimeZone: string } | null>(null);
   const [sortSource, setSortSource] = useState<{ query: QueryDocument; endpoint: string } | null>(null);
+  const [buildSource, setBuildSource] = useState<{ query: QueryDocument; endpoint: string } | null>(null);
   const [filterDrafts, setFilterDrafts] = useState<Record<string, QueryFilterDraft>>({});
   const [filterBindings, setFilterBindings] = useState<Record<string, QueryFilterBinding>>({});
   const [filterDetach, setFilterDetach] = useState<QueryFilterBinding | null>(null);
@@ -158,6 +160,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const queryId = query.id;
   const hasPendingFilters = hasPendingQueryFilters(filterDrafts[queryId]);
   const reviewingSort = sortSource?.query.id === queryId;
+  const reviewingBuild = buildSource?.query.id === queryId;
   const showingQuery = tab?.kind === 'query';
   const recoveryTab = recovery?.workspace.tabs.find((item) => item.document.id === queryId);
   const editorMode = recoveryTab?.editorMode ?? editorModes[queryId] ?? 'dsl';
@@ -180,7 +183,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   // then would silently persist the old text, so the draft actions are disabled until it is fixed
   // or the editor is switched back to JSON, where the raw text is the source of truth.
   const saveBlockedByVisual = showingQuery && editorMode === 'visual' && (!visualValid || dirtyVisualIds.has(queryId));
-  const canSaveDraft = showingQuery && !saveBlockedByVisual && !hasPendingFilters && !reviewingSort;
+  const canSaveDraft = showingQuery && !saveBlockedByVisual && !hasPendingFilters && !reviewingSort && !reviewingBuild;
   const target = profiles.find((profile) => profile.id === query.connectionId);
   const resourceTarget = profiles.find((profile) => profile.id === state.activeConnectionId);
   const available = backend.available && (canQuery ?? true);
@@ -198,7 +201,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const dslValid = useMemo(() => validateQueryDsl(dsl).ok, [dsl]);
   const endpoints = useMemo(() => new Map(profiles.map((profile) => [profile.id, profile.endpoint])), [profiles]);
   const canRun = !restoring && tab !== undefined && available && target !== undefined && indexValue.trim() !== '' && dslValid && visualValid
-    && execution.status !== 'running' && !entry?.continuing && !hasPendingFilters && !reviewingSort;
+    && execution.status !== 'running' && !entry?.continuing && !hasPendingFilters && !reviewingSort && !reviewingBuild;
   const runTitle = restoring ? t('workspaceRecovery:loading') : !available ? t('queryLive:runUnavailable')
     : target === undefined ? t('queryLive:runNeedsConnection')
       : indexValue.trim() === '' ? t('queryLive:runNeedsIndex')
@@ -206,6 +209,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
           : !visualValid ? t('queryLive:runInvalidVisual')
           : hasPendingFilters ? t('queryFilters:pendingAction')
           : reviewingSort ? t('querySort:reviewOpen')
+          : reviewingBuild ? t('queryAggregationBuild:reviewOpen')
           : execution.status === 'running' || entry?.continuing ? t('queryLive:runBusy') : t('query:run');
   const stale = showingQuery && entry !== undefined && 'snapshot' in execution
     && (execution.snapshot.revision !== query.revision || execution.snapshot.index !== query.index);
@@ -243,6 +247,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
     setFilterDetach((current) => current && !documentIds.includes(current.applied.id) ? null : current);
     setFilterDialog((current) => current && !documentIds.includes(current.queryId) ? null : current);
     setSortSource((current) => current && !documentIds.includes(current.query.id) ? null : current);
+    setBuildSource((current) => current && !documentIds.includes(current.query.id) ? null : current);
   }, [documentIds, release]);
 
   const patchQuery = useCallback((patch: QueryDocumentPatch) => {
@@ -379,6 +384,10 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const sortTargetCurrent = sortSource !== null && !restoring && active && !saveBlockedByVisual && !hasPendingFilters
     && state.activeTabId === sortSource.query.id
     && profiles.some((profile) => profile.id === sortSource.query.connectionId && profile.endpoint === sortSource.endpoint);
+  const buildTab = buildSource ? state.tabs.find((item) => item.kind === 'query' && item.document.id === buildSource.query.id) : undefined;
+  const buildTargetCurrent = buildSource !== null && !restoring && active && !saveBlockedByVisual && !hasPendingFilters
+    && state.activeTabId === buildSource.query.id
+    && profiles.some((profile) => profile.id === buildSource.query.connectionId && profile.endpoint === buildSource.endpoint);
   const pendingFilters = filterDrafts[query.id];
   const boundFilters = filterBindings[query.id];
   const reviewedFilters = filterDialog ? filterDrafts[filterDialog.queryId] : undefined;
@@ -392,7 +401,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
       : (filterExecution?.status === 'success' || filterExecution?.status === 'partial')
         && filterExecution.snapshot.requestId === reviewedFilters.snapshot?.requestId);
   const pinnedTargetCurrent = pinnedOpen?.source !== null && pinnedOpen?.source !== undefined && !restoring && active
-    && !saveBlockedByVisual && !hasPendingFilters && !boundFilters && !reviewingSort
+    && !saveBlockedByVisual && !hasPendingFilters && !boundFilters && !reviewingSort && !reviewingBuild
     && state.activeTabId === pinnedOpen.source.id && matchesQueryDraft(query, pinnedOpen.source)
     && profiles.some((profile) => profile.id === pinnedOpen.source?.connectionId && profile.endpoint === pinnedOpen.endpoint)
     && execution.status !== 'running' && !entry?.continuing && (showingQuery || tab?.kind === 'index' && restoreQuery !== undefined);
@@ -535,6 +544,12 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
             title={hasPendingFilters ? t('queryFilters:pendingAction') : t('querySort:open')} onClick={() => {
               if (!target || !active || restoring || saveBlockedByVisual || hasPendingFilters || !query.index.trim()) return;
               setSortSource({ query: structuredClone(query), endpoint: target.endpoint });
+            }} />
+          <IconButton icon={Sigma} label={t('queryAggregationBuild:open')}
+            disabled={saveBlockedByVisual || hasPendingFilters || restoring || !target || !active || !query.index.trim()}
+            title={hasPendingFilters ? t('queryFilters:pendingAction') : t('queryAggregationBuild:open')} onClick={() => {
+              if (!target || !active || restoring || saveBlockedByVisual || hasPendingFilters || !query.index.trim()) return;
+              setBuildSource({ query: structuredClone(query), endpoint: target.endpoint });
             }} />
           {linkedEntry ? <IconButton className={`qlib-star${linkedEntry.favorite ? ' active' : ''}`} icon={Star}
             aria-pressed={linkedEntry.favorite} label={t(linkedEntry.favorite ? 'queryLibrary:favoriteRemove' : 'queryLibrary:favoriteAdd')}
@@ -681,6 +696,22 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
       }}
       onClose={() => setSortSource(null)} onCommit={(source, patch) => {
         if (!sortTargetCurrent || !matchesQueryDraft(sortTab?.document, source) || patch.dsl === undefined) return false;
+        if (updateQuery(source.id, patch, source) === false) return false;
+        if (recovery) recovery.setEditorMode(source.id, 'dsl');
+        else setEditorModes((current) => ({ ...current, [source.id]: 'dsl' }));
+        return true;
+      }} /> : null}
+    {buildSource && active && state.activeTabId === buildSource.query.id ? <QueryAggregationBuildDialog source={buildSource.query}
+      endpoint={buildSource.endpoint} current={buildTab?.document}
+      fields={fieldsFor(buildSource.query.connectionId, buildSource.endpoint, buildSource.query.index.trim())}
+      targetCurrent={buildTargetCurrent} canInspect={available && buildTargetCurrent}
+      onInspect={() => {
+        if (available && buildTargetCurrent && buildSource.query.connectionId) {
+          refreshFields(buildSource.query.connectionId, buildSource.endpoint, buildSource.query.index.trim());
+        }
+      }}
+      onClose={() => setBuildSource(null)} onCommit={(source, patch) => {
+        if (!buildTargetCurrent || !matchesQueryDraft(buildTab?.document, source) || patch.dsl === undefined) return false;
         if (updateQuery(source.id, patch, source) === false) return false;
         if (recovery) recovery.setEditorMode(source.id, 'dsl');
         else setEditorModes((current) => ({ ...current, [source.id]: 'dsl' }));

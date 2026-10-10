@@ -23,6 +23,7 @@ import { enRuntimeFields, zhRuntimeFields } from './runtime-fields';
 import { enTimeRange, zhTimeRange } from './query-time-range';
 import { enQueryFilters, zhQueryFilters } from './query-filters';
 import { enQuerySort, zhQuerySort } from './query-sort';
+import { enQueryAggregationBuild, zhQueryAggregationBuild } from './query-aggregation-build';
 import { enPinnedFilters, zhPinnedFilters } from './pinned-filters';
 import { enQueryHistory, enWorkspaceRecovery, zhQueryHistory, zhWorkspaceRecovery } from './workspace-recovery';
 
@@ -31,10 +32,10 @@ void i18n.use(initReactI18next).init({
   resources: {
     'zh-CN': { ...zh, queryLive: zhLive, cluster: zhCluster, models: zhModels, aiChat: zhAiChat, visualQuery: zhVisualQuery, resultGrid: zhResultGrid,
       documentComparison: zhDocumentComparison, documentDetail: zhDocumentDetail, queryAggregations: zhQueryAggregations, queryAggregationCharts: zhQueryAggregationCharts, connectionSettings: zhConnectionSettings, connectionAccess: zhConnectionAccess, queryLibrary: zhQueryLibrary, queryParameters: zhQueryParameters, queryExchange: zhQueryExchange,
-      workspaceRecovery: zhWorkspaceRecovery, queryHistory: zhQueryHistory, queryExport: zhQueryExport, dataViews: zhDataViews, runtimeFields: zhRuntimeFields, timeRange: zhTimeRange, queryFilters: zhQueryFilters, querySort: zhQuerySort, pinnedFilters: zhPinnedFilters },
+      workspaceRecovery: zhWorkspaceRecovery, queryHistory: zhQueryHistory, queryExport: zhQueryExport, dataViews: zhDataViews, runtimeFields: zhRuntimeFields, timeRange: zhTimeRange, queryFilters: zhQueryFilters, querySort: zhQuerySort, queryAggregationBuild: zhQueryAggregationBuild, pinnedFilters: zhPinnedFilters },
     'en-US': { ...en, queryLive: enLive, cluster: enCluster, models: enModels, aiChat: enAiChat, visualQuery: enVisualQuery, resultGrid: enResultGrid,
       documentComparison: enDocumentComparison, documentDetail: enDocumentDetail, queryAggregations: enQueryAggregations, queryAggregationCharts: enQueryAggregationCharts, connectionSettings: enConnectionSettings, connectionAccess: enConnectionAccess, queryLibrary: enQueryLibrary, queryParameters: enQueryParameters, queryExchange: enQueryExchange,
-      workspaceRecovery: enWorkspaceRecovery, queryHistory: enQueryHistory, queryExport: enQueryExport, dataViews: enDataViews, runtimeFields: enRuntimeFields, timeRange: enTimeRange, queryFilters: enQueryFilters, querySort: enQuerySort, pinnedFilters: enPinnedFilters },
+      workspaceRecovery: enWorkspaceRecovery, queryHistory: enQueryHistory, queryExport: enQueryExport, dataViews: enDataViews, runtimeFields: enRuntimeFields, timeRange: enTimeRange, queryFilters: enQueryFilters, querySort: enQuerySort, queryAggregationBuild: enQueryAggregationBuild, pinnedFilters: enPinnedFilters },
   },
   lng: navigator.language.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US',
   fallbackLng: 'en-US',

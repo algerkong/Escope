@@ -1,10 +1,11 @@
-import { ChevronLeft, ChevronRight, Copy } from 'lucide-react';
+import { ChartColumn, ChevronLeft, ChevronRight, Copy } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { IconButton, SelectControl } from '../../components/controls';
 import { AGGREGATION_LIMITS, readAggregationPage, type AggregationResult, type AggregationValue } from '../../domain/query-aggregations';
 import type { ExecutionSnapshot } from '../../domain/query';
 import type { ExecutionPage } from './useQueryExecutions';
+import { AggregationChart, type AggregationChartScope } from './charts/AggregationChart';
 import { useCopyText } from './useCopyText';
 import '../../styles/query-aggregations.css';
 
@@ -114,13 +115,21 @@ function BucketTable({ entry, onCopy }: { entry: Extract<AggregationResult, { st
   </>;
 }
 
-function Entry({ entry, onCopy, wrapJson }: { entry: AggregationResult; onCopy: CopyText; wrapJson: boolean }) {
+function Entry({ entry, scope, onCopy, wrapJson }: {
+  entry: AggregationResult; scope: AggregationChartScope; onCopy: CopyText; wrapJson: boolean;
+}) {
   const { t } = useTranslation();
+  const [chartOpen, setChartOpen] = useState(false);
   return <div className="qa-entry">
     <div className="qa-entry-title"><h3>{entry.name}</h3>
       {entry.type !== null ? <code>{entry.type}</code> : null}
       <MetricNote type={entry.type ?? ''} />
+      <span className="qa-entry-actions">
+        <IconButton icon={ChartColumn} aria-pressed={chartOpen} onClick={() => setChartOpen((open) => !open)}
+          label={t(chartOpen ? 'queryAggregationCharts:close' : 'queryAggregationCharts:open')} />
+      </span>
     </div>
+    {chartOpen ? <AggregationChart entry={entry} scope={scope} /> : null}
     {entry.status === 'metric' ? <dl className="qa-metadata">
       <dt>{t('queryAggregations:originalValue')}</dt><dd><Value value={entry.metric.value} label={entry.name} onCopy={onCopy} /></dd>
       {entry.metric.valueAsString.kind !== 'missing' ? <>
@@ -147,6 +156,11 @@ export function QueryAggregations({ snapshot, endpoint, pages, wrapJson }: Props
   const entry = result?.ok ? result.entries.find((item) => item.name === name) ?? result.entries[0] : undefined;
   const copy = useCopyText(JSON.stringify([snapshot.queryId, snapshot.requestId, pageIndex, entry?.name]));
   const onCopy: CopyText = (raw) => { void copy.copy(raw); };
+  // Chart annotation only: the frozen target, the plotted page and that page's own limitations.
+  const chartScope: AggregationChartScope = {
+    target: snapshot.index, page: pageIndex + 1, bounds: snapshot.timeRange?.bounds ?? null,
+    limited: Boolean(page?.partial) || Boolean(result?.ok && result.notices.length > 0),
+  };
   return <section className="qa-results" aria-label={t('queryAggregations:title')}>
     <p className="qa-scope">{t('queryAggregations:scope')}</p>
     <div className="qa-selectors">
@@ -182,7 +196,8 @@ export function QueryAggregations({ snapshot, endpoint, pages, wrapJson }: Props
       {result.notices.length > 0 ? <ul className="qa-notices">{result.notices.map((notice) =>
         <li key={notice}>{t(`queryAggregations:notice_${notice}`)}</li>)}</ul> : null}
       {result.responseState !== 'present' ? <p className="qa-scope">{t(`queryAggregations:${result.responseState === 'empty' ? 'responseEmpty' : 'responseMissing'}`)}</p> : null}
-      {entry ? <Entry key={JSON.stringify([pageIndex, entry.name])} entry={entry} onCopy={onCopy} wrapJson={wrapJson} />
+      {entry ? <Entry key={JSON.stringify([pageIndex, entry.name])} entry={entry} scope={chartScope}
+        onCopy={onCopy} wrapJson={wrapJson} />
         : <p className="qa-scope">{t('queryAggregations:noAggregations')}</p>}
     </> : result ? <p className="qa-warning" role="alert">{t(`queryAggregations:error_${result.code}`)}</p> : null}
     <RawText key={`dsl-${pageIndex}`} raw={snapshot.rawDsl} label={t('queryAggregations:rawDsl')}

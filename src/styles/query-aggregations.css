@@ -16,6 +16,9 @@
 .qa-entry-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin-bottom: 8px; }
 .qa-entry-title h3 { margin: 0; font-size: .85rem; font-weight: 600; overflow-wrap: anywhere; }
 .qa-entry-title > code { color: var(--muted); font-size: .75rem; overflow-wrap: anywhere; }
+.qa-entry-actions { display: flex; margin-left: auto; }
+.qa-entry-actions .icon-button { flex: 0 0 26px; width: 26px; height: 26px; }
+.qa-entry-actions .icon-button[aria-pressed="true"] { background: var(--focus-halo); color: var(--text); }
 .qa-warning, .qa-notices { color: var(--warning); overflow-wrap: anywhere; }
 .qa-warning { display: block; margin: 4px 0; }
 .qa-notices { margin: 8px 0; padding-left: 18px; }

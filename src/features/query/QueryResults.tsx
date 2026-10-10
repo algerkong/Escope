@@ -169,7 +169,8 @@ export function QueryResults({ kind = 'query', active = true, documentIds, wrapJ
       : pagingNote(t('queryLive:loadMoreNeedsSort'))}
   </div> : null;
 
-  const table = <QueryResultGrid key={query.id} rows={displayHits} fieldNames={columns} state={gridState} executionKey={executionKey}
+  // Scroll, native selection endpoints and virtualized controls belong to one live execution.
+  const table = <QueryResultGrid key={JSON.stringify([query.id, executionKey])} rows={displayHits} fieldNames={columns} state={gridState} executionKey={executionKey}
     fieldFormats={'snapshot' in state ? state.snapshot.dataView?.definition.fieldFormats : undefined}
     active={active} scrollPosition={positions?.table} onScrollPositionChange={(position) => recordScroll('table', position)}
     onStateChange={(value) => {

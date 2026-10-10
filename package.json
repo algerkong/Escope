@@ -28,6 +28,7 @@
     "@js-temporal/polyfill": "0.5.1",
     "@radix-ui/react-dialog": "^1.1.15",
     "@tanstack/react-table": "^9.2.6",
+    "@tanstack/react-virtual": "3.14.14",
     "@tauri-apps/api": "^2.9.1",
     "i18next": "^25.6.0",
     "jsonc-parser": "3.3.1",

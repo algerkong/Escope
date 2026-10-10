@@ -25,6 +25,7 @@ import {
   reorderColumns, restoreColumnWidth, sanitizeColumnSizing, sortValueOf,
   type GridCellValue, type ResultGridRow, type ResultGridState,
 } from '../../domain/result-grid';
+import { useResultColumnWindow } from './useResultColumnWindow';
 import '../../styles/result-grid.css';
 
 /**
@@ -85,6 +86,7 @@ function cellTitle(column: ResultColumn | undefined): string | undefined {
 
 interface HeaderCellProps {
   header: Header<typeof gridFeatures, ResultGridRow>;
+  columnIndex: number;
   label: string;
   chromeLabel: string;
   sortDirection: 'asc' | 'desc' | null;
@@ -96,7 +98,7 @@ interface HeaderCellProps {
   onAutoFit: (id: string) => void;
 }
 
-function GridHeaderCell({ header, label, chromeLabel, sortDirection, sortable, movable, loadedRowCount, onSort, onResize, onAutoFit }: HeaderCellProps) {
+function GridHeaderCell({ header, columnIndex, label, chromeLabel, sortDirection, sortable, movable, loadedRowCount, onSort, onResize, onAutoFit }: HeaderCellProps) {
   const { t } = useTranslation();
   const column = header.column;
   const size = header.getSize();
@@ -121,7 +123,8 @@ function GridHeaderCell({ header, label, chromeLabel, sortDirection, sortable, m
     onResize(column.id, next);
   };
 
-  return <th ref={setNodeRef} style={style} scope="col" data-column-id={column.id} data-dragging={isDragging || undefined}
+  return <th ref={setNodeRef} style={style} scope="col" aria-colindex={columnIndex + 1}
+    data-column-id={column.id} data-dragging={isDragging || undefined}
     aria-sort={sortDirection === 'asc' ? 'ascending' : sortDirection === 'desc' ? 'descending' : undefined}>
     <div className="rg-th-inner">
       {movable ? <button type="button" ref={setActivatorNodeRef} className="rg-drag-handle"
@@ -155,13 +158,14 @@ function GridHeaderCell({ header, label, chromeLabel, sortDirection, sortable, m
 export function QueryResultGrid({ active = true, scrollPosition, onScrollPositionChange, rows, fieldNames, state, onStateChange, onDocument, onCompare, onFilterCell, executionKey, fieldFormats, footerActions }: Props) {
   const { t } = useTranslation();
   const [chooserOpen, setChooserOpen] = useState(false);
+  const [dragColumns, setDragColumns] = useState<readonly string[]>([]);
   const [rawExecution, setRawExecution] = useState<string | null>(null);
   const formatsEnabled = rawExecution !== executionKey;
   const formats = useMemo(() => new Map(fieldFormats?.entries.map(({ field, format }) => [field, format])), [fieldFormats]);
   const viewport = useRef<HTMLDivElement>(null);
   const initialScroll = useRef(scrollPosition);
   const previousPage = useRef(state.pageIndex);
-  useEffect(() => { if (!active) setChooserOpen(false); }, [active]);
+  useEffect(() => { if (!active) { setChooserOpen(false); setDragColumns([]); } }, [active]);
 
   // Latest external state for event callbacks, so a burst of updates never merges against a stale prop.
   const stateRef = useRef(state);
@@ -346,6 +350,17 @@ export function QueryResultGrid({ active = true, scrollPosition, onScrollPositio
   }, [t]);
 
   const visibleLeafColumns = table.getVisibleLeafColumns();
+  const hasCellActions = onFilterCell !== undefined;
+  // Table keeps column objects stable while getSize() reads the controlled sizing state.
+  const columnLayout = useMemo(() => visibleLeafColumns.map((column) => ({
+    id: column.id, size: column.getSize(),
+    headerFocusable: !LOCKED_COLUMN_IDS.includes(column.id),
+    bodyFocusable: column.id === ID_COLUMN_ID || (hasCellActions && fieldNameOfColumnId(column.id) !== null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  })), [visibleLeafColumns, state.columnSizing, hasCellActions]);
+  const columnWindow = useResultColumnWindow({
+    viewport, columns: columnLayout, active, initialOffset: initialScroll.current?.left ?? 0, dragColumns,
+  });
   const movableIds = visibleLeafColumns.map((column) => column.id).filter((id) => !LOCKED_COLUMN_IDS.includes(id));
   const sortingByColumn = new Map(sorting.map((entry) => [entry.id, entry.desc ? 'desc' as const : 'asc' as const]));
 
@@ -369,6 +384,7 @@ export function QueryResultGrid({ active = true, scrollPosition, onScrollPositio
   }), [t, chooserLabelOf, positionOf]);
 
   const handleDragEnd = (event: DragEndEvent) => {
+    setDragColumns([]);
     const { active, over } = event;
     if (over === null || active.id === over.id) return;
     emit({ columnOrder: reorderColumns(reconcileColumnOrder(stateRef.current.columnOrder, discovered), String(active.id), String(over.id)) });
@@ -467,41 +483,66 @@ export function QueryResultGrid({ active = true, scrollPosition, onScrollPositio
     if (!selection || selection.isCollapsed || selection.rangeCount !== 1) return;
     const range = selection.getRangeAt(0);
     if (!element.contains(range.startContainer) || !element.contains(range.endContainer)) return;
-    const selectedRows: string[][] = [];
+    const selectedCells: { row: number; column: number }[] = [];
     let includesFormatted = false;
-    const visibleRows = new Map(rowsModel.map((row) => [row.id, row.original]));
+    const columnIndexes = new Map(visibleLeafColumns.map((column, index) => [column.id, index]));
     for (const row of element.rows) {
-      const cells: string[] = [];
-      const original = visibleRows.get(row.dataset.selectionId ?? '');
       for (const cell of row.cells) {
         const text = cell.querySelector('.rg-cell, .rg-header-label');
         const columnId = cell.dataset.columnId;
         if (!text || !columnId || !range.intersectsNode(text)) continue;
+        const column = columnIndexes.get(columnId);
+        if (column === undefined) continue;
         includesFormatted ||= text.getAttribute('data-field-format') === 'formatted';
-        cells.push(!original ? headerLabelOf(columnId) : columnId === ROW_COLUMN_ID ? text.textContent ?? ''
-          : columnId === INDEX_COLUMN_ID ? original.hit.index ?? '' : columnId === ID_COLUMN_ID ? original.hit.id
-            : columnsByRowKey.get(row.dataset.selectionId!)?.get(fieldNameOfColumnId(columnId) ?? '')?.value.text ?? '');
+        selectedCells.push({ row: row.rowIndex, column });
       }
-      if (cells.length) selectedRows.push(cells);
     }
-    // A partial selection of a formatted token has no lossless inverse. Copy whole original cells.
-    if (includesFormatted) {
-      event.preventDefault();
-      event.clipboardData.setData('text/plain', selectedRows.map((cells) => cells.join('\t')).join('\n'));
+    const first = selectedCells[0];
+    const last = selectedCells.at(-1);
+    if (!first || !last) return;
+    const logicalCellCount = (last.row - first.row) * visibleLeafColumns.length + last.column - first.column + 1;
+    if (!includesFormatted && logicalCellCount === selectedCells.length) return;
+
+    // A formatted substring has no lossless inverse, and DOM copy omits virtual gaps.
+    // Copy whole original cells in logical order, including unmounted (but never hidden) columns.
+    const visibleRows = new Map(rowsModel.map((row, index) => [row.id, { row: row.original, number: pageIndex * pageSize + index + 1 }]));
+    const selectedRows: string[][] = [];
+    for (let rowIndex = first.row; rowIndex <= last.row; rowIndex += 1) {
+      const key = element.rows[rowIndex]?.dataset.selectionId;
+      const original = visibleRows.get(key ?? '');
+      const from = rowIndex === first.row ? first.column : 0;
+      const to = rowIndex === last.row ? last.column : visibleLeafColumns.length - 1;
+      const cells: string[] = [];
+      for (let columnIndex = from; columnIndex <= to; columnIndex += 1) {
+        const columnId = visibleLeafColumns[columnIndex]!.id;
+        cells.push(!original ? headerLabelOf(columnId) : columnId === ROW_COLUMN_ID ? String(original.number)
+          : columnId === INDEX_COLUMN_ID ? original.row.hit.index ?? '' : columnId === ID_COLUMN_ID ? original.row.hit.id
+            : columnsByRowKey.get(key!)?.get(fieldNameOfColumnId(columnId) ?? '')?.value.text ?? '');
+      }
+      selectedRows.push(cells);
     }
+    event.preventDefault();
+    event.clipboardData.setData('text/plain', selectedRows.map((cells) => cells.join('\t')).join('\n'));
   };
 
   return <div className="rg-root">
-    <DndContext sensors={sensors} collisionDetection={closestCenter} accessibility={accessibility} onDragEnd={handleDragEnd}>
+    <DndContext sensors={sensors} collisionDetection={closestCenter} accessibility={accessibility}
+      onDragStart={({ active }) => setDragColumns([String(active.id)])}
+      onDragOver={({ active, over }) => setDragColumns(over ? [String(active.id), String(over.id)] : [String(active.id)])}
+      onDragCancel={() => setDragColumns([])} onDragEnd={handleDragEnd}>
       <SortableContext items={movableIds} strategy={horizontalListSortingStrategy}>
-        <div ref={viewport} className="rg-scroll" role="region" aria-label={t('queryLive:resultGrid')} tabIndex={0}
+        <div ref={viewport} className="rg-scroll" role="region" aria-label={t('queryLive:resultGrid')} tabIndex={0} {...columnWindow.viewportProps}
           onScroll={(event) => onScrollPositionChange?.({ top: event.currentTarget.scrollTop, left: event.currentTarget.scrollLeft })}>
-          <table className="rg-table" style={{ width: table.getTotalSize() }} onCopy={copyOriginalCells}>
+          <table className="rg-table" style={{ width: columnWindow.totalSize }} aria-colcount={visibleLeafColumns.length}
+            data-column-window={columnWindow.windowed || undefined} onCopy={copyOriginalCells}>
+            <colgroup>{columnWindow.slots.map((slot) => <col key={slot.key} style={{ width: slot.size }} />)}</colgroup>
             <thead>
               {table.getHeaderGroups().map((headerGroup) => <tr key={headerGroup.id}>
-                {headerGroup.headers.map((header) => {
+                {columnWindow.slots.map((slot) => {
+                  if (slot.kind === 'spacer') return <th key={slot.key} className="rg-column-spacer" aria-hidden="true" />;
+                  const header = headerGroup.headers[slot.index]!;
                   const columnId = header.column.id;
-                  return <GridHeaderCell key={header.id} header={header}
+                  return <GridHeaderCell key={slot.key} header={header} columnIndex={slot.index}
                     label={headerLabelOf(columnId)} chromeLabel={chooserLabelOf(columnId)}
                     sortDirection={sortingByColumn.get(columnId) ?? null}
                     sortable={header.column.getCanSort()} movable={movableIds.includes(columnId)}
@@ -513,18 +554,19 @@ export function QueryResultGrid({ active = true, scrollPosition, onScrollPositio
             <tbody ref={rowSelection.bodyRef} {...rowSelection.bodyProps}>
               {rowsModel.map((row, indexInPage) => <tr key={row.id} {...rowSelection.rowProps(row.id)}
                 onDoubleClick={(event) => { if (!isInteractiveTarget(event.target)) onDocument(row.original); }}>
-                {row.getVisibleCells().map((cell) => {
-                  const columnId = cell.column.id;
+                {columnWindow.slots.map((slot) => {
+                  if (slot.kind === 'spacer') return <td key={slot.key} className="rg-column-spacer" aria-hidden="true" />;
+                  const columnId = visibleLeafColumns[slot.index]!.id;
                   const isNumber = columnId === ROW_COLUMN_ID;
                   const isNested = !isNumber && columnId !== INDEX_COLUMN_ID && columnId !== ID_COLUMN_ID
                     && columnsByRowKey.get(row.id)?.get(fieldNameOfColumnId(columnId) ?? '')?.nested === true;
-                  return <td key={cell.id} data-column-id={columnId}
+                  return <td key={slot.key} data-column-id={columnId} aria-colindex={slot.index + 1}
                     className={isNumber ? 'rg-number-cell' : isNested ? 'rg-value-cell rg-nested-cell' : 'rg-value-cell'}>
                     {renderCell(columnId, row.original, pageIndex * pageSize + indexInPage + 1)}
                   </td>;
                 })}
               </tr>)}
-              {rowsModel.length === 0 ? <tr><td className="rg-empty-cell" colSpan={Math.max(visibleLeafColumns.length, 1)}>{t('resultGrid:empty')}</td></tr> : null}
+              {rowsModel.length === 0 ? <tr><td className="rg-empty-cell" colSpan={Math.max(columnWindow.slots.length, 1)}>{t('resultGrid:empty')}</td></tr> : null}
             </tbody>
           </table>
         </div>

@@ -14,7 +14,8 @@
   overflow: auto; border: 1px solid var(--border); border-radius: 4px; overscroll-behavior: contain;
 }
 
-.rg-table { border-collapse: collapse; table-layout: fixed; font-size: var(--table-size); }
+.rg-table { border-collapse: separate; border-spacing: 0; table-layout: fixed; font-size: var(--table-size); }
+.rg-table .rg-column-spacer { padding: 0; pointer-events: none; }
 
 .rg-table th {
   position: sticky; top: 0; z-index: 1;

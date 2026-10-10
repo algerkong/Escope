@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "pinned-orders",
+      "name": "Orders",
+      "connectionId": "connection-a",
+      "index": "orders-*",
+      "filters": [
+        { "id": "status", "field": "status", "fieldType": "keyword", "operation": "include", "value": "\"r\\u0065ady\"", "enabled": true },
+        { "id": "amount", "field": "amount", "fieldType": "long", "operation": "exclude", "value": "9007199254740993", "enabled": true },
+        { "id": "note", "field": "note", "fieldType": "text", "operation": "include", "value": "\"customer note\"", "enabled": false },
+        { "id": "date", "field": "created", "fieldType": "date", "operation": "missing", "value": null, "enabled": false }
+      ],
+      "composition": {
+        "mode": "any",
+        "groups": [
+          { "id": "first", "mode": "any", "filterIds": ["status", "amount"] },
+          { "id": "second", "mode": "all", "filterIds": ["note", "date"] }
+        ]
+      }
+    }
+  ]
+}

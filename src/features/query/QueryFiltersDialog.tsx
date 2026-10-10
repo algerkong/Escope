@@ -1,4 +1,4 @@
-import { Check, Eye, ListFilter, ListTree, Plus, RefreshCw, Trash2, Unlink } from 'lucide-react';
+import { Check, Eye, ListFilter, ListTree, Pin, Plus, RefreshCw, Trash2, Unlink } from 'lucide-react';
 import { useId, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { IconButton, Modal, SelectControl } from '../../components/controls';
@@ -56,10 +56,11 @@ interface Props {
   onCommit: (source: QueryDocument, patch: QueryDocumentPatch) => boolean;
   onDiscard: () => void;
   onClose: () => void;
+  onPin?: () => void;
 }
 
 export function QueryFiltersDialog({ draft, current, initialSelection, initialNested = false, fields, mapping, targetCurrent, canInspect, newQuery,
-  onInspect, onInspectNested, onFiltersChange, onCommit, onDiscard, onClose }: Props) {
+  onInspect, onInspectNested, onFiltersChange, onCommit, onDiscard, onClose, onPin }: Props) {
   const { t } = useTranslation();
   const id = useId();
   const [selection, setSelection] = useState(initialSelection);
@@ -89,12 +90,12 @@ export function QueryFiltersDialog({ draft, current, initialSelection, initialNe
   const bindingCurrent = !draft.binding || matchesQueryFilterBinding(draft.binding, current, draft.endpoint);
   const currentTarget = targetCurrent && matchesQueryDraft(current, draft.source) && bindingCurrent && !conflict;
   const evidenceSource = queryFilterEvidenceSource(draft);
-  const field = useMemo(() => selection
+  const field = useMemo(() => selection && draft.snapshot
     ? queryFilterFieldEvidence(evidenceSource, draft.snapshot, selection.field, catalog) : null, [evidenceSource, draft.snapshot, selection, catalog]);
   const values = useMemo(() => selection ? queryFilterValues(selection.value) : null, [selection]);
   const token = values?.ok ? values.values[valueIndex] ?? null : null;
   const presence = operation === 'exists' || operation === 'missing';
-  const proposal = useMemo(() => selection
+  const proposal = useMemo(() => selection && draft.snapshot
     ? createQueryFilter(evidenceSource, draft.snapshot, selection, operation, token, catalog) : null,
   [evidenceSource, draft.snapshot, selection, operation, token, catalog]);
   const candidateProblem = proposal && !proposal.ok ? proposal.code
@@ -134,7 +135,7 @@ export function QueryFiltersDialog({ draft, current, initialSelection, initialNe
   return <Modal open onClose={onClose} title={t('queryFilters:title')}>
     <div className="qfilter-review">
       <div className="qfilter-origin">
-        <code>{draft.endpoint}</code><code>{draft.snapshot.index}</code>
+        <code>{draft.endpoint}</code><code>{draft.source.index}</code>
         <span title={t('queryFilters:sessionOnly')}>{t(newQuery ? 'queryFilters:newQuery' : draft.binding ? 'queryFilters:boundApplied' : 'queryFilters:sessionDraft')}</span>
       </div>
       <div className="qfilter-evidence">
@@ -144,7 +145,7 @@ export function QueryFiltersDialog({ draft, current, initialSelection, initialNe
         </span>
         <IconButton icon={RefreshCw} label={t('queryFilters:inspect')} disabled={!canInspect || !currentTarget || busy} onClick={onInspect} />
         <IconButton icon={ListTree} label={t('queryFilters:nestedEditor')} aria-expanded={nestedOpen}
-          disabled={!currentTarget} onClick={() => { setNestedOpen(!nestedOpen); setSelection(undefined); setReview(null); }} />
+          disabled={!currentTarget || !draft.snapshot} onClick={() => { setNestedOpen(!nestedOpen); setSelection(undefined); setReview(null); }} />
       </div>
       {nestedActive ? <div className="qfilter-evidence">
         <span className="muted" title={t('queryFilters:nestedEvidenceBoundary')}>
@@ -264,6 +265,7 @@ export function QueryFiltersDialog({ draft, current, initialSelection, initialNe
               : item.operation === 'exclude' ? t('queryFilters:excludeBoundary') : undefined}>{operationLabel(item)}</span>
             {item.nestedPath ? <code className="qfilter-path" title={t('queryFilters:nestedSameObject')}>{item.nestedPath}</code> : null}
             {item.evidence === 'runtime' ? <span title={t('queryFilters:runtimeBoundary')}>{t('queryFilters:runtime')}</span> : null}
+            {item.origin === 'saved' ? <span title={t('pinnedFilters:literalBoundary')}>{t('pinnedFilters:literal')}</span> : null}
             {item.value !== null ? <code id={`${id}-token-${position}`} title={item.value}>{item.value}</code> : null}
             <SelectControl aria-label={t('queryFilters:filterGroup', { field: item.field })} disabled={!currentTarget}
               value={composition.groups.find((group) => group.filterIds.includes(item.id))?.id ?? ''}
@@ -294,6 +296,7 @@ export function QueryFiltersDialog({ draft, current, initialSelection, initialNe
           <Eye size={14} aria-hidden="true" />{t('queryFilters:preview')}
         </button>
         <IconButton icon={Trash2} label={t('queryFilters:discard')} onClick={onDiscard} />
+        {onPin ? <IconButton icon={Pin} label={t('pinnedFilters:pin')} disabled={!currentTarget || !draft.filters.length} onClick={onPin} /> : null}
       </div>
       {preview ? <>
         <details><summary>{t('queryFilters:currentDsl')}</summary><pre className="qfilter-current">{draft.source.dsl}</pre></details>

@@ -19,6 +19,7 @@ import { enRuntimeFields, zhRuntimeFields } from './runtime-fields';
 import { enTimeRange, zhTimeRange } from './query-time-range';
 import { enQueryFilters, zhQueryFilters } from './query-filters';
 import { enQuerySort, zhQuerySort } from './query-sort';
+import { enPinnedFilters, zhPinnedFilters } from './pinned-filters';
 import { enQueryHistory, enWorkspaceRecovery, zhQueryHistory, zhWorkspaceRecovery } from './workspace-recovery';
 
 export const i18n = i18next.createInstance();
@@ -26,10 +27,10 @@ void i18n.use(initReactI18next).init({
   resources: {
     'zh-CN': { ...zh, queryLive: zhLive, cluster: zhCluster, models: zhModels, aiChat: zhAiChat, visualQuery: zhVisualQuery, resultGrid: zhResultGrid,
       connectionSettings: zhConnectionSettings, connectionAccess: zhConnectionAccess, queryLibrary: zhQueryLibrary, queryParameters: zhQueryParameters, queryExchange: zhQueryExchange,
-      workspaceRecovery: zhWorkspaceRecovery, queryHistory: zhQueryHistory, queryExport: zhQueryExport, dataViews: zhDataViews, runtimeFields: zhRuntimeFields, timeRange: zhTimeRange, queryFilters: zhQueryFilters, querySort: zhQuerySort },
+      workspaceRecovery: zhWorkspaceRecovery, queryHistory: zhQueryHistory, queryExport: zhQueryExport, dataViews: zhDataViews, runtimeFields: zhRuntimeFields, timeRange: zhTimeRange, queryFilters: zhQueryFilters, querySort: zhQuerySort, pinnedFilters: zhPinnedFilters },
     'en-US': { ...en, queryLive: enLive, cluster: enCluster, models: enModels, aiChat: enAiChat, visualQuery: enVisualQuery, resultGrid: enResultGrid,
       connectionSettings: enConnectionSettings, connectionAccess: enConnectionAccess, queryLibrary: enQueryLibrary, queryParameters: enQueryParameters, queryExchange: enQueryExchange,
-      workspaceRecovery: enWorkspaceRecovery, queryHistory: enQueryHistory, queryExport: enQueryExport, dataViews: enDataViews, runtimeFields: enRuntimeFields, timeRange: enTimeRange, queryFilters: enQueryFilters, querySort: enQuerySort },
+      workspaceRecovery: enWorkspaceRecovery, queryHistory: enQueryHistory, queryExport: enQueryExport, dataViews: enDataViews, runtimeFields: enRuntimeFields, timeRange: enTimeRange, queryFilters: enQueryFilters, querySort: enQuerySort, pinnedFilters: enPinnedFilters },
   },
   lng: navigator.language.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US',
   fallbackLng: 'en-US',

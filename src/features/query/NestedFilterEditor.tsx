@@ -31,12 +31,12 @@ export function NestedFilterEditor({ draft, composition, catalog, mapping, disab
   const fields = paths.find((entry) => entry.path === path)?.fields ?? [];
   const groupId = selectedGroup !== 'new' && composition.groups.some((group) => group.id === selectedGroup && group.nested?.path === path)
     ? selectedGroup : 'new';
-  const field = useMemo(() => fieldName ? nestedQueryFilterFieldEvidence(draft.source, draft.snapshot, path, fieldName, catalog, mapping) : null,
+  const field = useMemo(() => fieldName && draft.snapshot ? nestedQueryFilterFieldEvidence(draft.source, draft.snapshot, path, fieldName, catalog, mapping) : null,
     [draft.source, draft.snapshot, path, fieldName, catalog, mapping]);
   const presence = operation === 'exists' || operation === 'missing';
   const stringValue = field?.ok && (field.family === 'keyword' || field.family === 'text');
   const token = presence ? null : stringValue ? JSON.stringify(value) : value.trim();
-  const proposal = useMemo(() => fieldName ? createNestedQueryFilter(draft.source, draft.snapshot, path, fieldName,
+  const proposal = useMemo(() => fieldName && draft.snapshot ? createNestedQueryFilter(draft.source, draft.snapshot, path, fieldName,
     operation, token, catalog, mapping) : null, [draft.source, draft.snapshot, path, fieldName, operation, token, catalog, mapping]);
   const groupMembers = composition.groups.find((group) => group.id === groupId)?.filterIds ?? [];
   const problem = proposal && !proposal.ok ? proposal.code

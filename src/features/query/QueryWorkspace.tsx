@@ -1,4 +1,4 @@
-import { Bookmark, Braces, Clock3, Database, FileCheck2, FileDown, History, Layers, ListOrdered, LoaderCircle, Play, Plus, Save, Settings, ShieldCheck, Star, TriangleAlert, Undo2, Variable } from 'lucide-react';
+import { Bookmark, Braces, Clock3, Database, FileCheck2, FileDown, History, Layers, ListOrdered, LoaderCircle, Pin, Play, Plus, Save, Settings, ShieldCheck, Star, TriangleAlert, Undo2, Variable } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ConnectionProfile } from '../../domain/connection';
@@ -48,6 +48,10 @@ import type { WorkspaceRecoveryController } from './useWorkspaceRecovery';
 import { createDataViewService, type DataViewService } from '../../services/data-views';
 import { useDataViews } from './useDataViews';
 import { DataViewsDialog, DataViewTarget } from './DataViews';
+import { createPinnedFilterService, type PinnedFilterService } from '../../services/pinned-filters';
+import { draftFromPinnedFilters, samePinnedFilter } from '../../domain/pinned-filters';
+import { usePinnedFilters } from './usePinnedFilters';
+import { PinFiltersDialog, PinnedFiltersDialog } from './PinnedFiltersDialog';
 import '../../styles/query-live.css';
 
 const IDLE: ExecutionState = { status: 'idle' };
@@ -90,9 +94,10 @@ interface Props {
   restoreQuery?: (document: QueryDocument) => void;
   recovery?: WorkspaceRecoveryController;
   dataViewService?: DataViewService;
+  pinnedFilterService?: PinnedFilterService;
 }
 
-export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResults, toggleAI, onSettings, updateQuery, selectTab, openIndex, addQuery, closeTab, backend = desktopQueryBackend, modelService = desktopModelService, aiBackend, canQuery, active = true, onCommandReady, libraryService = defaultQueryLibraryService, snapshotExportService = desktopSnapshotExportService, exchangeService: suppliedExchangeService, restoreQuery, recovery, dataViewService: suppliedDataViewService }: Props) {
+export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResults, toggleAI, onSettings, updateQuery, selectTab, openIndex, addQuery, closeTab, backend = desktopQueryBackend, modelService = desktopModelService, aiBackend, canQuery, active = true, onCommandReady, libraryService = defaultQueryLibraryService, snapshotExportService = desktopSnapshotExportService, exchangeService: suppliedExchangeService, restoreQuery, recovery, dataViewService: suppliedDataViewService, pinnedFilterService: suppliedPinnedFilterService }: Props) {
   const { t } = useTranslation();
   const [closing, setClosing] = useState<QueryDocument | null>(null);
   const [checked, setChecked] = useState<Record<string, { source: string; error: QueryDslError | null }>>({});
@@ -117,6 +122,10 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const dataViewService = useMemo(() => suppliedDataViewService ?? createDataViewService(), [suppliedDataViewService]);
   const dataViews = useDataViews(dataViewService);
   const [dataViewsOpen, setDataViewsOpen] = useState(false);
+  const pinnedFilterService = useMemo(() => suppliedPinnedFilterService ?? createPinnedFilterService(), [suppliedPinnedFilterService]);
+  const pinnedFilters = usePinnedFilters(pinnedFilterService);
+  const [pinnedOpen, setPinnedOpen] = useState<{ source: QueryDocument | null; endpoint: string | null } | null>(null);
+  const [pinning, setPinning] = useState<QueryFilterDraft | null>(null);
   const exchangeService = useMemo(() => suppliedExchangeService ?? createQueryExchangeService(libraryService), [suppliedExchangeService, libraryService]);
   const [exchangeMode, setExchangeMode] = useState<'import' | 'export' | null>(null);
   const [libraryOpen, setLibraryOpen] = useState(false);
@@ -367,12 +376,17 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const filterTab = reviewedFilters ? state.tabs.find((item) => item.document.id === reviewedFilters.source.id) : undefined;
   const filterExecution = reviewedFilters ? entries[reviewedFilters.source.id]?.state : undefined;
   const filterTargetCurrent = reviewedFilters !== undefined && !restoring && active && !saveBlockedByVisual && state.activeTabId === reviewedFilters.source.id
-    && profiles.some((profile) => profile.id === reviewedFilters.snapshot.connectionId && profile.endpoint === reviewedFilters.endpoint)
-    && (reviewedFilters.binding
+    && profiles.some((profile) => profile.id === reviewedFilters.source.connectionId && profile.endpoint === reviewedFilters.endpoint)
+    && (reviewedFilters.binding || reviewedFilters.snapshot === null
       ? filterExecution?.status !== 'running'
         && (filterExecution && 'snapshot' in filterExecution ? filterExecution.snapshot.requestId : null) === filterDialog?.executionId
       : (filterExecution?.status === 'success' || filterExecution?.status === 'partial')
-        && filterExecution.snapshot.requestId === reviewedFilters.snapshot.requestId);
+        && filterExecution.snapshot.requestId === reviewedFilters.snapshot?.requestId);
+  const pinnedTargetCurrent = pinnedOpen?.source !== null && pinnedOpen?.source !== undefined && !restoring && active
+    && !saveBlockedByVisual && !hasPendingFilters && !boundFilters && !reviewingSort
+    && state.activeTabId === pinnedOpen.source.id && matchesQueryDraft(query, pinnedOpen.source)
+    && profiles.some((profile) => profile.id === pinnedOpen.source?.connectionId && profile.endpoint === pinnedOpen.endpoint)
+    && execution.status !== 'running' && !entry?.continuing && (showingQuery || tab?.kind === 'index' && restoreQuery !== undefined);
   const discardFilters = (id: string) => {
     setFilterDrafts((current) => Object.fromEntries(Object.entries(current).filter(([key]) => key !== id)));
     setFilterDialog((current) => current?.queryId === id ? null : current);
@@ -381,9 +395,11 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
     && Boolean(entry?.endpoint) && (execution.status === 'success' || execution.status === 'partial')
     && (showingQuery || tab?.kind === 'index' && restoreQuery !== undefined);
   const reviewFilters = (selection?: CellFilterSelection, nested = false) => {
-    const snapshot = execution.status === 'success' || execution.status === 'partial' ? execution.snapshot : pendingFilters?.snapshot ?? boundFilters?.snapshot;
-    if (!active || restoring || !snapshot) return;
-    const draft: QueryFilterDraft = hasPendingQueryFilters(pendingFilters) ? pendingFilters!
+    const snapshot = execution.status === 'success' || execution.status === 'partial' ? execution.snapshot : pendingFilters?.snapshot ?? boundFilters?.snapshot ?? null;
+    if (!active || restoring || !snapshot && !pendingFilters && !boundFilters) return;
+    const draft: QueryFilterDraft = hasPendingQueryFilters(pendingFilters)
+      ? pendingFilters!.snapshot === null && snapshot && (selection || nested) && matchesQueryDraft(query, pendingFilters!.source)
+        ? { ...pendingFilters!, snapshot } : pendingFilters!
       : boundFilters ? { source: structuredClone(query), snapshot, endpoint: boundFilters.endpoint,
         filters: structuredClone(boundFilters.filters), composition: structuredClone(boundFilters.composition), binding: boundFilters }
         : { source: structuredClone(query), snapshot, endpoint: entry?.endpoint ?? '', filters: [] };
@@ -450,6 +466,8 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
               : exportTaskState === 'error' || exportTaskState === 'incomplete' ? 'queryExport:incompleteTask' : 'queryExport:task')}`}
             onClick={() => setExportVisible(true)} /> : null}
           <IconButton icon={Layers} label={t('dataViews:manage')} onClick={() => setDataViewsOpen(true)} />
+          <IconButton icon={Pin} label={t('pinnedFilters:title')} onClick={() =>
+            setPinnedOpen({ source: tab ? structuredClone(query) : null, endpoint })} />
           <IconButton icon={Bookmark} label={t('queryLibrary:open')} onClick={() => setLibraryOpen(true)} />
           {recovery ? <IconButton icon={History} label={t('queryHistory:open')} onClick={() => setHistoryOpen(true)} /> : null}
         </div>
@@ -671,23 +689,27 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
         else setEditorModes((current) => ({ ...current, [source.id]: 'dsl' }));
         return true;
       }} /> : null}
-    {reviewedFilters && filterDialog && active && state.activeTabId === reviewedFilters.source.id ? <QueryFiltersDialog key={filterDialog.instanceId}
+    {reviewedFilters && filterDialog && !pinning && active && state.activeTabId === reviewedFilters.source.id ? <QueryFiltersDialog key={filterDialog.instanceId}
       draft={reviewedFilters} current={filterTab?.document} initialSelection={filterDialog.selection} initialNested={filterDialog.nested}
-      fields={fieldsFor(reviewedFilters.snapshot.connectionId, reviewedFilters.endpoint, reviewedFilters.snapshot.index.trim())}
-      mapping={mappingFor(reviewedFilters.snapshot.connectionId, reviewedFilters.endpoint, reviewedFilters.snapshot.index.trim())}
+      fields={fieldsFor(reviewedFilters.source.connectionId, reviewedFilters.endpoint, reviewedFilters.source.index.trim())}
+      mapping={mappingFor(reviewedFilters.source.connectionId, reviewedFilters.endpoint, reviewedFilters.source.index.trim())}
       targetCurrent={filterTargetCurrent} canInspect={available && filterTargetCurrent} newQuery={filterTab?.kind === 'index'}
       onInspect={() => {
-        if (available && filterTargetCurrent) refreshFields(reviewedFilters.snapshot.connectionId, reviewedFilters.endpoint, reviewedFilters.snapshot.index.trim());
+        if (available && filterTargetCurrent && reviewedFilters.source.connectionId) refreshFields(reviewedFilters.source.connectionId, reviewedFilters.endpoint, reviewedFilters.source.index.trim());
       }}
       onInspectNested={() => {
         if (!available || !filterTargetCurrent) return;
-        const { connectionId, index } = reviewedFilters.snapshot;
+        const { connectionId, index } = reviewedFilters.source;
+        if (!connectionId) return;
         loadMapping(connectionId, reviewedFilters.endpoint, index.trim());
         refreshFields(connectionId, reviewedFilters.endpoint, index.trim());
       }}
       onFiltersChange={(filters, composition) => setFilterDrafts((current) => current[reviewedFilters.source.id] === reviewedFilters
         ? { ...current, [reviewedFilters.source.id]: { ...reviewedFilters, filters, composition } } : current)}
       onDiscard={() => discardFilters(reviewedFilters.source.id)}
+      onPin={() => {
+        if (filterTargetCurrent && matchesQueryDraft(filterTab?.document, reviewedFilters.source)) setPinning(reviewedFilters);
+      }}
       onClose={() => {
         if (reviewedFilters.binding && !queryFilterDraftChanged(reviewedFilters)) discardFilters(reviewedFilters.source.id);
         else setFilterDialog(null);
@@ -695,8 +717,8 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
       onCommit={(source, patch) => {
         if (!filterTargetCurrent || !matchesQueryDraft(filterTab?.document, source) || patch.dsl === undefined
           || filterBindings[source.id] !== reviewedFilters.binding || !queryFilterDraftChanged(reviewedFilters)) return false;
-        const fields = fieldsFor(reviewedFilters.snapshot.connectionId, reviewedFilters.endpoint, reviewedFilters.snapshot.index.trim());
-        const mapping = mappingFor(reviewedFilters.snapshot.connectionId, reviewedFilters.endpoint, reviewedFilters.snapshot.index.trim());
+        const fields = fieldsFor(reviewedFilters.source.connectionId, reviewedFilters.endpoint, reviewedFilters.source.index.trim());
+        const mapping = mappingFor(reviewedFilters.source.connectionId, reviewedFilters.endpoint, reviewedFilters.source.index.trim());
         const catalog = fields.status === 'ready' && !fields.refreshing && !fields.refreshError ? fields.data : undefined;
         const evidence = mapping.status === 'ready' && !mapping.refreshing && !mapping.refreshError ? parseNestedFilterMapping(mapping.data.raw) : undefined;
         const verified = previewQueryFilterDraft(reviewedFilters, catalog, evidence);
@@ -718,6 +740,22 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
         setFilterBindings((current) => binding ? { ...current, [applied.id]: binding }
           : Object.fromEntries(Object.entries(current).filter(([id]) => id !== applied.id)));
         discardFilters(source.id);
+        return true;
+      }} /> : null}
+    {pinning && active ? <PinFiltersDialog draft={pinning} library={pinnedFilters} kind={pinnedFilterService.kind}
+      currentTarget={filterTargetCurrent && pinning === reviewedFilters && matchesQueryDraft(filterTab?.document, pinning.source)}
+      onClose={() => setPinning(null)} /> : null}
+    {pinnedOpen && active ? <PinnedFiltersDialog library={pinnedFilters} kind={pinnedFilterService.kind} profiles={profiles}
+      source={pinnedOpen.source} endpoint={pinnedOpen.endpoint} canLoad={pinnedTargetCurrent}
+      onClose={() => setPinnedOpen(null)} onLoad={(definition) => {
+        if (!pinnedTargetCurrent || !pinnedOpen.source || !pinnedOpen.endpoint || pinnedFilters.status !== 'ready' || pinnedFilters.error
+          || !pinnedFilters.entries.some((entry) => entry.id === definition.id && samePinnedFilter(entry, definition))) return false;
+        const draft = draftFromPinnedFilters(definition, pinnedOpen.source, pinnedOpen.endpoint);
+        if (!draft) return false;
+        setFilterDrafts((current) => ({ ...current, [draft.source.id]: draft }));
+        setFilterDialog({ queryId: draft.source.id, instanceId: crypto.randomUUID(),
+          executionId: 'snapshot' in execution ? execution.snapshot.requestId : null });
+        setPinnedOpen(null);
         return true;
       }} /> : null}
     <Modal open={filterDetach !== null} onClose={() => setFilterDetach(null)} title={t('queryFilters:detachTitle')}

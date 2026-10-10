@@ -2,6 +2,7 @@ use crate::connection_tls::CaCertificate;
 use crate::credentials::CredentialRef;
 use crate::data_views::{DataViewLibrary, DataViewRecord};
 use crate::error::AppError;
+use crate::pinned_filters::{PinnedFilterLibrary, PinnedFilterRecord};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -11,7 +12,7 @@ use uuid::Uuid;
 
 /// Highest schema version this build understands. A file above it fails closed instead of being
 /// opened with an unknown layout.
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 
 /// Hard upper bound for one credential cleanup batch, so no caller can request unbounded work.
 pub const MAX_CLEANUP_BATCH: usize = 64;
@@ -647,6 +648,7 @@ impl Database {
                 5 => tx.execute_batch(include_str!("../migrations/005_connection_settings.sql"))?,
                 6 => tx.execute_batch(include_str!("../migrations/006_workspace_recovery.sql"))?,
                 7 => tx.execute_batch(include_str!("../migrations/007_data_views.sql"))?,
+                8 => tx.execute_batch(include_str!("../migrations/008_pinned_filters.sql"))?,
                 _ => return Err(AppError::new("unsupported")),
             }
             tx.commit()?;
@@ -924,6 +926,59 @@ impl Database {
         let revision = expected_revision + 1;
         tx.execute(
             "INSERT INTO data_view_library(singleton,revision,json) VALUES (1,?1,?2)
+             ON CONFLICT(singleton) DO UPDATE SET revision=excluded.revision,json=excluded.json",
+            params![revision, json],
+        )?;
+        tx.commit()?;
+        Ok(revision)
+    }
+
+    pub(crate) fn pinned_filters(&self) -> Result<PinnedFilterRecord, AppError> {
+        read_pinned_filters(&self.0)
+    }
+
+    /// New IDs only; retained definitions cannot be overwritten or retargeted under the CAS lock.
+    pub(crate) fn save_pinned_filters(
+        &mut self,
+        expected_revision: u64,
+        library: &PinnedFilterLibrary,
+    ) -> Result<u64, AppError> {
+        library.validate()?;
+        if expected_revision >= crate::pinned_filters::MAX_REVISION {
+            return Err(AppError::new("invalidInput"));
+        }
+        let json = serde_json::to_string(library).map_err(|_| AppError::new("invalidInput"))?;
+        let tx = self
+            .0
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let current = read_pinned_filters(&tx)?;
+        if expected_revision != current.revision {
+            return Err(AppError::new("pinnedFilterConflict"));
+        }
+        for entry in &library.entries {
+            if let Some(previous) = current
+                .library
+                .entries
+                .iter()
+                .find(|previous| previous.id == entry.id)
+            {
+                if entry != previous {
+                    return Err(AppError::new("invalidInput"));
+                }
+            } else {
+                let exists: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM connections WHERE id=?1)",
+                    [&entry.connection_id],
+                    |row| row.get(0),
+                )?;
+                if !exists {
+                    return Err(AppError::new("pinnedFilterConnectionMissing"));
+                }
+            }
+        }
+        let revision = expected_revision + 1;
+        tx.execute(
+            "INSERT INTO pinned_filter_library(singleton,revision,json) VALUES (1,?1,?2)
              ON CONFLICT(singleton) DO UPDATE SET revision=excluded.revision,json=excluded.json",
             params![revision, json],
         )?;
@@ -1948,6 +2003,39 @@ fn now() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs() as i64)
         .unwrap_or(0)
+}
+
+fn read_pinned_filters(connection: &Connection) -> Result<PinnedFilterRecord, AppError> {
+    let row = connection
+        .query_row(
+            "SELECT revision,
+         CASE WHEN length(CAST(json AS BLOB)) <= ?1 THEN json ELSE NULL END
+         FROM pinned_filter_library WHERE singleton=1",
+            [crate::pinned_filters::MAX_BYTES as i64],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|error| match error {
+            rusqlite::Error::InvalidColumnType(..)
+            | rusqlite::Error::IntegralValueOutOfRange(..)
+            | rusqlite::Error::FromSqlConversionFailure(..) => AppError::new("invalidResponse"),
+            _ => AppError::new("storageUnavailable"),
+        })?;
+    match row {
+        None => Ok(PinnedFilterRecord {
+            revision: 0,
+            library: PinnedFilterLibrary::empty(),
+        }),
+        Some((revision, json)) => {
+            if revision <= 0 || revision as u64 > crate::pinned_filters::MAX_REVISION {
+                return Err(AppError::new("invalidResponse"));
+            }
+            Ok(PinnedFilterRecord {
+                revision: revision as u64,
+                library: crate::pinned_filters::decode_stored(&json)?,
+            })
+        }
+    }
 }
 
 fn read_data_views(connection: &Connection) -> Result<DataViewRecord, AppError> {
@@ -3650,7 +3738,7 @@ mod tests {
                     .0
                     .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                     .unwrap(),
-                7
+                SCHEMA_VERSION
             );
             assert_eq!(database.data_views().unwrap().revision, 0);
             assert_eq!(
@@ -3841,6 +3929,143 @@ mod tests {
             "storageUnavailable"
         );
         assert_eq!(db.workspace_recovery_row().unwrap().unwrap().json, document);
+    }
+
+    fn v7_database(path: &Path) -> (Connection, String, String) {
+        let (conn, connection_id, model_id) = v6_database(path);
+        conn.execute_batch(include_str!("../migrations/007_data_views.sql"))
+            .unwrap();
+        conn.execute(
+            "INSERT INTO data_view_library(singleton,revision,json) VALUES(1,5,?1)",
+            [r#"{"version":1,"entries":[]}"#],
+        )
+        .unwrap();
+        (conn, connection_id, model_id)
+    }
+
+    #[test]
+    fn pinned_filters_migration_preserves_v7_rows_and_reopens_without_creating_definitions() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("v7-pinned.sqlite");
+        let (conn, connection_id, model_id) = v7_database(&path);
+        drop(conn);
+        for _ in 0..2 {
+            let database = Database::open(&path).unwrap();
+            assert_eq!(
+                database
+                    .0
+                    .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                    .unwrap(),
+                SCHEMA_VERSION
+            );
+            assert_eq!(database.pinned_filters().unwrap().revision, 0);
+            assert_eq!(
+                database
+                    .0
+                    .query_row("SELECT count(*) FROM pinned_filter_library", [], |row| row
+                        .get::<_, i64>(
+                        0
+                    ))
+                    .unwrap(),
+                0
+            );
+            assert_eq!(database.data_views().unwrap().revision, 5);
+            assert_eq!(
+                database.workspace_recovery_row().unwrap().unwrap().revision,
+                7
+            );
+            assert_eq!(
+                database.saved_queries_json().unwrap().as_deref(),
+                Some(SAVED_QUERY_DOCUMENT)
+            );
+            assert_eq!(
+                database.connection_summaries().unwrap()[0].profile.id,
+                connection_id
+            );
+            assert_eq!(database.models().unwrap().profiles[0].id, model_id);
+            assert_eq!(database.preferences().unwrap().mode, "dark");
+            assert_eq!(database.pending_credential_cleanup_count().unwrap(), 1);
+        }
+    }
+
+    #[test]
+    fn failed_pinned_filters_migration_keeps_version_seven_and_existing_documents() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("v7-conflict.sqlite");
+        let (conn, connection_id, model_id) = v7_database(&path);
+        conn.execute_batch("CREATE TABLE pinned_filter_library(bogus TEXT)")
+            .unwrap();
+        drop(conn);
+        assert!(Database::open(&path).is_err());
+        let conn = Connection::open(&path).unwrap();
+        assert_eq!(
+            conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            7
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT name FROM pragma_table_info('pinned_filter_library')",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+            "bogus"
+        );
+        assert_eq!(
+            conn.query_row("SELECT revision FROM data_view_library", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            5
+        );
+        assert_eq!(
+            conn.query_row("SELECT revision FROM workspace_recovery", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            7
+        );
+        assert_eq!(
+            conn.query_row("SELECT json FROM saved_query_library", [], |row| row
+                .get::<_, String>(0))
+                .unwrap(),
+            SAVED_QUERY_DOCUMENT
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM connections WHERE id=?1",
+                [&connection_id],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT count(*) FROM model_profiles WHERE id=?1",
+                [&model_id],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn pinned_filters_read_failure_is_not_an_empty_library() {
+        let conn = Connection::open_in_memory().unwrap();
+        assert_eq!(
+            read_pinned_filters(&conn).unwrap_err().code,
+            "storageUnavailable"
+        );
+        conn.execute_batch(
+            "CREATE TABLE pinned_filter_library(singleton INTEGER, revision, json);
+            INSERT INTO pinned_filter_library VALUES(1,'invalid','{}')",
+        )
+        .unwrap();
+        assert_eq!(
+            read_pinned_filters(&conn).unwrap_err().code,
+            "invalidResponse"
+        );
     }
 
     #[test]

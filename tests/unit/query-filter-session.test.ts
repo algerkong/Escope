@@ -203,7 +203,7 @@ describe('explicit applied filter session bindings', () => {
     expect(freezeTimeRange(inactive.applied, new Date('2026-10-10T02:00:00.000Z')).ok).toBe(true);
     expect(later.rawDsl).toContain('"n": 9007199254740995');
     expect(binding.applied.parameters).toEqual(source.parameters);
-    expect(binding.snapshot.rawDsl).not.toBe(later.rawDsl);
+    expect(binding.snapshot?.rawDsl).not.toBe(later.rawDsl);
     const changedTime = patchDocument(binding.applied, { timeRange: null });
     expect(matchesQueryFilterBinding(binding, changedTime, endpoint)).toBe(false);
   });
@@ -234,7 +234,7 @@ describe('explicit applied filter session bindings', () => {
     if (!binding) throw new Error('binding');
     expect(binding.baseline.id).toBe(source.id);
     expect(binding.applied.id).toBe('new-query');
-    expect(binding.snapshot.queryId).toBe(source.id);
+    expect(binding.snapshot?.queryId).toBe(source.id);
     expect(queryFilterEvidenceSource(edit(binding))).toBe(binding.baseline);
     expect(previewQueryFilterDraft(disabled(edit(binding))).ok).toBe(true);
     const nextSnapshot = createSnapshot(applied, 'new-query-run', at);
@@ -266,10 +266,10 @@ describe('explicit applied filter session bindings', () => {
     const binding = commit(first);
     const snapshot = createSnapshot(binding.applied, 'newer', at);
     const updated = commit({ ...edit(binding), snapshot, filters: [status, { ...n, evidence: 'runtime', origin: 'fields' }] });
-    expect(updated.snapshot.requestId).toBe('newer');
+    expect(updated.snapshot?.requestId).toBe('newer');
     expect(previewQueryFilterDraft(edit(updated), catalog).ok).toBe(true);
-    expect(binding.snapshot.requestId).toBe('old');
-    expect(binding.snapshot.rawDsl).toContain('emit(1)');
+    expect(binding.snapshot?.requestId).toBe('old');
+    expect(binding.snapshot?.rawDsl).toContain('emit(1)');
   });
 
   it.each([null, [], {}, { mode: 'all', groups: [], unknown: true }])('rejects malformed empty-removal composition without throwing: %j', (composition) => {

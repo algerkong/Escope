@@ -4,6 +4,7 @@ import { isValidPitId } from '../domain/query-result';
 export type ErrorCode = 'invalidInput' | 'invalidName' | 'invalidEndpoint' | 'invalidEnvironment'
   | 'invalidIndex' | 'invalidQuery' | 'invalidRuntimeFields' | 'duplicateRequest' | 'diagnosticsStale'
   | 'storageUnavailable' | 'workspaceConflict' | 'libraryConflict' | 'dataViewConflict' | 'dataViewConnectionMissing'
+  | 'pinnedFilterConflict' | 'pinnedFilterConnectionMissing'
   | 'exchangeInvalid' | 'exchangeVersion' | 'exchangeTooLarge' | 'exchangeSensitive'
   | 'exchangeMappingRequired' | 'exchangeTargetChanged' | 'importFailed'
   | 'notFound' | 'unsupported' | 'permissionDenied' | 'serverForbidden' | 'cancelled'

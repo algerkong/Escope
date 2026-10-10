@@ -5,10 +5,12 @@ import { expect, vi } from 'vitest';
 import { App } from '../../src/app/App';
 import { createWorkspace } from '../../src/domain/query';
 import { selectDataView } from '../../src/domain/data-views';
+import type { PinnedFilterDefinition } from '../../src/domain/pinned-filters';
 import { previewTimeRange } from '../../src/domain/query-time-range';
 import { recoveryWorkspace } from '../../src/domain/workspace-recovery';
 import { i18n } from '../../src/locales';
 import { createSessionDataViewService } from '../../src/services/data-views';
+import { createSessionPinnedFilterService } from '../../src/services/pinned-filters';
 import type { QueryBackend, QueryRequest, ResourceRequest, PitOpenRequest } from '../../src/services/ipc';
 import { createSessionQueryLibraryService } from '../../src/services/query-library';
 import { createSessionStorage } from '../../src/services/storage';
@@ -44,6 +46,7 @@ export async function fixture(timed = false, runtime = false, paged = false, par
   const recovery = { ...createSessionWorkspaceRecoveryService(), kind: 'desktop' as const };
   await recovery.save(0, { version: 1, workspace: recoveryWorkspace(workspace), history: [] });
   const library = createSessionQueryLibraryService();
+  const pinned = createSessionPinnedFilterService();
   const initial = await storage.load();
   initial.preferences.locale = 'en-US';
   const endpoint = (id: string) => id === a.id ? a.endpoint : b.endpoint;
@@ -69,14 +72,22 @@ export async function fixture(timed = false, runtime = false, paged = false, par
     closePit: vi.fn(async () => {}),
   } satisfies QueryBackend;
   const mount = () => render(<I18nextProvider i18n={i18n}><App service={{ ...storage, kind: 'desktop' }} initial={initial}
-    queryBackend={backend} workspaceRecoveryService={recovery} queryLibraryService={library} dataViewService={dataViews} /></I18nextProvider>);
+    queryBackend={backend} workspaceRecoveryService={recovery} queryLibraryService={library} dataViewService={dataViews}
+    pinnedFilterService={pinned} /></I18nextProvider>);
   const saved = () => waitFor(() => expect(screen.getByText('Workspace saved')).toBeVisible());
   const clickCell = (text: string, field: string) =>
     fireEvent.click(within(screen.getByText(text).closest('td')!).getByRole('button', { name: `Filter ${field}` }));
-  return { a, b, query, backend, recovery, library, mount, saved, clickCell, user: userEvent.setup() };
+  return { a, b, query, backend, recovery, library, pinned, mount, saved, clickCell, user: userEvent.setup() };
 }
 
 export const add = () => fireEvent.click(screen.getByRole('button', { name: 'Add to pending filters' }));
+export function savedFilterSet(connectionId: string): PinnedFilterDefinition {
+  return { id: 'saved', name: 'Saved set', connectionId, index: 'events',
+    filters: [
+      { id: 'n', field: 'n', fieldType: 'long', operation: 'include', value: '9007199254740993', enabled: true },
+      { id: 'status', field: 'status', fieldType: 'keyword', operation: 'exclude', value: '"other"', enabled: false },
+    ], composition: { mode: 'any', groups: [{ id: 'g', mode: 'any', filterIds: ['n', 'status'] }] } };
+}
 export const preview = () => fireEvent.click(screen.getByRole('button', { name: 'Preview filtered DSL' }));
 export const apply = () => fireEvent.click(screen.getByRole('button', { name: 'Apply filters to draft' }));
 export async function inspect() {

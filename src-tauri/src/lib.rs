@@ -13,6 +13,7 @@ pub mod model_credentials;
 mod model_discovery;
 mod models;
 mod operation;
+mod pinned_filters;
 mod query;
 mod query_exchange;
 mod query_export;
@@ -381,6 +382,8 @@ pub fn run() {
             workspace_recovery::workspace_recovery_save,
             data_views::data_views_load,
             data_views::data_views_save,
+            pinned_filters::pinned_filters_load,
+            pinned_filters::pinned_filters_save,
             ai::ai_chat,
             ai::ai_chat_cancel,
             models::models_load,

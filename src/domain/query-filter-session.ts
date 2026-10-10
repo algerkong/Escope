@@ -47,15 +47,11 @@ export function hasPendingQueryFilters(draft: QueryFilterDraft | undefined): boo
 /** Index-to-query creation retains its actual observation identity, not a fabricated query execution. */
 export function queryFilterEvidenceSource(draft: QueryFilterDraft): QueryDocument {
   const binding = draft.binding;
-  return binding && matchesQueryFilterBinding(binding, draft.source, draft.endpoint)
+  return binding && draft.snapshot && binding.snapshot && matchesQueryFilterBinding(binding, draft.source, draft.endpoint)
     && draft.snapshot.queryId !== draft.source.id && draft.snapshot.queryId === binding.baseline.id
     && draft.snapshot.requestId === binding.snapshot.requestId && draft.snapshot.rawDsl === binding.snapshot.rawDsl
     && draft.snapshot.connectionId === binding.snapshot.connectionId && draft.snapshot.index === binding.snapshot.index
     ? binding.baseline : draft.source;
-}
-
-function filterObservation(draft: QueryFilterDraft) {
-  return draft.binding && draft.snapshot.queryId !== draft.binding.baseline.id ? draft.binding.snapshot : draft.snapshot;
 }
 
 /** Rebuild from the exact baseline, never append another wrapper to an already applied document. */
@@ -63,9 +59,9 @@ export function previewQueryFilterDraft(draft: QueryFilterDraft, catalog?: Field
   const binding = draft.binding;
   if (binding && !matchesQueryFilterBinding(binding, draft.source, draft.endpoint)) return { ok: false, code: 'filterBindingChanged' };
   const baseline = binding?.baseline ?? draft.source;
-  const snapshot = filterObservation(draft);
-  if (draft.snapshot.connectionId !== draft.source.connectionId || draft.snapshot.index !== draft.source.index
-    || draft.snapshot.queryId !== draft.source.id && queryFilterEvidenceSource(draft) === draft.source) {
+  const snapshot = draft.snapshot;
+  if (draft.snapshot && (draft.snapshot.connectionId !== draft.source.connectionId || draft.snapshot.index !== draft.source.index
+    || draft.snapshot.queryId !== draft.source.id && queryFilterEvidenceSource(draft) === draft.source)) {
     return { ok: false, code: 'targetChanged' };
   }
   let result: QueryFilterPreview;
@@ -81,7 +77,10 @@ export function previewQueryFilterDraft(draft: QueryFilterDraft, catalog?: Field
     result = { ok: true, dsl: baseline.dsl, patch: { dsl: baseline.dsl,
       ...(baseline.timeRange ? { timeRange: copyQueryTimeRange(baseline.timeRange) } : {}) } };
   } else {
-    result = previewQueryFilters(baseline, snapshot, draft.filters, catalog, draft.composition, mapping);
+    // A locally checked index-to-query binding may now have a real observation from its new query.
+    // Compile the original body with that observation's identity; never relabel the observation.
+    const evidenceBaseline = snapshot && binding ? { ...baseline, id: snapshot.queryId } : baseline;
+    result = previewQueryFilters(evidenceBaseline, snapshot, draft.filters, catalog, draft.composition, mapping);
   }
   if (!result.ok || result.dsl === baseline.dsl) return result;
   const formatted = formatQueryDsl(result.dsl);
@@ -102,7 +101,7 @@ export function bindAppliedQueryFilters(draft: QueryFilterDraft, applied: QueryD
     || JSON.stringify(applied.dataView) !== JSON.stringify(draft.source.dataView)) return null;
   const binding: QueryFilterBinding = freezeCopy({
     baseline: draft.binding?.baseline ?? draft.source,
-    applied, snapshot: filterObservation(draft), endpoint: draft.endpoint,
+    applied, snapshot: draft.snapshot, endpoint: draft.endpoint,
     filters: draft.filters, ...(draft.composition === undefined ? {} : { composition: draft.composition }),
   });
   bindings.add(binding);

@@ -36,7 +36,7 @@ export interface QueryFilter {
   readonly operation: QueryFilterOperation;
   /** A complete original scalar JSON token, not display text or a parsed JS number. */
   readonly value: string | null;
-  readonly origin: FilterValueOrigin | 'input';
+  readonly origin: FilterValueOrigin | 'input' | 'saved';
   /** Explicit Mapping-proven scope, never inferred from a cell's object or array shape. */
   readonly nestedPath?: string;
   /** Omitted means enabled. Disabled definitions retain their membership and still count toward limits. */
@@ -62,16 +62,16 @@ export interface QueryFilterComposition {
 export interface QueryFilterBinding {
   readonly baseline: QueryDocument;
   readonly applied: QueryDocument;
-  readonly snapshot: ExecutionSnapshot;
+  readonly snapshot: ExecutionSnapshot | null;
   readonly endpoint: string;
   readonly filters: readonly QueryFilter[];
   readonly composition?: QueryFilterComposition;
 }
 
-/** Definitions and bindings are session-only. Only the applied DSL uses draft persistence. */
+/** Session draft; saved literals have no fabricated execution observation. */
 export interface QueryFilterDraft {
   readonly source: QueryDocument;
-  readonly snapshot: ExecutionSnapshot;
+  readonly snapshot: ExecutionSnapshot | null;
   readonly endpoint: string;
   readonly filters: readonly QueryFilter[];
   readonly composition?: QueryFilterComposition;
@@ -85,7 +85,8 @@ export type QueryFilterProblem = NestedMappingProblem
   | 'valueTypeMismatch' | 'valueOutOfRange' | 'valueUnsupported' | 'invalidValue'
   | 'emptyPhrase' | 'tooLarge' | 'tooMany' | 'empty' | 'duplicate'
   | 'invalidDsl' | 'unsupportedDsl' | 'invalidBinding' | 'targetChanged'
-  | 'invalidComposition' | 'tooManyGroups' | 'nestedGroupMismatch' | 'invalidFilterState' | 'filterBindingChanged';
+  | 'invalidComposition' | 'tooManyGroups' | 'nestedGroupMismatch' | 'invalidFilterState' | 'filterBindingChanged'
+  | 'savedFilterUnsupported';
 
 type Failure = { readonly ok: false; readonly code: QueryFilterProblem };
 type Family = 'keyword' | 'text' | 'number' | 'boolean' | 'existence';
@@ -133,13 +134,13 @@ function runtimeField(root: Node, field: string) {
   return mappings ? parseRuntimeMappings(getNodeValue(mappings))?.find((entry) => entry.field === field) : undefined;
 }
 
-function filterRoots(source: Pick<QueryDocument, 'id' | 'connectionId' | 'index' | 'dsl'>, snapshot: ExecutionSnapshot):
+function filterRoots(source: Pick<QueryDocument, 'id' | 'connectionId' | 'index' | 'dsl'>, snapshot: ExecutionSnapshot | null):
   Failure | { readonly ok: true; readonly executed: Node; readonly current: Node } {
-  if (source.id !== snapshot.queryId || source.connectionId !== snapshot.connectionId || source.index !== snapshot.index) {
+  if (snapshot && (source.id !== snapshot.queryId || source.connectionId !== snapshot.connectionId || source.index !== snapshot.index)) {
     return { ok: false, code: 'targetChanged' };
   }
-  const executed = readBody(snapshot.rawDsl);
   const current = readBody(source.dsl);
+  const executed = snapshot ? readBody(snapshot.rawDsl) : current;
   return executed && current ? { ok: true, executed, current } : { ok: false, code: 'invalidDsl' };
 }
 
@@ -294,13 +295,14 @@ export function filterGroupAccepts(group: QueryFilterGroup, filter: Pick<QueryFi
   return group.nested?.path === filter.nestedPath;
 }
 
-function inactiveFilterProblem(filter: QueryFilter): QueryFilterProblem | null {
+export function queryFilterDefinitionProblem(filter: QueryFilter): QueryFilterProblem | null {
   if (!validTimeRangeField(filter.field)) return 'invalidField';
   if (filter.nestedPath === undefined ? filter.field.includes('.')
     : !validNestedFilterSegment(filter.nestedPath) || !filter.field.startsWith(`${filter.nestedPath}.`)
       || !validNestedFilterSegment(filter.field.slice(filter.nestedPath.length + 1))) return 'fieldPath';
   if (filter.evidence !== 'mapped' && filter.evidence !== 'runtime'
-    || filter.origin !== 'source' && filter.origin !== 'fields' && filter.origin !== 'input') return 'invalidValue';
+    || filter.origin !== 'source' && filter.origin !== 'fields' && filter.origin !== 'input' && filter.origin !== 'saved') return 'invalidValue';
+  if (filter.origin === 'saved' && (filter.evidence !== 'mapped' || filter.nestedPath !== undefined)) return 'savedFilterUnsupported';
   const family = familyOf(filter.fieldType);
   if (!family) return 'fieldUnsupported';
   const presence = filter.operation === 'exists' || filter.operation === 'missing';
@@ -316,7 +318,7 @@ function clauseText(filter: QueryFilter, field: Extract<FilterFieldEvidence, { o
   return `{${JSON.stringify(kind)}:{${JSON.stringify(filter.field)}:${filter.value}}}`;
 }
 
-function compositionProblem(input: QueryFilterComposition, filters: readonly QueryFilter[]): QueryFilterProblem | null {
+export function queryFilterCompositionProblem(input: QueryFilterComposition, filters: readonly QueryFilter[]): QueryFilterProblem | null {
   const record = (value: unknown, keys: readonly string[], optional: readonly string[] = []): value is Record<string, unknown> => value !== null
     && typeof value === 'object' && !Array.isArray(value) && keys.every((key) => Object.hasOwn(value, key))
     && Object.keys(value).every((key) => keys.includes(key) || optional.includes(key));
@@ -389,7 +391,7 @@ function composeClauses(clauses: ReadonlyMap<string, FilterClause>, composition?
 }
 
 /** Append reviewed filter groups without altering the original bool/MSM/scoring context. */
-export function previewQueryFilters(source: QueryDocument, snapshot: ExecutionSnapshot, filters: readonly QueryFilter[],
+export function previewQueryFilters(source: QueryDocument, snapshot: ExecutionSnapshot | null, filters: readonly QueryFilter[],
   catalog?: FieldCatalog, composition?: QueryFilterComposition, mapping?: NestedFilterMappingResult): QueryFilterPreview {
   if (!filters.length) return { ok: false, code: 'empty' };
   if (filters.length > MAX_QUERY_FILTERS) return { ok: false, code: 'tooMany' };
@@ -403,6 +405,10 @@ export function previewQueryFilters(source: QueryDocument, snapshot: ExecutionSn
   const filterIds = new Set<string>();
   for (let index = 0; index < filters.length; index += 1) {
     const filter = filters[index]!;
+    if (!snapshot && filter.origin !== 'saved') return { ok: false, code: 'targetChanged' };
+    if (filter.origin === 'saved' && (filter.evidence !== 'mapped' || filter.nestedPath !== undefined)) {
+      return { ok: false, code: 'savedFilterUnsupported' };
+    }
     if (Object.hasOwn(filter, 'enabled') && typeof filter.enabled !== 'boolean') return { ok: false, code: 'invalidFilterState' };
     if (filterIds.has(filter.id) || filter.nestedPath === undefined && queryFilterDuplicate(filters.slice(0, index), filter)) {
       return { ok: false, code: 'duplicate' };
@@ -411,11 +417,14 @@ export function previewQueryFilters(source: QueryDocument, snapshot: ExecutionSn
     if (filter.nestedPath !== undefined && (filter.origin !== 'input' || filter.evidence !== 'mapped')) return { ok: false, code: 'nestedGroupMismatch' };
     if (!queryFilterEnabled(filter)) {
       // Disabled leaves need no current field evidence, but are not a way to hide malformed definitions.
-      const problem = inactiveFilterProblem(filter);
+      const problem = queryFilterDefinitionProblem(filter);
       if (problem) return { ok: false, code: problem };
       continue;
     }
-    const field = filter.nestedPath === undefined ? fieldEvidence(roots.executed, root, filter.field, catalog)
+    // Saved values are literals, not values observed in the latest execution. Only current mapped
+    // evidence may validate them; a runtime declaration shadowing the field is never substituted.
+    if (filter.origin === 'saved' && runtimeField(root, filter.field)) return { ok: false, code: 'savedFilterUnsupported' };
+    const field = filter.nestedPath === undefined ? fieldEvidence(filter.origin === 'saved' ? root : roots.executed, root, filter.field, catalog)
       : nestedFieldEvidence(roots.executed, root, filter.nestedPath, filter.field, catalog, mapping);
     if (!field.ok) return field;
     if (field.fieldType !== filter.fieldType || field.evidence !== filter.evidence) return { ok: false, code: 'fieldChanged' };
@@ -431,7 +440,7 @@ export function previewQueryFilters(source: QueryDocument, snapshot: ExecutionSn
     clauses.set(filter.id, { text: clauseText(filter, field), negative: filter.operation === 'exclude' || filter.operation === 'missing' });
   }
   if (composition === undefined && filters.some((filter) => filter.nestedPath !== undefined)) return { ok: false, code: 'nestedGroupMismatch' };
-  const groupingProblem = composition === undefined ? null : compositionProblem(composition, filters);
+  const groupingProblem = composition === undefined ? null : queryFilterCompositionProblem(composition, filters);
   if (groupingProblem) return { ok: false, code: groupingProblem };
   const time = source.timeRange === undefined ? undefined
     : parseQueryTimeRange(source.timeRange, source.connectionId, source.index, source.dsl);

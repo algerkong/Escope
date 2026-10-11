@@ -4,11 +4,13 @@ import { Bar, LinePath } from '@visx/shape';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  chartAxisSlots, chartPositionDomain, chartValueDomain, type PlottedChart,
+  chartAxisSlots, chartPositionDomain, chartValueDomain, type ChartMarker, type PlottedChart,
 } from '../../../domain/query-aggregation-charts';
 
 const HEIGHT = 240;
 const MARGIN = Object.freeze({ top: 10, right: 14, bottom: 46, left: 62 });
+/** Room for a second value axis; only a dual chart pays it. */
+const RIGHT_MARGIN = 62;
 const SLOT_WIDTH = 26;
 const MARKER_STEP = 16;
 const MIN_INNER = 420;
@@ -18,6 +20,8 @@ const LABEL_LENGTH = 20;
 type BarChart = Extract<PlottedChart, { kind: 'bars' }>;
 type LineChart = Extract<PlottedChart, { kind: 'line' }>;
 export type PlottableChart = BarChart | LineChart;
+type Margin = { top: number; right: number; bottom: number; left: number };
+type Plotted = { label: string; raw: string; value: number; precise: boolean };
 
 /** Intrinsic geometry: the panel scrolls instead of shrinking text or dropping returned buckets. */
 function innerWidthFor(inner: number): number {
@@ -29,27 +33,33 @@ function truncate(label: string): string {
   return label.length > LABEL_LENGTH ? `${label.slice(0, LABEL_LENGTH - 1)}…` : label;
 }
 
-function Frame({ width, label, children }: { width: number; label: string; children: ReactNode }) {
+function Frame({ width, margin, label, children }: {
+  width: number; margin: Margin; label: string; children: ReactNode;
+}) {
   const { t } = useTranslation();
   return <div className="qac-canvas" role="region" aria-label={t('queryAggregationCharts:scrollRegion')} tabIndex={0}>
     <svg className="qac-svg" width={width} height={HEIGHT} viewBox={`0 0 ${width} ${HEIGHT}`} role="img" aria-label={label}>
-      <Group top={MARGIN.top} left={MARGIN.left}>{children}</Group>
+      <Group top={margin.top} left={margin.left}>{children}</Group>
     </svg>
   </div>;
 }
 
-function ValueAxis({ position, ticks, innerWidth, innerHeight, label }: {
-  position: (value: number) => number; ticks: readonly number[]; innerWidth: number; innerHeight: number; label: string;
+function ValueAxis({ position, ticks, innerWidth, innerHeight, margin, label, side = 'left', grid = true }: {
+  position: (value: number) => number; ticks: readonly number[]; innerWidth: number; innerHeight: number;
+  margin: Margin; label: string; side?: 'left' | 'right'; grid?: boolean;
 }) {
-  return <g aria-hidden="true">
+  const right = side === 'right';
+  return <g className="qac-axis" data-axis={side} aria-hidden="true">
     {ticks.map((tick) => <g key={tick} transform={`translate(0 ${position(tick)})`}>
-      <line className="qac-grid" x2={innerWidth} />
-      <text className="qac-tick" x={-8} dy="0.32em" textAnchor="end">{String(tick)}</text>
+      {grid ? <line className="qac-grid" x2={innerWidth} /> : null}
+      <text className={`qac-tick${right ? ' qac-tick-right' : ''}`} x={right ? innerWidth + 8 : -8} dy="0.32em"
+        textAnchor={right ? 'start' : 'end'}>{String(tick)}</text>
     </g>)}
-    <line className="qac-baseline" x2={innerWidth} y1={innerHeight} y2={innerHeight} />
-    <line className="qac-baseline" x1={0} x2={0} y2={innerHeight} />
+    {grid ? <line className="qac-baseline" x2={innerWidth} y1={innerHeight} y2={innerHeight} /> : null}
+    <line className="qac-baseline" x1={right ? innerWidth : 0} x2={right ? innerWidth : 0} y2={innerHeight} />
     <text className="qac-axis-title" textAnchor="middle"
-      transform={`translate(${-MARGIN.left + 14} ${innerHeight / 2}) rotate(-90)`}>{label}</text>
+      transform={right ? `translate(${innerWidth + RIGHT_MARGIN - 10} ${innerHeight / 2}) rotate(90)`
+        : `translate(${-margin.left + 14} ${innerHeight / 2}) rotate(-90)`}>{label}</text>
   </g>;
 }
 
@@ -63,11 +73,11 @@ function BarChartView({ chart, label }: { chart: BarChart; label: string }) {
     domain: chart.slotLabels.map((_, slot) => slot), range: [0, innerWidth], padding: 0.25,
   });
   const zero = y(0);
-  const tooltip = (item: { label: string; raw: string; value: number; precise: boolean }) =>
+  const tooltip = (item: Plotted) =>
     `${item.label}: ${item.precise ? item.raw : t('queryAggregationCharts:plottedAs', { raw: item.raw, value: item.value })}`;
-  return <Frame width={innerWidth + MARGIN.left + MARGIN.right} label={label}>
+  return <Frame width={innerWidth + MARGIN.left + MARGIN.right} margin={MARGIN} label={label}>
     <ValueAxis position={(value) => y(value)} ticks={y.ticks(5)} innerWidth={innerWidth} innerHeight={innerHeight}
-      label={t('queryAggregationCharts:axisValue')} />
+      margin={MARGIN} label={t('queryAggregationCharts:axisValue')} />
     {chart.bars.map((bar) => <Bar key={bar.row} className="qac-bar" data-row={bar.row} data-precise={bar.precise}
       x={x(bar.slot) ?? 0} y={Math.min(zero, y(bar.value))} width={x.bandwidth()}
       height={Math.abs(zero - y(bar.value))}>
@@ -83,26 +93,57 @@ function BarChartView({ chart, label }: { chart: BarChart; label: string }) {
   </Frame>;
 }
 
-function LineChartView({ chart, label }: { chart: LineChart; label: string }) {
+function SecondarySeries({ series, extent, x, innerWidth, innerHeight, margin, measure }: {
+  series: readonly (readonly ChartMarker[])[];
+  extent: { min: number; max: number }; x: (value: number) => number;
+  innerWidth: number; innerHeight: number; margin: Margin; measure: string;
+}) {
+  const { t } = useTranslation();
+  const domain = chartValueDomain(extent);
+  const y = scaleLinear<number>({ domain: [domain.min, domain.max], range: [innerHeight, 0] });
+  const markers = series.flat();
+  return <>
+    <ValueAxis side="right" grid={false} position={(value) => y(value)} ticks={y.ticks(5)}
+      innerWidth={innerWidth} innerHeight={innerHeight} margin={margin}
+      label={t('queryAggregationCharts:axisValueRight', { measure: truncate(measure) })} />
+    <g className="qac-series-secondary">
+      {series.map((segment) => <LinePath key={`s${segment[0]!.row}`} className="qac-line" data={[...segment]}
+        x={(marker) => x(marker.position)} y={(marker) => y(marker.value)} />)}
+      {markers.map((marker) => <circle key={marker.row} className="qac-marker" data-row={marker.row}
+        data-precise={marker.precise} cx={x(marker.position)} cy={y(marker.value)} r={3}>
+        <title>{`${measure} ${marker.label}: ${marker.precise
+          ? marker.raw : t('queryAggregationCharts:plottedAs', { raw: marker.raw, value: marker.value })}`}</title>
+      </circle>)}
+    </g>
+  </>;
+}
+
+function LineChartView({ chart, label, axes }: { chart: LineChart; label: string; axes: Record<'left' | 'right', string> }) {
   const { t } = useTranslation();
   const innerHeight = HEIGHT - MARGIN.top - MARGIN.bottom;
+  const secondary = chart.secondary;
+  const margin: Margin = { ...MARGIN, right: secondary === null ? MARGIN.right : RIGHT_MARGIN };
   const markers = chart.series.flat();
   const innerWidth = innerWidthFor(markers.length * MARKER_STEP);
   const valueDomain = chartValueDomain(chart.valueExtent);
   const positionDomain = chartPositionDomain(chart.positionExtent);
   const y = scaleLinear<number>({ domain: [valueDomain.min, valueDomain.max], range: [innerHeight, 0] });
   const x = scaleLinear<number>({ domain: [positionDomain.min, positionDomain.max], range: [0, innerWidth] });
-  const tooltip = (item: { label: string; raw: string; value: number; precise: boolean }) =>
+  const tooltip = (item: Plotted) =>
     `${item.label}: ${item.precise ? item.raw : t('queryAggregationCharts:plottedAs', { raw: item.raw, value: item.value })}`;
-  return <Frame width={innerWidth + MARGIN.left + MARGIN.right} label={label}>
+  return <Frame width={innerWidth + margin.left + margin.right} margin={margin} label={label}>
     <ValueAxis position={(value) => y(value)} ticks={y.ticks(5)} innerWidth={innerWidth} innerHeight={innerHeight}
-      label={t('queryAggregationCharts:axisValue')} />
+      margin={margin}
+      label={secondary === null ? t('queryAggregationCharts:axisValue')
+        : t('queryAggregationCharts:axisValueLeft', { measure: truncate(axes.left) })} />
     {chart.series.map((segment) => <LinePath key={segment[0]!.row} className="qac-line" data={[...segment]}
       x={(marker) => x(marker.position)} y={(marker) => y(marker.value)} />)}
     {markers.map((marker) => <circle key={marker.row} className="qac-marker" data-row={marker.row}
       data-precise={marker.precise} cx={x(marker.position)} cy={y(marker.value)} r={3}>
       <title>{tooltip(marker)}</title>
     </circle>)}
+    {secondary ? <SecondarySeries series={secondary.series} extent={secondary.valueExtent} x={(value) => x(value)}
+      innerWidth={innerWidth} innerHeight={innerHeight} margin={margin} measure={axes.right} /> : null}
     <g aria-hidden="true">
       {chartAxisSlots(markers.length).map((index) => {
         const marker = markers[index]!;
@@ -117,6 +158,9 @@ function LineChartView({ chart, label }: { chart: LineChart; label: string }) {
 }
 
 /** Drawn only from an already bounded plot model; nothing here reads JSON, combines pages or queries. */
-export function AggregationChartCanvas({ chart, label }: { chart: PlottableChart; label: string }) {
-  return chart.kind === 'bars' ? <BarChartView chart={chart} label={label} /> : <LineChartView chart={chart} label={label} />;
+export function AggregationChartCanvas({ chart, label, axes }: {
+  chart: PlottableChart; label: string; axes: Record<'left' | 'right', string>;
+}) {
+  return chart.kind === 'bars' ? <BarChartView chart={chart} label={label} />
+    : <LineChartView chart={chart} label={label} axes={axes} />;
 }

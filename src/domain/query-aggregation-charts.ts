@@ -60,6 +60,20 @@ export interface ChartMarker extends ChartValue {
   readonly position: number;
 }
 
+/**
+ * One measure plotted over the same already verified received-page entry. Its extent, unplotted
+ * list, notices and precision accounting stay separate from any other measure of the chart.
+ */
+export interface ChartMeasureSeries {
+  readonly measure: ChartMeasure;
+  readonly valueExtent: { readonly min: number; readonly max: number };
+  readonly series: readonly (readonly ChartMarker[])[];
+  readonly skipped: readonly ChartSkipped[];
+  readonly notices: readonly ChartNotice[];
+  readonly impreciseCount: number;
+  readonly plotted: number;
+}
+
 interface ChartBase {
   readonly aggregation: string;
   readonly aggregationType: string;
@@ -88,13 +102,18 @@ export type PlottedChart =
     readonly positionExtent: { readonly min: number; readonly max: number };
     /** Consecutive returned rows; a skipped bucket splits the line instead of dropping to zero. */
     readonly series: readonly (readonly ChartMarker[])[];
+    /** A second measure of the same entry drawn on its own axis, or null when only one is plotted. */
+    readonly secondary: ChartMeasureSeries | null;
   });
 
 export type AggregationChartResult =
-  | { readonly ok: false; readonly code: 'unplottable' | 'unknownMeasure' }
   | {
     readonly ok: false;
-    readonly code: 'noBuckets' | 'tooManyBuckets' | 'noPlottableValues';
+    readonly code: 'unplottable' | 'unknownMeasure' | 'unknownSecondary' | 'secondarySame' | 'secondaryUnsupported';
+  }
+  | {
+    readonly ok: false;
+    readonly code: 'noBuckets' | 'tooManyBuckets' | 'noPlottableValues' | 'secondaryNoValues';
     readonly buckets: number;
     readonly skipped: readonly ChartSkipped[];
   }
@@ -201,8 +220,10 @@ export function chartPositionDomain(extent: { min: number; max: number }): { min
 function singleValueChart(
   entry: Extract<AggregationResult, { status: 'metric' }>,
   measure: string | null,
+  secondary: string | null,
 ): AggregationChartResult {
   if (measure !== null && measure !== entry.name) return { ok: false, code: 'unknownMeasure' };
+  if (secondary !== null) return { ok: false, code: 'secondaryUnsupported' };
   const converted = convert(entry.metric.value);
   if (typeof converted === 'string') {
     return {
@@ -225,87 +246,166 @@ function singleValueChart(
   };
 }
 
+type BucketEntry = Extract<AggregationResult, { status: 'buckets' }>;
+type SeriesPlot<Item> = { readonly items: readonly Item[]; readonly skipped: ChartSkipped[]; readonly imprecise: number };
+
+function measureSource(bucket: AggregationBucket, measure: ChartMeasure): AggregationValue {
+  return measure.type === DOC_COUNT_MEASURE ? bucket.docCount
+    : bucket.metrics.find((item) => item.name === measure.name)?.value ?? MISSING;
+}
+
+function readValue(bucket: AggregationBucket, measure: ChartMeasure): Conversion {
+  return measure.type === DOC_COUNT_MEASURE
+    ? convertCount(measureSource(bucket, measure)) : convert(measureSource(bucket, measure));
+}
+
+function extentOf(values: readonly ChartValue[]): { readonly min: number; readonly max: number } {
+  const list = values.map(({ value }) => value);
+  return { min: Math.min(...list), max: Math.max(...list) };
+}
+
+function measureNotices(measure: ChartMeasure, imprecise: number): ChartNotice[] {
+  const notices: ChartNotice[] = [];
+  if (measure.type === 'cardinality') notices.push('approximate');
+  if (measure.type === 'value_count') notices.push('valueCount');
+  if (imprecise > 0) notices.push('imprecise');
+  return notices;
+}
+
+function plotBase(entry: BucketEntry, measure: ChartMeasure, plot: SeriesPlot<ChartBar | ChartMarker>,
+  notices: readonly ChartNotice[]) {
+  return {
+    aggregation: entry.name, aggregationType: entry.type, measure, valueExtent: extentOf(plot.items),
+    skipped: plot.skipped, notices, impreciseCount: plot.imprecise, buckets: entry.buckets.length,
+    plotted: plot.items.length,
+  };
+}
+
+/** Terms keep the returned slot of every bucket, including one whose value could not be plotted. */
+function plotTerms(measure: ChartMeasure, buckets: readonly AggregationBucket[]): SeriesPlot<ChartBar> {
+  const bars: ChartBar[] = [];
+  const skipped: ChartSkipped[] = [];
+  let imprecise = 0;
+  buckets.forEach((bucket, index) => {
+    const row = index + 1;
+    const label = bucketLabel(bucket);
+    const value = readValue(bucket, measure);
+    if (typeof value === 'string') {
+      skipped.push({ row, label, field: 'value', raw: measureSource(bucket, measure).raw, reason: value });
+      return;
+    }
+    if (!value.precise) imprecise += 1;
+    bars.push({ slot: index, row, label, ...value });
+  });
+  return { items: bars, skipped, imprecise };
+}
+
+/** A line breaks where its own value or the shared bucket key could not be read; a gap is never zero. */
+function plotHistogram(measure: ChartMeasure, buckets: readonly AggregationBucket[],
+  keys: readonly Conversion[],
+): SeriesPlot<ChartMarker> {
+  const markers: ChartMarker[] = [];
+  const skipped: ChartSkipped[] = [];
+  let imprecise = 0;
+  buckets.forEach((bucket, index) => {
+    const row = index + 1;
+    const label = bucketLabel(bucket);
+    const value = readValue(bucket, measure);
+    if (typeof value === 'string') {
+      skipped.push({ row, label, field: 'value', raw: measureSource(bucket, measure).raw, reason: value });
+      return;
+    }
+    const key = keys[index]!;
+    if (typeof key === 'string') {
+      skipped.push({ row, label, field: 'key', raw: bucket.key.raw, reason: key });
+      return;
+    }
+    if (!value.precise) imprecise += 1;
+    markers.push({ row, label, position: key.value, ...value });
+  });
+  return { items: markers, skipped, imprecise };
+}
+
+function toSegments(markers: readonly ChartMarker[]): ChartMarker[][] {
+  const segments: ChartMarker[][] = [];
+  for (const marker of markers) {
+    const previous = segments[segments.length - 1];
+    if (previous && marker.row === previous[previous.length - 1]!.row + 1) previous.push(marker);
+    else segments.push([marker]);
+  }
+  return segments;
+}
+
 /**
  * Build bounded plot data for one entry of one received page. Types come from the executed
  * definition already resolved by the aggregation reader, never from the response shape, and the
  * result never combines pages, adds missing buckets or reorders buckets into another semantics.
+ * A second measure only adds another series over the very same entry, kept fully separate.
  */
-export function buildAggregationChart(entry: AggregationResult, measure: string | null): AggregationChartResult {
-  if (entry.status === 'metric') return singleValueChart(entry, measure);
+export function buildAggregationChart(
+  entry: AggregationResult, measure: string | null, secondary: string | null = null,
+): AggregationChartResult {
+  if (entry.status === 'metric') return singleValueChart(entry, measure, secondary);
   if (entry.status !== 'buckets') return { ok: false, code: 'unplottable' };
   if (entry.buckets.length > CHART_LIMITS.buckets) {
     return { ok: false, code: 'tooManyBuckets', buckets: entry.buckets.length, skipped: [] };
   }
   if (entry.buckets.length === 0) return { ok: false, code: 'noBuckets', buckets: 0, skipped: [] };
-  const selected = chartMeasures(entry).find((item) => item.name === (measure ?? DOC_COUNT_MEASURE));
+  const all = chartMeasures(entry);
+  const selected = all.find((item) => item.name === (measure ?? DOC_COUNT_MEASURE));
   if (!selected) return { ok: false, code: 'unknownMeasure' };
-  const counts = selected.type === DOC_COUNT_MEASURE;
-  const histogram = entry.type === 'date_histogram';
-  const skipped: ChartSkipped[] = [];
-  const slotLabels: string[] = [];
-  const bars: ChartBar[] = [];
-  const markers: ChartMarker[] = [];
-  const positions: number[] = [];
-  let imprecise = 0;
-  entry.buckets.forEach((bucket, index) => {
-    const row = index + 1;
-    const label = bucketLabel(bucket);
-    slotLabels.push(label);
-    const source = counts ? bucket.docCount : bucket.metrics.find((item) => item.name === selected.name)?.value ?? MISSING;
-    const value = counts ? convertCount(source) : convert(source);
-    const key = histogram ? convertPosition(bucket.key) : null;
-    if (key !== null && typeof key !== 'string') positions.push(key.value);
-    if (typeof value === 'string') {
-      skipped.push({ row, label, field: 'value', raw: source.raw, reason: value });
-      return;
-    }
-    if (key !== null && typeof key === 'string') {
-      skipped.push({ row, label, field: 'key', raw: bucket.key.raw, reason: key });
-      return;
-    }
-    if (!value.precise) imprecise += 1;
-    if (key === null) bars.push({ slot: index, row, label, ...value });
-    else markers.push({ row, label, position: key.value, ...value });
+  const second = secondary === null ? null : all.find((item) => item.name === secondary) ?? null;
+  if (secondary !== null && !second) return { ok: false, code: 'unknownSecondary' };
+  if (second && second.name === selected.name) return { ok: false, code: 'secondarySame' };
+  const refused = (skipped: readonly ChartSkipped[]): AggregationChartResult => ({
+    ok: false, code: 'noPlottableValues', buckets: entry.buckets.length, skipped,
   });
-  const plotted = bars.length + markers.length;
-  if (plotted === 0) {
-    return { ok: false, code: 'noPlottableValues', buckets: entry.buckets.length, skipped };
-  }
-  const values = histogram ? markers : bars;
-  const extent = {
-    min: Math.min(...values.map(({ value }) => value)),
-    max: Math.max(...values.map(({ value }) => value)),
-  };
-  const notices: ChartNotice[] = [];
-  if (selected.type === 'cardinality') notices.push('approximate');
-  if (selected.type === 'value_count') notices.push('valueCount');
-  if (imprecise > 0) notices.push('imprecise');
-  if (histogram) {
-    notices.push('bucketStarts');
-    if (skipped.length > 0) notices.push('sparseSeries');
-  } else {
+
+  if (entry.type === 'terms') {
+    if (second) return { ok: false, code: 'secondaryUnsupported' };
+    const bars = plotTerms(selected, entry.buckets);
+    if (bars.items.length === 0) return refused(bars.skipped);
+    const notices = measureNotices(selected, bars.imprecise);
     if (entry.docCountError.raw === '-1') notices.push('errorUnknown');
     else if (entry.docCountError.kind === 'missing') notices.push('errorNotReported');
     const other = entry.sumOtherDocCount.raw;
     if (other !== null && COUNT_TOKEN.test(other) && BigInt(other) > 0n) notices.push('omittedBuckets');
     notices.push('termsScope');
+    return {
+      ok: true,
+      chart: {
+        ...plotBase(entry, selected, bars, notices), kind: 'bars',
+        slots: entry.buckets.length, slotLabels: entry.buckets.map(bucketLabel), bars: bars.items,
+      },
+    };
   }
-  const base = {
-    aggregation: entry.name, aggregationType: entry.type, measure: selected, valueExtent: extent,
-    skipped, notices, impreciseCount: imprecise, buckets: entry.buckets.length, plotted,
-  };
-  if (!histogram) return { ok: true, chart: { ...base, kind: 'bars', slots: slotLabels.length, slotLabels, bars } };
-  const series: ChartMarker[][] = [];
-  for (const marker of markers) {
-    const previous = series[series.length - 1];
-    if (previous && marker.row === previous[previous.length - 1]!.row + 1) previous.push(marker);
-    else series.push([marker]);
+
+  const keys = entry.buckets.map((bucket) => convertPosition(bucket.key));
+  const positions = keys.flatMap((key) => (typeof key === 'string' ? [] : [key.value]));
+  const first = plotHistogram(selected, entry.buckets, keys);
+  if (first.items.length === 0) return refused(first.skipped);
+  const notices = measureNotices(selected, first.imprecise);
+  notices.push('bucketStarts');
+  if (first.skipped.length > 0) notices.push('sparseSeries');
+  let secondarySeries: ChartMeasureSeries | null = null;
+  if (second) {
+    const other = plotHistogram(second, entry.buckets, keys);
+    if (other.items.length === 0) {
+      return { ok: false, code: 'secondaryNoValues', buckets: entry.buckets.length, skipped: other.skipped };
+    }
+    const otherNotices = measureNotices(second, other.imprecise);
+    if (other.skipped.length > 0) otherNotices.push('sparseSeries');
+    secondarySeries = {
+      measure: second, valueExtent: extentOf(other.items), series: toSegments(other.items),
+      skipped: other.skipped, notices: otherNotices, impreciseCount: other.imprecise, plotted: other.items.length,
+    };
   }
   return {
     ok: true,
     chart: {
-      ...base, kind: 'line', series,
+      ...plotBase(entry, selected, first, notices), kind: 'line', series: toSegments(first.items),
       positionExtent: { min: Math.min(...positions), max: Math.max(...positions) },
+      secondary: secondarySeries,
     },
   };
 }

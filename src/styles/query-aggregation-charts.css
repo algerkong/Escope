@@ -5,6 +5,10 @@
 .qac-measure { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 0; color: var(--muted); }
 .qac-measure .select-control { width: 15rem; max-width: 100%; }
 .qac-measure select { min-height: 28px; font: inherit; }
+.qac-dual { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0; }
+.qac-dual .qac-measure { margin: 0; }
+.qac-dual-note { display: block; margin: 4px 0; color: var(--muted); overflow-wrap: anywhere; }
+.qac-notice-groups { min-width: 0; }
 .qac-notices { margin: 6px 0; padding-left: 18px; color: var(--warning); overflow-wrap: anywhere; }
 .qac-notices li + li { margin-top: 3px; }
 .qac-warning { display: block; margin: 4px 0; color: var(--warning); overflow-wrap: anywhere; }
@@ -21,8 +25,14 @@
 .qac-line { fill: none; stroke: var(--accent); stroke-width: 1.5; }
 .qac-marker { fill: var(--accent); stroke: var(--subtle); stroke-width: 1; }
 .qac-bar[data-precise="false"], .qac-marker[data-precise="false"] { fill: var(--warning); }
+/* The second series stays readable without colour alone: dashed line, hollow markers, own axis. */
+.qac-series-secondary .qac-line { stroke: var(--muted); stroke-dasharray: 6 4; }
+.qac-series-secondary .qac-marker { fill: var(--app); stroke: var(--muted); }
+.qac-series-secondary .qac-marker[data-precise="false"] { fill: var(--warning); stroke: var(--warning); }
+.qac-tick-right { fill: var(--muted); }
 .qac-skipped { min-width: 0; margin: 8px 0; }
 .qac-skipped > p { margin: 0 0 4px; color: var(--warning); overflow-wrap: anywhere; }
+.qac-skipped-scope { color: var(--muted); }
 .qac-skipped ul { margin: 0; padding-left: 18px; color: var(--muted); }
 .qac-skipped li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; overflow-wrap: anywhere; }
 .qac-skipped code { color: var(--text); font-family: var(--code-font); -webkit-user-select: text; user-select: text; }

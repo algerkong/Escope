@@ -1,4 +1,4 @@
-use crate::chart_definitions::{ChartDefinitionLibrary, ChartDefinitionRecord};
+use crate::chart_definitions::{ChartDefinition, ChartDefinitionLibrary, ChartDefinitionRecord};
 use crate::connection_tls::CaCertificate;
 use crate::credentials::CredentialRef;
 use crate::data_views::{DataViewLibrary, DataViewRecord};
@@ -1044,6 +1044,58 @@ impl Database {
         )?;
         tx.commit()?;
         Ok(revision)
+    }
+
+    /// Append an imported batch in one immediate transaction. The revision the reviewer read and
+    /// every mapped connection ID/endpoint are re-checked against the stored rows before anything is
+    /// written, so a stale tab, a removed connection or a moved endpoint changes nothing at all.
+    /// Existing entries are carried verbatim: import never rewrites a stored definition.
+    pub(crate) fn append_chart_definitions(
+        &mut self,
+        expected_revision: u64,
+        additions: &[ChartDefinition],
+        targets: &[(String, String)],
+    ) -> Result<ChartDefinitionRecord, AppError> {
+        if expected_revision >= crate::chart_definitions::MAX_REVISION {
+            return Err(AppError::new("invalidInput"));
+        }
+        let tx = self
+            .0
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let current = read_chart_definitions(&tx)?;
+        if expected_revision != current.revision {
+            return Err(AppError::new("chartDefinitionConflict"));
+        }
+        for (id, endpoint) in targets {
+            let stored: Option<String> = tx
+                .query_row(
+                    "SELECT endpoint FROM connections WHERE id=?1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if stored.as_deref() != Some(endpoint.as_str()) {
+                return Err(AppError::new("exchangeTargetChanged"));
+            }
+        }
+        let mut library = current.library;
+        library.entries.extend_from_slice(additions);
+        if library.entries.len() > crate::chart_definitions::MAX_ENTRIES {
+            return Err(AppError::new("exchangeTooLarge"));
+        }
+        let json = serde_json::to_string(&library).map_err(|_| AppError::new("invalidInput"))?;
+        if json.len() > crate::chart_definitions::MAX_BYTES {
+            return Err(AppError::new("exchangeTooLarge"));
+        }
+        library.validate()?;
+        let revision = expected_revision + 1;
+        tx.execute(
+            "INSERT INTO chart_definition_library(singleton,revision,json) VALUES (1,?1,?2)
+             ON CONFLICT(singleton) DO UPDATE SET revision=excluded.revision,json=excluded.json",
+            params![revision, json],
+        )?;
+        tx.commit()?;
+        Ok(ChartDefinitionRecord { revision, library })
     }
 
     pub fn save_preferences(&self, preferences: Preferences) -> Result<(), AppError> {

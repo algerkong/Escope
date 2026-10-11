@@ -15,6 +15,7 @@ import { createQueryLibraryService, type QueryLibraryService } from '../services
 import { createWorkspaceRecoveryService, type WorkspaceRecoveryService } from '../services/workspace-recovery';
 import { createDataViewService, type DataViewService } from '../services/data-views';
 import { createChartDefinitionService, type ChartDefinitionService } from '../services/chart-definitions';
+import type { ChartDefinitionExchangeService } from '../services/chart-definition-exchange';
 import { createPinnedFilterService, type PinnedFilterService } from '../services/pinned-filters';
 import { connectionTestLabel, useConnectionTests } from '../features/connections/useConnectionTests';
 import { IconButton, SelectControl } from '../components/controls';
@@ -46,11 +47,11 @@ export function applyPreferences(p: Preferences) {
 export function App({ service, initial, connectionProbe = testConnection, queryBackend, aiBackend, modelService: suppliedModelService,
   queryLibraryService: suppliedQueryLibraryService, workspaceRecoveryService: suppliedRecoveryService,
   dataViewService: suppliedDataViewService, pinnedFilterService: suppliedPinnedFilterService,
-  chartDefinitionService: suppliedChartDefinitionService }:
+  chartDefinitionService: suppliedChartDefinitionService, chartExchangeService: suppliedChartExchangeService }:
   { service: StorageService; initial: StoredState; connectionProbe?: typeof testConnection; queryBackend?: QueryBackend;
     aiBackend?: AiChatBackend; modelService?: ModelService; queryLibraryService?: QueryLibraryService;
     workspaceRecoveryService?: WorkspaceRecoveryService; dataViewService?: DataViewService; pinnedFilterService?: PinnedFilterService;
-    chartDefinitionService?: ChartDefinitionService }) {
+    chartDefinitionService?: ChartDefinitionService; chartExchangeService?: ChartDefinitionExchangeService }) {
   const { t } = useTranslation();
   const [preferences, setPreferences] = useState(initial.preferences);
   const preferencesRef = useRef(preferences);
@@ -315,6 +316,7 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
         dataViewService={dataViewService}
         pinnedFilterService={pinnedFilterService}
         chartDefinitionService={chartDefinitionService}
+        chartExchangeService={suppliedChartExchangeService}
         recovery={{ ...recovery, reload: reloadWorkspace }}
         toggleAI={() => setAI((value) => !value)} onSettings={openSettings} updateQuery={updateQuery}
         selectTab={selectTab} openIndex={openIndex} addQuery={addQuery} restoreQuery={restoreQuery} closeTab={closeTab} />

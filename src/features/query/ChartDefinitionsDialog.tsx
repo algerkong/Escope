@@ -1,4 +1,4 @@
-import { Copy, LoaderCircle, Pencil, RefreshCw, Repeat2, Save, Trash2 } from 'lucide-react';
+import { Copy, FileDown, FileUp, LoaderCircle, Pencil, RefreshCw, Repeat2, Save, Trash2 } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { IconButton, Modal } from '../../components/controls';
@@ -14,6 +14,7 @@ interface Props {
   /** Reuse is only offered on the tab whose connection ID and target match the definition. */
   activeTarget: { connectionId: string | null; index: string } | null;
   onReuse: (definition: ChartDefinition) => void;
+  onExchange: (mode: 'export' | 'import') => void;
   onClose: () => void;
 }
 
@@ -24,7 +25,7 @@ const shapeLabel = (definition: ChartDefinition, noGroup: string) => definition.
   ? `${definition.draft.group.type} · ${definition.draft.metrics.length}`
   : `${noGroup} · ${definition.draft.metrics.length}`;
 
-export function ChartDefinitionsDialog({ library, kind, profiles, activeTarget, onReuse, onClose }: Props) {
+export function ChartDefinitionsDialog({ library, kind, profiles, activeTarget, onReuse, onExchange, onClose }: Props) {
   const { t, i18n } = useTranslation();
   const [panel, setPanel] = useState<Panel>({ kind: 'list' });
   const [name, setName] = useState('');
@@ -64,6 +65,10 @@ export function ChartDefinitionsDialog({ library, kind, profiles, activeTarget, 
           <input type="search" aria-label={t('chartDefinitions:filter')} value={filter} disabled={!canEdit}
             onChange={(event) => setFilter(event.target.value)} />
           <IconButton icon={RefreshCw} label={t('chartDefinitions:reload')} disabled={!canEdit} onClick={library.reload} />
+          <IconButton icon={FileDown} label={t('chartDefinitions:exportDefinitions')} disabled={!canEdit}
+            title={t('chartDefinitions:exportDefinitions')} onClick={() => onExchange('export')} />
+          <IconButton icon={FileUp} label={t('chartDefinitions:importDefinitions')} disabled={!canEdit}
+            title={t('chartDefinitions:importDefinitions')} onClick={() => onExchange('import')} />
         </div>
         {atLimit ? <span className="chart-definitions-bound" role="status">{t('chartDefinitions:limit', { count: MAX_CHART_DEFINITIONS })}</span> : null}
         {library.status === 'ready' && entries.length === 0

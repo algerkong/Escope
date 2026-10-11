@@ -17,8 +17,8 @@ use tauri::State;
 pub(crate) const VERSION: u32 = 1;
 pub(crate) const MAX_BYTES: usize = 256 * 1024;
 pub(crate) const MAX_REVISION: u64 = 9_007_199_254_740_991;
-const MAX_ENTRIES: usize = 100;
-const MAX_METRICS: usize = 31;
+pub(crate) const MAX_METRICS: usize = 31;
+pub(crate) const MAX_ENTRIES: usize = 100;
 const MAX_NAME_BYTES: usize = 1024;
 const MAX_INTERVAL_CHARS: usize = 64;
 const MAX_ZONE_CHARS: usize = 100;
@@ -115,7 +115,8 @@ fn invalid() -> AppError {
     AppError::new("invalidInput")
 }
 
-fn valid_id(value: &str) -> bool {
+/// The same identifier grammar the local ids and the exchange documents follow.
+pub(crate) fn valid_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 64
         && value

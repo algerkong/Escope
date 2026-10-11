@@ -10,6 +10,7 @@
 .qexchange-selection strong { font-size: .82rem; }
 .qexchange-selection small, .qexchange-mappings small { font-size: .73rem; color: var(--muted); overflow-wrap: anywhere; }
 .qexchange-label, .qexchange-mappings legend { font-size: .82rem; color: var(--muted); }
+.qexchange-scope { font-size: .75rem; line-height: 1.35; overflow-wrap: anywhere; }
 .qexchange-preview { width: 100%; height: 220px; min-height: 120px; resize: vertical; padding: 8px; font-family: var(--code-font); font-size: var(--code-size); }
 .qexchange-mappings { margin: 0; border: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .qexchange-mappings legend { padding: 0 0 8px; }

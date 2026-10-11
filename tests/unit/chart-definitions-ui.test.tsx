@@ -25,16 +25,17 @@ async function hydrate(entries: readonly ChartDefinition[]): Promise<ChartDefini
 
 interface HarnessProps {
   service: ChartDefinitionService;
+  onExchange?: (mode: 'export' | 'import') => void;
   onReuse?: (definition: ChartDefinition) => void;
   activeTarget?: { connectionId: string | null; index: string } | null;
   profiles?: readonly ConnectionProfile[];
   onClose?: () => void;
 }
 
-function Harness({ service, onReuse = vi.fn(), activeTarget = target, profiles: given = [connection], onClose = vi.fn() }: HarnessProps) {
+function Harness({ service, onExchange = vi.fn(), onReuse = vi.fn(), activeTarget = target, profiles: given = [connection], onClose = vi.fn() }: HarnessProps) {
   const controller = useChartDefinitions(service);
   return <I18nextProvider i18n={i18n}><ChartDefinitionsDialog library={controller} kind={service.kind}
-    profiles={given} activeTarget={activeTarget} onReuse={onReuse} onClose={onClose} /></I18nextProvider>;
+    profiles={given} activeTarget={activeTarget} onReuse={onReuse} onExchange={onExchange} onClose={onClose} /></I18nextProvider>;
 }
 
 const items = () => screen.queryAllByRole('listitem');

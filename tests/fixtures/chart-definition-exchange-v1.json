@@ -1,0 +1,53 @@
+{
+  "format": "escope-chart-definitions",
+  "version": 1,
+  "connections": [
+    { "key": "connection-1", "label": "Fixture source" },
+    { "key": "connection-2", "label": "实验室 观察" }
+  ],
+  "definitions": [
+    {
+      "key": "chart-1",
+      "name": "Latency per day",
+      "connectionKey": "connection-1",
+      "index": "logs-*",
+      "draft": {
+        "group": {
+          "type": "date_histogram",
+          "name": "per_day",
+          "field": "@timestamp",
+          "interval": "fixed_interval",
+          "intervalValue": "30d",
+          "timeZone": "UTC"
+        },
+        "metrics": [
+          { "name": "total", "type": "sum", "field": "bytes" },
+          { "name": "slowest", "type": "max", "field": "latency" }
+        ]
+      },
+      "measure": "total"
+    },
+    {
+      "key": "chart-2",
+      "name": "Top hosts",
+      "connectionKey": "connection-2",
+      "index": "events",
+      "draft": {
+        "group": { "type": "terms", "name": "by_host", "field": "host", "size": "20" },
+        "metrics": []
+      },
+      "measure": "doc_count"
+    },
+    {
+      "key": "chart-3",
+      "name": "Average bytes",
+      "connectionKey": "connection-1",
+      "index": "metrics-*",
+      "draft": {
+        "group": null,
+        "metrics": [{ "name": "average", "type": "avg", "field": "bytes.total" }]
+      },
+      "measure": "average"
+    }
+  ]
+}

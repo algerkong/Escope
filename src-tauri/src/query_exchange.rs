@@ -24,7 +24,8 @@ const FORMAT: &str = "escope-query-definitions";
 const VERSION: u32 = 1;
 const MAX_BYTES: usize = 4 * 1024 * 1024;
 const MAX_QUERIES: usize = 100;
-const SENSITIVE_KEYS: &[&str] = &[
+/// Normalized key names no local definition exchange document may carry.
+pub(crate) const SENSITIVE_KEYS: &[&str] = &[
     "authorization",
     "proxyauthorization",
     "auth",
@@ -147,7 +148,8 @@ fn valid_label(value: &str) -> bool {
     value.chars().count() <= 120 && !value.chars().any(char::is_control)
 }
 
-fn sensitive_text(value: &str) -> bool {
+/// Authentication-shaped literals in any document string, shared by every definition exchange.
+pub(crate) fn sensitive_text(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
     if [
         "authorization:",

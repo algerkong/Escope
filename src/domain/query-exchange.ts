@@ -46,13 +46,15 @@ const identifier = (value: unknown): value is string => typeof value === 'string
 const label = (value: unknown): value is string => typeof value === 'string' && [...value].length <= 120
   && ![...value].some((char) => char.charCodeAt(0) < 32 || (char.charCodeAt(0) >= 127 && char.charCodeAt(0) <= 159));
 
-const SENSITIVE_KEYS = new Set([
+/** Shared by every local definition exchange format: normalized key names that must never appear. */
+export const SENSITIVE_KEYS = new Set([
   'authorization', 'proxyauthorization', 'auth', 'authstate', 'authentication', 'headers', 'requestheaders',
   'credential', 'credentials', 'credentialref', 'credentialreference', 'keychainref', 'keyringref',
   'apikey', 'apikeyid', 'apikeysecret', 'password', 'passwd', 'secret', 'clientsecret', 'privatekey',
   'accesstoken', 'refreshtoken', 'token', 'transportsnapshot',
 ]);
-const SENSITIVE_TEXT = /(?:\b(?:authorization|proxy-authorization)\s*:|\b(?:bearer|basic|apikey)\s+[A-Za-z0-9+/_=-]+|-----BEGIN(?: [A-Z]+)* PRIVATE KEY-----|\b(?:keyring|keychain|credential):)/i;
+/** Shared by every local definition exchange format: authentication-shaped literals in any string. */
+export const SENSITIVE_TEXT = /(?:\b(?:authorization|proxy-authorization)\s*:|\b(?:bearer|basic|apikey)\s+[A-Za-z0-9+/_=-]+|-----BEGIN(?: [A-Z]+)* PRIVATE KEY-----|\b(?:keyring|keychain|credential):)/i;
 
 /** Defense in depth for definition literals. Untagged sensitive literals still require review. */
 export function checkExchangeDsl(raw: string, parameters?: QueryParameters): void {

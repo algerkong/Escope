@@ -93,8 +93,40 @@ export function useChartDefinitions(service: ChartDefinitionService) {
     });
   }, [mutate]);
 
+  /**
+   * Apply an imported append. The reviewer's record is part of the request: an import that raced
+   * another write, or whose outcome the store cannot confirm, leaves the reviewed record in place and
+   * reports the code instead of guessing. Nothing here runs a query.
+   */
+  const importRecord = useCallback((expected: ChartDefinitionRecord,
+    importer: () => Promise<ChartDefinitionRecord>): Promise<{ applied: boolean; error: string | null }> => {
+    const token = generation.current;
+    const reviewed = expected;
+    const stale = { applied: false, error: 'chartDefinitionConflict' };
+    const operation = queue.current.then(async () => {
+      const current = stateRef.current;
+      if (generation.current !== token || current.status !== 'ready' || !current.record || current.error) return stale;
+      if (current.record.revision !== reviewed.revision
+        || JSON.stringify(current.record.library) !== JSON.stringify(reviewed.library)) return stale;
+      publish({ ...current, saving: true });
+      try {
+        const next = parseChartDefinitionRecord(await importer());
+        if (!next || next.revision !== reviewed.revision + 1) throw { code: 'invalidResponse' };
+        if (generation.current !== token) return stale;
+        publish({ status: 'ready', record: next, saving: false, error: null });
+        return { applied: true, error: null };
+      } catch (error) {
+        const code = errorCode(error);
+        if (generation.current === token) publish({ ...current, saving: false, error: code });
+        return { applied: false, error: code };
+      }
+    });
+    queue.current = operation;
+    return operation;
+  }, [publish]);
+
   return { status: state.status, entries: state.record?.library.entries ?? EMPTY_ENTRIES,
-    saving: state.saving, error: state.error, reload, save, remove };
+    record: state.record, saving: state.saving, error: state.error, reload, save, remove, importRecord };
 }
 
 export type ChartDefinitionsController = ReturnType<typeof useChartDefinitions>;

@@ -29,6 +29,8 @@ import { QueryFilterBindingBar, QueryFilterDraftBar, QueryFiltersDialog } from '
 import { QuerySortDialog } from './QuerySortDialog';
 import { QueryAggregationBuildDialog } from './QueryAggregationBuildDialog';
 import { ChartDefinitionsDialog } from './ChartDefinitionsDialog';
+import { ChartDefinitionExchangeDialog } from './ChartDefinitionExchangeDialog';
+import { createChartDefinitionExchangeService, type ChartDefinitionExchangeService } from '../../services/chart-definition-exchange';
 import { freezeChartDefinitionSelection, selectChartDefinition } from '../../domain/chart-definitions';
 import { queryFilterEnabled, type CellFilterSelection, type QueryFilterBinding, type QueryFilterDraft } from '../../domain/query-filters';
 import { bindAppliedQueryFilters, hasPendingQueryFilters, matchesQueryFilterBinding, previewQueryFilterDraft, queryFilterDraftChanged } from '../../domain/query-filter-session';
@@ -105,10 +107,11 @@ interface Props {
   dataViewService?: DataViewService;
   pinnedFilterService?: PinnedFilterService;
   chartDefinitionService?: ChartDefinitionService;
+  chartExchangeService?: ChartDefinitionExchangeService;
 }
 
 export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResults, toggleAI, onSettings, updateQuery, selectTab, openIndex, addQuery, closeTab, backend = desktopQueryBackend, modelService = desktopModelService, aiBackend, canQuery, active = true, onCommandReady, libraryService = defaultQueryLibraryService, snapshotExportService = desktopSnapshotExportService, exchangeService: suppliedExchangeService, restoreQuery, recovery, dataViewService: suppliedDataViewService, pinnedFilterService: suppliedPinnedFilterService,
-  chartDefinitionService: suppliedChartDefinitionService }: Props) {
+  chartDefinitionService: suppliedChartDefinitionService, chartExchangeService: suppliedChartExchangeService }: Props) {
   const { t } = useTranslation();
   const [closing, setClosing] = useState<QueryDocument | null>(null);
   const [checked, setChecked] = useState<Record<string, { source: string; error: QueryDslError | null }>>({});
@@ -135,6 +138,9 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const [dataViewsOpen, setDataViewsOpen] = useState(false);
   const chartDefinitionService = useMemo(() => suppliedChartDefinitionService ?? createChartDefinitionService(), [suppliedChartDefinitionService]);
   const chartDefinitions = useChartDefinitions(chartDefinitionService);
+  const chartExchangeService = useMemo(() => suppliedChartExchangeService ?? createChartDefinitionExchangeService(chartDefinitionService),
+    [suppliedChartExchangeService, chartDefinitionService]);
+  const [chartExchangeMode, setChartExchangeMode] = useState<'import' | 'export' | null>(null);
   const pinnedFilterService = useMemo(() => suppliedPinnedFilterService ?? createPinnedFilterService(), [suppliedPinnedFilterService]);
   const pinnedFilters = usePinnedFilters(pinnedFilterService);
   const [pinnedOpen, setPinnedOpen] = useState<{ source: QueryDocument | null; endpoint: string | null } | null>(null);
@@ -828,7 +834,12 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
         setBuildSource({ query: structuredClone(query), endpoint: target.endpoint,
           seed: freezeChartDefinitionSelection(selectChartDefinition(definition)) });
       }}
+      onExchange={(mode) => { setChartDefinitionsOpen(false); setChartExchangeMode(mode); }}
       onClose={() => setChartDefinitionsOpen(false)} /> : null}
+    {chartExchangeMode ? <ChartDefinitionExchangeDialog mode={chartExchangeMode} library={chartDefinitions}
+      kind={chartDefinitionService.kind} profiles={profiles} service={chartExchangeService}
+      record={chartDefinitions.record}
+      onClose={() => { setChartExchangeMode(null); setChartDefinitionsOpen(true); }} /> : null}
     {dataViewsOpen ? <DataViewsDialog library={dataViews} kind={dataViewService.kind} profiles={profiles}
       initialConnectionId={state.activeConnectionId} available={available && active}
       fieldsFor={fieldsFor} inspectFields={refreshFields} onClose={() => setDataViewsOpen(false)}

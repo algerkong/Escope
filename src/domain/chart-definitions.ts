@@ -43,6 +43,13 @@ export interface ChartDefinitionRecord {
   readonly library: ChartDefinitionLibrary;
 }
 
+/** A definition without local identity, as an exchange document carries it. */
+export interface ChartDefinitionBody {
+  readonly index: string;
+  readonly draft: AggregationBuildDraft;
+  readonly measure: string;
+}
+
 /** A reuse copy owned by the dialog; library edits never rewrite an already captured selection. */
 export interface ChartDefinitionSelection {
   readonly version: number;
@@ -63,7 +70,8 @@ function shape(value: unknown, required: readonly string[], optional: readonly s
     && Object.keys(value).every((key) => required.includes(key) || optional.includes(key));
 }
 
-function validName(value: unknown): value is string {
+/** Definition names are display literals: bounded code points, trimmed, never control characters. */
+export function validChartDefinitionName(value: unknown): value is string {
   return text(value) && value.trim() === value && value !== '' && [...value].length <= MAX_CHART_NAME_CHARS
     && ![...value].some((char) => {
       const code = char.charCodeAt(0);
@@ -119,12 +127,19 @@ function validMeasure(measure: unknown, draft: AggregationBuildDraft): measure i
 
 export function parseChartDefinition(value: unknown): ChartDefinition | null {
   if (!shape(value, ['id', 'name', 'connectionId', 'index', 'draft', 'measure'])) return null;
-  if (!identifier(value.id) || !identifier(value.connectionId) || !validName(value.name)) return null;
+  if (!identifier(value.id) || !identifier(value.connectionId) || !validChartDefinitionName(value.name)) return null;
+  const body = parseChartDefinitionBody({ index: value.index, draft: value.draft, measure: value.measure });
+  return body ? { id: value.id, name: value.name, connectionId: value.connectionId, ...body } : null;
+}
+
+/** The part of a definition that carries no local identity: target, buildable rows and plotted measure. */
+export function parseChartDefinitionBody(value: unknown): ChartDefinitionBody | null {
+  if (!shape(value, ['index', 'draft', 'measure'])) return null;
   if (!text(value.index) || !validDataViewIndex(value.index)) return null;
   const draft = parseDraft(value.draft);
   if (!draft || (draft.group === null && draft.metrics.length === 0)) return null;
   if (!validMeasure(value.measure, draft)) return null;
-  return { id: value.id, name: value.name, connectionId: value.connectionId, index: value.index, draft, measure: value.measure };
+  return { index: value.index, draft, measure: value.measure };
 }
 
 export function chartDefinitionPayload(definition: ChartDefinition): ChartDefinition {

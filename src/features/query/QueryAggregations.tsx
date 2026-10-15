@@ -214,7 +214,8 @@ export function QueryAggregations({ snapshot, endpoint, pages, wrapJson, chartDe
         <li key={notice}>{t(`queryAggregations:notice_${notice}`)}</li>)}</ul> : null}
       {result.responseState !== 'present' ? <p className="qa-scope">{t(`queryAggregations:${result.responseState === 'empty' ? 'responseEmpty' : 'responseMissing'}`)}</p> : null}
       {entry ? <Entry
-        key={JSON.stringify([pageIndex, entry.name])}
+        key={JSON.stringify([snapshot.queryId, snapshot.requestId, snapshot.startedAt,
+          snapshot.connectionId, endpoint, snapshot.index, pageIndex, entry.name])}
         entry={entry}
         scope={chartScope}
         onCopy={onCopy}

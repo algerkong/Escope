@@ -155,12 +155,12 @@ function canonicalDecimal(token: string): string | null {
  * Anything that cannot be represented exactly enough to draw is reported with its reason and
  * original token instead of being rounded silently or drawn as zero.
  */
-function convert(value: AggregationValue): Conversion {
+export function convertChartValue(value: AggregationValue): Conversion {
   if (value.kind === 'missing') return 'missing';
   if (value.kind === 'null') return 'null';
   if (value.kind !== 'number' || value.raw === null) return 'notNumeric';
   const { raw } = value;
-  if (raw.length > AGGREGATION_LIMITS.numberLength || !NUMBER_TOKEN.test(raw)) return 'invalidToken';
+  if (raw.length > AGGREGATION_LIMITS.numberLength || raw.trim() !== raw || !NUMBER_TOKEN.test(raw)) return 'invalidToken';
   const parsed = Number(raw);
   if (!Number.isFinite(parsed)) return 'outOfRange';
   const exact = canonicalDecimal(raw);
@@ -172,14 +172,14 @@ function convert(value: AggregationValue): Conversion {
 
 /** A count is only plottable while it is still an exact integer; a rounded count is not drawn. */
 function convertCount(value: AggregationValue): Conversion {
-  const converted = convert(value);
+  const converted = convertChartValue(value);
   if (typeof converted === 'string') return converted;
   return Number.isSafeInteger(converted.value) ? converted : 'outOfRange';
 }
 
 function convertPosition(value: AggregationValue): Conversion {
   if (value.kind === 'number' && value.raw !== null && !INTEGER_TOKEN.test(value.raw)) return 'invalidToken';
-  const converted = convert(value);
+  const converted = convertChartValue(value);
   if (typeof converted === 'string') return converted;
   // A rounded key would draw the bucket at a position it was never returned for.
   return converted.precise && Number.isSafeInteger(converted.value) ? converted : 'outOfRange';
@@ -230,7 +230,7 @@ function singleValueChart(
 ): AggregationChartResult {
   if (measure !== null && measure !== entry.name) return { ok: false, code: 'unknownMeasure' };
   if (secondary !== null) return { ok: false, code: 'secondaryUnsupported' };
-  const converted = convert(entry.metric.value);
+  const converted = convertChartValue(entry.metric.value);
   if (typeof converted === 'string') {
     return {
       ok: false, code: 'noPlottableValues', buckets: 0,
@@ -262,7 +262,7 @@ function measureSource(bucket: AggregationBucket, measure: ChartMeasure): Aggreg
 
 function readValue(bucket: AggregationBucket, measure: ChartMeasure): Conversion {
   return measure.type === DOC_COUNT_MEASURE
-    ? convertCount(measureSource(bucket, measure)) : convert(measureSource(bucket, measure));
+    ? convertCount(measureSource(bucket, measure)) : convertChartValue(measureSource(bucket, measure));
 }
 
 function extentOf(values: readonly ChartValue[]): { readonly min: number; readonly max: number } {

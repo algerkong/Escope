@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import {
   chartAxisSlots, chartPositionDomain, chartValueDomain, type ChartMarker, type PlottedChart,
 } from '../../../domain/query-aggregation-charts';
+import type { ChartReferenceLine } from '../../../domain/query-aggregation-chart-references';
 
 const HEIGHT = 240;
 const MARGIN = Object.freeze({ top: 10, right: 14, bottom: 46, left: 62 });
@@ -16,12 +17,18 @@ const MARKER_STEP = 16;
 const MIN_INNER = 420;
 const MAX_INNER = 4000 - MARGIN.left - MARGIN.right;
 const LABEL_LENGTH = 20;
+const NO_REFERENCES: readonly ChartReferenceLine[] = Object.freeze([]);
 
 type BarChart = Extract<PlottedChart, { kind: 'bars' }>;
 type LineChart = Extract<PlottedChart, { kind: 'line' }>;
 export type PlottableChart = BarChart | LineChart;
 type Margin = { top: number; right: number; bottom: number; left: number };
 type Plotted = { label: string; raw: string; value: number; precise: boolean };
+interface ChartViewProps {
+  label: string;
+  axes: Record<'left' | 'right', string>;
+  references: readonly ChartReferenceLine[];
+}
 
 /** Intrinsic geometry: the panel scrolls instead of shrinking text or dropping returned buckets. */
 function innerWidthFor(inner: number): number {
@@ -63,7 +70,27 @@ function ValueAxis({ position, ticks, innerWidth, innerHeight, margin, label, si
   </g>;
 }
 
-function BarChartView({ chart, label, axes }: { chart: BarChart; label: string; axes: Record<'left' | 'right', string> }) {
+function ReferenceLines({ lines, innerWidth, innerHeight, axes }: {
+  lines: readonly ChartReferenceLine[]; innerWidth: number; innerHeight: number;
+  axes: Record<'left' | 'right', string>;
+}) {
+  const { t } = useTranslation();
+  return <g className="qac-reference-layer">
+    {lines.map((line) => {
+      if (line.position === null) return null;
+      const y = (1 - line.position) * innerHeight;
+      return <line key={line.id} className="qac-reference-line qac-reference-stroke"
+        data-reference={line.id} data-axis={line.axis} data-precise={line.precise}
+        x1={0} x2={innerWidth} y1={y} y2={y}>
+        <title>{t('queryAggregationCharts:referenceTooltip', {
+          id: line.id, axis: t(`queryAggregationCharts:axis_${line.axis}`), measure: axes[line.axis], raw: line.raw,
+        })}</title>
+      </line>;
+    })}
+  </g>;
+}
+
+function BarChartView({ chart, label, axes, references }: ChartViewProps & { chart: BarChart }) {
   const { t } = useTranslation();
   const secondary = chart.secondary;
   const margin: Margin = { ...MARGIN, right: secondary === null ? MARGIN.right : RIGHT_MARGIN };
@@ -87,6 +114,7 @@ function BarChartView({ chart, label, axes }: { chart: BarChart; label: string; 
     <ValueAxis position={(value) => y(value)} ticks={y.ticks(5)} innerWidth={innerWidth} innerHeight={innerHeight}
       margin={margin} label={secondary === null ? t('queryAggregationCharts:axisValue')
         : t('queryAggregationCharts:axisValueLeft', { measure: truncate(axes.left) })} />
+    <ReferenceLines lines={references} innerWidth={innerWidth} innerHeight={innerHeight} axes={axes} />
     {chart.bars.map((bar) => <Bar key={bar.row} className="qac-bar" data-row={bar.row} data-precise={bar.precise}
       x={x(bar.slot) ?? 0} y={Math.min(zero, y(bar.value))} width={barWidth}
       height={Math.abs(zero - y(bar.value))}>
@@ -138,7 +166,7 @@ function SecondarySeries({ series, extent, x, innerWidth, innerHeight, margin, m
   </>;
 }
 
-function LineChartView({ chart, label, axes }: { chart: LineChart; label: string; axes: Record<'left' | 'right', string> }) {
+function LineChartView({ chart, label, axes, references }: ChartViewProps & { chart: LineChart }) {
   const { t } = useTranslation();
   const innerHeight = HEIGHT - MARGIN.top - MARGIN.bottom;
   const secondary = chart.secondary;
@@ -156,6 +184,7 @@ function LineChartView({ chart, label, axes }: { chart: LineChart; label: string
       margin={margin}
       label={secondary === null ? t('queryAggregationCharts:axisValue')
         : t('queryAggregationCharts:axisValueLeft', { measure: truncate(axes.left) })} />
+    <ReferenceLines lines={references} innerWidth={innerWidth} innerHeight={innerHeight} axes={axes} />
     {chart.series.map((segment) => <LinePath key={segment[0]!.row} className="qac-line" data={[...segment]}
       x={(marker) => x(marker.position)} y={(marker) => y(marker.value)} />)}
     {markers.map((marker) => <circle key={marker.row} className="qac-marker" data-row={marker.row}
@@ -178,9 +207,10 @@ function LineChartView({ chart, label, axes }: { chart: LineChart; label: string
 }
 
 /** Drawn only from an already bounded plot model; nothing here reads JSON, combines pages or queries. */
-export function AggregationChartCanvas({ chart, label, axes }: {
+export function AggregationChartCanvas({ chart, label, axes, references = NO_REFERENCES }: {
   chart: PlottableChart; label: string; axes: Record<'left' | 'right', string>;
+  references?: readonly ChartReferenceLine[];
 }) {
-  return chart.kind === 'bars' ? <BarChartView chart={chart} label={label} axes={axes} />
-    : <LineChartView chart={chart} label={label} axes={axes} />;
+  return chart.kind === 'bars' ? <BarChartView chart={chart} label={label} axes={axes} references={references} />
+    : <LineChartView chart={chart} label={label} axes={axes} references={references} />;
 }

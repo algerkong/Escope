@@ -67,22 +67,31 @@ describe('saving an executed aggregation through the merged library', () => {
     for (const callback of Object.values(f.callbacks)) expect(callback).not.toHaveBeenCalled();
   });
 
-  it('keeps the selected primary measure, but does not save a second series or any results', async () => {
+  it('keeps the selected primary measure, but does not save reference lines, a second series or any results', async () => {
     const f = setup();
     fireEvent.click(screen.getByRole('button', { name: 'Aggregations' }));
     fireEvent.click(screen.getByRole('button', { name: 'Show chart' }));
     fireEvent.change(screen.getByRole('combobox', { name: 'Plotted measure' }), { target: { value: 'mean' } });
     fireEvent.click(screen.getByRole('switch', { name: i18n.t('queryAggregationCharts:dualToggle') }));
     expect(screen.getByRole('combobox', { name: 'Right axis measure' })).toHaveValue('doc_count');
+    await screen.findByRole('img');
+    fireEvent.click(screen.getByRole('button', { name: 'Add reference line' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Reference axis' }), { target: { value: 'left' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Reference value' }), { target: { value: '12.34567' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply reference line' }));
+    expect(screen.getByRole('listitem', { name: 'Reference 1' })).toHaveTextContent('12.34567');
     fireEvent.click(screen.getByRole('button', { name: i18n.t('queryCharts:saveFromResults') }));
     expect(screen.getByLabelText(enChartDefinitions.resultDefinition)).toHaveTextContent('"measure": "mean"');
     expect(screen.getByLabelText(enChartDefinitions.resultDefinition)).not.toHaveTextContent('secondary');
+    expect(screen.getByLabelText(enChartDefinitions.resultDefinition)).not.toHaveTextContent('12.34567');
     expect(f.controller.save).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('checkbox', { name: enChartDefinitions.resultReviewed }));
     fireEvent.click(screen.getByRole('button', { name: enChartDefinitions.saveAction }));
     await waitFor(() => expect(f.controller.save).toHaveBeenCalledTimes(1));
     expect(f.controller.save.mock.calls[0]![0]).toMatchObject({ measure: 'mean' });
     expect(f.controller.save.mock.calls[0]![0]).not.toHaveProperty('secondary');
+    expect(JSON.stringify(f.controller.save.mock.calls[0]![0])).not.toMatch(/reference|12\.34567/);
+    for (const callback of Object.values(f.callbacks)) expect(callback).not.toHaveBeenCalled();
   });
 
   it('invalidates literal review when the name changes and blocks a conflicted library', () => {

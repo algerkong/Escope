@@ -9,6 +9,7 @@ import {
 import type { AggregationResult } from '../../../domain/query-aggregations';
 import type { TimeRangeBounds } from '../../../domain/query-time-range';
 import { loadAggregationChart, type AggregationChartRuntime } from './chart-loader';
+import { AggregationChartReferences } from './AggregationChartReferences';
 import '../../../styles/query-aggregation-charts.css';
 
 export interface AggregationChartScope {
@@ -187,7 +188,8 @@ export function AggregationChart({ entry, scope, onMeasureChange }: Props) {
         <IconButton icon={RotateCw} label={t('retry')} onClick={() => setAttempt((value) => value + 1)} /></div>
       : runtime === null ? <p className="qac-state" role="status">
         <LoaderCircle className="spin" size={14} aria-hidden="true" />{t('queryAggregationCharts:loading')}</p>
-      : <runtime.AggregationChartCanvas chart={result.chart} label={summary} axes={{
+      : <AggregationChartReferences key={JSON.stringify([scope.target, scope.page])}
+        chart={result.chart} Canvas={runtime.AggregationChartCanvas} label={summary} axes={{
         left: measureText(result.chart.measure),
         right: result.chart.secondary ? measureText(result.chart.secondary.measure) : '',
       }} />)

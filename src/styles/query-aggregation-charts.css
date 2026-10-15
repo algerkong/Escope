@@ -25,6 +25,10 @@
 .qac-line { fill: none; stroke: var(--accent); stroke-width: 1.5; }
 .qac-marker { fill: var(--accent); stroke: var(--subtle); stroke-width: 1; }
 .qac-bar[data-precise="false"], .qac-marker[data-precise="false"] { fill: var(--warning); }
+.qac-bar-secondary, .qac-bar-secondary[data-precise="false"] {
+  fill: none; stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 3 2;
+}
+.qac-bar-secondary[data-precise="false"] { stroke: var(--warning); }
 /* The second series stays readable without colour alone: dashed line, hollow markers, own axis. */
 .qac-series-secondary .qac-line { stroke: var(--muted); stroke-dasharray: 6 4; }
 .qac-series-secondary .qac-marker { fill: var(--app); stroke: var(--muted); }
@@ -42,5 +46,6 @@
   .qac-bar, .qac-marker, .qac-line, .qac-grid, .qac-baseline { stroke: CanvasText; }
   .qac-bar, .qac-marker { fill: CanvasText; }
   .qac-line { fill: none; }
+  .qac-bar-secondary, .qac-bar-secondary[data-precise="false"] { fill: none; stroke: CanvasText; }
   .qac-tick, .qac-axis-title { fill: CanvasText; }
 }

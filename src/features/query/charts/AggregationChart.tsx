@@ -28,8 +28,10 @@ interface Props {
   onMeasureChange?: (measure: string) => void;
 }
 
-/** A bucket key is shared by both series, so its own caveat is listed once for a dual chart. */
-const SHARED_NOTICE = 'bucketStarts';
+/** Bucket selection and key caveats belong to both measures, not to either value axis. */
+const SHARED_NOTICES: ReadonlySet<ChartNotice> = new Set([
+  'bucketStarts', 'termsScope', 'errorUnknown', 'errorNotReported', 'omittedBuckets',
+]);
 
 /**
  * Session-local chart of one aggregation entry of one received page. The plot model is rebuilt
@@ -51,9 +53,9 @@ export function AggregationChart({ entry, scope, onMeasureChange }: Props) {
   const leftMeasure = chart ? chart.measure : measures.find((item) => item.name === primaryName) ?? null;
   const rightMeasure = secondary === null ? null : measures.find((item) => item.name === secondary) ?? null;
   const needsCanvas = chart !== null && chart.kind !== 'singleValue';
-  const secondarySeries = chart !== null && chart.kind === 'line' ? chart.secondary : null;
+  const secondarySeries = chart !== null && chart.kind !== 'singleValue' ? chart.secondary : null;
   const dual = rightMeasure !== null;
-  const dualOffered = entry.status === 'buckets' && entry.type === 'date_histogram' && measures.length > 1;
+  const dualOffered = entry.status === 'buckets' && measures.length > 1;
   const secondaryOptions = measures.filter((item) => item.name !== primaryName || item.name === secondary);
   const skipped: readonly ChartSkipped[] = chart ? chart.skipped : 'skipped' in result ? result.skipped : [];
 
@@ -77,7 +79,8 @@ export function AggregationChart({ entry, scope, onMeasureChange }: Props) {
     ? t('queryAggregationCharts:measureDocCount')
     : t('queryAggregationCharts:measureMetric', { name: item.name, type: item.type });
   const axisText = (side: 'left' | 'right') => t(`queryAggregationCharts:axis_${side}`);
-  const summary = chart === null ? '' : chart.kind === 'line' && chart.secondary ? t('queryAggregationCharts:summary_dual', {
+  const summary = chart === null ? '' : chart.kind !== 'singleValue' && chart.secondary
+    ? t(chart.kind === 'bars' ? 'queryAggregationCharts:summary_dualBars' : 'queryAggregationCharts:summary_dual', {
     name: chart.aggregation, primary: measureText(chart.measure), secondary: measureText(chart.secondary.measure),
     plottedPrimary: chart.plotted, plottedSecondary: chart.secondary.plotted, buckets: chart.buckets,
     target: scope.target, page: scope.page,
@@ -86,17 +89,17 @@ export function AggregationChart({ entry, scope, onMeasureChange }: Props) {
     page: scope.page, plotted: chart.plotted, buckets: chart.buckets,
   });
   const noticeGroups: readonly { title: string | null; items: readonly ChartNotice[]; imprecise: number }[] = !chart
-    ? [] : chart.kind !== 'line' || !chart.secondary
+    ? [] : chart.kind === 'singleValue' || !chart.secondary
       ? [{ title: null, items: chart.notices, imprecise: chart.impreciseCount }]
       : [
         {
-          title: t('queryAggregationCharts:noticesShared'),
-          items: chart.notices.filter((item) => item === SHARED_NOTICE),
+          title: t(chart.kind === 'bars' ? 'queryAggregationCharts:noticesSharedTerms' : 'queryAggregationCharts:noticesShared'),
+          items: chart.notices.filter((item) => SHARED_NOTICES.has(item)),
           imprecise: 0,
         },
         {
           title: t('queryAggregationCharts:noticesAxis', { measure: measureText(chart.measure), axis: axisText('left') }),
-          items: chart.notices.filter((item) => item !== SHARED_NOTICE),
+          items: chart.notices.filter((item) => !SHARED_NOTICES.has(item)),
           imprecise: chart.impreciseCount,
         },
         {
@@ -108,7 +111,7 @@ export function AggregationChart({ entry, scope, onMeasureChange }: Props) {
         },
       ];
   const skippedBlocks: readonly { title: string | null; items: readonly ChartSkipped[] }[] = chart
-    ? chart.kind === 'line' && chart.secondary
+    ? chart.kind !== 'singleValue' && chart.secondary
       ? [
         { title: t('queryAggregationCharts:skippedForAxis', { measure: measureText(chart.measure), axis: axisText('left') }), items: chart.skipped },
         { title: t('queryAggregationCharts:skippedForAxis', { measure: measureText(chart.secondary.measure), axis: axisText('right') }), items: chart.secondary.skipped },
@@ -186,7 +189,7 @@ export function AggregationChart({ entry, scope, onMeasureChange }: Props) {
         <LoaderCircle className="spin" size={14} aria-hidden="true" />{t('queryAggregationCharts:loading')}</p>
       : <runtime.AggregationChartCanvas chart={result.chart} label={summary} axes={{
         left: measureText(result.chart.measure),
-        right: result.chart.kind === 'line' && result.chart.secondary ? measureText(result.chart.secondary.measure) : '',
+        right: result.chart.secondary ? measureText(result.chart.secondary.measure) : '',
       }} />)
       : <p className="qac-warning" role="status">{t(`queryAggregationCharts:error_${result.code}`,
         { buckets: 'buckets' in result ? result.buckets : 0, limit: CHART_LIMITS.buckets })}</p>}

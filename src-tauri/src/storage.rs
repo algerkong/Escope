@@ -2305,8 +2305,8 @@ fn read_saved_charts(connection: &Connection) -> Result<SavedChartRecord, AppErr
     }
 }
 
-/// Both branches shipped a different v9 table. Accept only their known DDL fingerprints, then
-/// add the missing table without reading or rewriting either library's document or revision.
+/// Both branches shipped a different v9 table. Compare known DDL modulo source line endings,
+/// then add the missing table without rewriting either library's document or revision.
 fn merge_chart_library_schemas(tx: &rusqlite::Transaction<'_>) -> Result<(), AppError> {
     let reference = Connection::open_in_memory()?;
     reference.execute_batch(include_str!("../migrations/009_saved_charts.sql"))?;
@@ -2326,7 +2326,7 @@ fn merge_chart_library_schemas(tx: &rusqlite::Transaction<'_>) -> Result<(), App
                 [name],
                 |row| row.get(0),
             )?;
-            if kind != "table" || sql != expected {
+            if kind != "table" || sql.replace("\r\n", "\n") != expected.replace("\r\n", "\n") {
                 return Err(AppError::new("storageUnavailable"));
             }
             found = true;

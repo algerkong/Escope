@@ -158,9 +158,9 @@ describe('second measure refusals', () => {
     expect(buildAggregationChart(entry, 'missing-metric', 'total')).toEqual({ ok: false, code: 'unknownMeasure' });
   });
 
-  it('refuses a second measure where the chart kind does not offer one', () => {
+  it('supports terms but refuses a second measure for a single-value metric', () => {
     expect(buildAggregationChart(terms('{"key":"a","doc_count":1,"total":{"value":2}}'), null, 'total'))
-      .toEqual({ ok: false, code: 'secondaryUnsupported' });
+      .toMatchObject({ ok: true, chart: { kind: 'bars', secondary: { measure: { name: 'total' } } } });
     expect(buildAggregationChart(entryOf(METRIC, '{"amount":{"value":4}}', 'amount'), null, 'amount'))
       .toEqual({ ok: false, code: 'secondaryUnsupported' });
     expect(buildAggregationChart(histogram('{"key":0,"doc_count":1}'), null, 'nope'))
@@ -190,6 +190,13 @@ describe('second measure refusals', () => {
         { row: 2, label: '3600000', field: 'value', raw: null, reason: 'missing' },
       ],
     });
+  });
+
+  it('refuses an overflowing value span on either line axis without emitting partial geometry', () => {
+    const entry = withMetrics('{"key":0,"doc_count":1,"total":{"value":-1e308}},'
+      + '{"key":3600000,"doc_count":2,"total":{"value":1e308}}');
+    expect(buildAggregationChart(entry, 'total', null)).toEqual({ ok: false, code: 'valueDomainOutOfRange' });
+    expect(buildAggregationChart(entry, null, 'total')).toEqual({ ok: false, code: 'secondaryDomainOutOfRange' });
   });
 
   it('keeps the bucket quota for the shared entry: 200 plots both, 201 refuses both', () => {

@@ -261,3 +261,31 @@ fn future_versions_are_refused_without_touching_either_document() {
         (11, CANONICAL.into())
     );
 }
+
+#[test]
+fn historical_v9_source_line_endings_do_not_change_schema_identity() {
+    for (migration, table, raw) in [
+        (
+            include_str!("../../migrations/009_saved_charts.sql"),
+            "saved_chart_library",
+            LEGACY,
+        ),
+        (
+            include_str!("../../migrations/009_chart_definitions.sql"),
+            "chart_definition_library",
+            CANONICAL,
+        ),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("windows-v9.sqlite");
+        let conn = v8(&path);
+        conn.execute_batch(&migration.replace('\n', "\r\n"))
+            .unwrap();
+        conn.execute(&format!("INSERT INTO {table} VALUES(1,7,?1)"), [raw])
+            .unwrap();
+        drop(conn);
+        let db = Database::open(&path).unwrap();
+        assert_eq!(version(&db.0), 10);
+        assert_eq!(stored(&db.0, table), (7, raw.into()));
+    }
+}

@@ -63,8 +63,10 @@ function ValueAxis({ position, ticks, innerWidth, innerHeight, margin, label, si
   </g>;
 }
 
-function BarChartView({ chart, label }: { chart: BarChart; label: string }) {
+function BarChartView({ chart, label, axes }: { chart: BarChart; label: string; axes: Record<'left' | 'right', string> }) {
   const { t } = useTranslation();
+  const secondary = chart.secondary;
+  const margin: Margin = { ...MARGIN, right: secondary === null ? MARGIN.right : RIGHT_MARGIN };
   const innerHeight = HEIGHT - MARGIN.top - MARGIN.bottom;
   const innerWidth = innerWidthFor(chart.slots * SLOT_WIDTH);
   const domain = chartValueDomain(chart.valueExtent);
@@ -73,16 +75,34 @@ function BarChartView({ chart, label }: { chart: BarChart; label: string }) {
     domain: chart.slotLabels.map((_, slot) => slot), range: [0, innerWidth], padding: 0.25,
   });
   const zero = y(0);
+  const gap = secondary ? Math.min(3, x.bandwidth() / 5) : 0;
+  const barWidth = secondary ? (x.bandwidth() - gap) / 2 : x.bandwidth();
+  const secondaryDomain = secondary ? chartValueDomain(secondary.valueExtent) : null;
+  const secondaryY = secondaryDomain ? scaleLinear<number>({
+    domain: [secondaryDomain.min, secondaryDomain.max], range: [innerHeight, 0],
+  }) : null;
   const tooltip = (item: Plotted) =>
     `${item.label}: ${item.precise ? item.raw : t('queryAggregationCharts:plottedAs', { raw: item.raw, value: item.value })}`;
-  return <Frame width={innerWidth + MARGIN.left + MARGIN.right} margin={MARGIN} label={label}>
+  return <Frame width={innerWidth + margin.left + margin.right} margin={margin} label={label}>
     <ValueAxis position={(value) => y(value)} ticks={y.ticks(5)} innerWidth={innerWidth} innerHeight={innerHeight}
-      margin={MARGIN} label={t('queryAggregationCharts:axisValue')} />
+      margin={margin} label={secondary === null ? t('queryAggregationCharts:axisValue')
+        : t('queryAggregationCharts:axisValueLeft', { measure: truncate(axes.left) })} />
     {chart.bars.map((bar) => <Bar key={bar.row} className="qac-bar" data-row={bar.row} data-precise={bar.precise}
-      x={x(bar.slot) ?? 0} y={Math.min(zero, y(bar.value))} width={x.bandwidth()}
+      x={x(bar.slot) ?? 0} y={Math.min(zero, y(bar.value))} width={barWidth}
       height={Math.abs(zero - y(bar.value))}>
-      <title>{tooltip(bar)}</title>
+      <title>{secondary ? `${axes.left} ${tooltip(bar)}` : tooltip(bar)}</title>
     </Bar>)}
+    {secondary && secondaryY ? <>
+      <ValueAxis side="right" grid={false} position={(value) => secondaryY(value)} ticks={secondaryY.ticks(5)}
+        innerWidth={innerWidth} innerHeight={innerHeight} margin={margin}
+        label={t('queryAggregationCharts:axisValueRight', { measure: truncate(axes.right) })} />
+      {secondary.bars.map((bar) => <Bar key={bar.row} className="qac-bar qac-bar-secondary"
+        data-row={bar.row} data-precise={bar.precise} x={(x(bar.slot) ?? 0) + barWidth + gap}
+        y={Math.min(secondaryY(0), secondaryY(bar.value))} width={barWidth}
+        height={Math.abs(secondaryY(0) - secondaryY(bar.value))}>
+        <title>{`${axes.right} ${tooltip(bar)}`}</title>
+      </Bar>)}
+    </> : null}
     <g aria-hidden="true">
       {chartAxisSlots(chart.slots).map((slot) => <text key={slot} className="qac-tick" textAnchor="middle"
         x={(x(slot) ?? 0) + x.bandwidth() / 2} y={innerHeight + 16}>{truncate(chart.slotLabels[slot] ?? '')}</text>)}
@@ -161,6 +181,6 @@ function LineChartView({ chart, label, axes }: { chart: LineChart; label: string
 export function AggregationChartCanvas({ chart, label, axes }: {
   chart: PlottableChart; label: string; axes: Record<'left' | 'right', string>;
 }) {
-  return chart.kind === 'bars' ? <BarChartView chart={chart} label={label} />
+  return chart.kind === 'bars' ? <BarChartView chart={chart} label={label} axes={axes} />
     : <LineChartView chart={chart} label={label} axes={axes} />;
 }

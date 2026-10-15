@@ -74,6 +74,10 @@ export interface ChartMeasureSeries {
   readonly plotted: number;
 }
 
+export interface ChartMeasureBars extends Omit<ChartMeasureSeries, 'series'> {
+  readonly bars: readonly ChartBar[];
+}
+
 interface ChartBase {
   readonly aggregation: string;
   readonly aggregationType: string;
@@ -95,6 +99,7 @@ export type PlottedChart =
     readonly slots: number;
     readonly slotLabels: readonly string[];
     readonly bars: readonly ChartBar[];
+    readonly secondary: ChartMeasureBars | null;
   })
   | (ChartBase & {
     readonly kind: 'line';
@@ -109,7 +114,8 @@ export type PlottedChart =
 export type AggregationChartResult =
   | {
     readonly ok: false;
-    readonly code: 'unplottable' | 'unknownMeasure' | 'unknownSecondary' | 'secondarySame' | 'secondaryUnsupported';
+    readonly code: 'unplottable' | 'unknownMeasure' | 'unknownSecondary' | 'secondarySame' | 'secondaryUnsupported'
+      | 'valueDomainOutOfRange' | 'secondaryDomainOutOfRange';
   }
   | {
     readonly ok: false;
@@ -264,6 +270,11 @@ function extentOf(values: readonly ChartValue[]): { readonly min: number; readon
   return { min: Math.min(...list), max: Math.max(...list) };
 }
 
+function finiteValueSpan(values: readonly ChartValue[]): boolean {
+  const domain = chartValueDomain(extentOf(values));
+  return Number.isFinite(domain.max - domain.min);
+}
+
 function measureNotices(measure: ChartMeasure, imprecise: number): ChartNotice[] {
   const notices: ChartNotice[] = [];
   if (measure.type === 'cardinality') notices.push('approximate');
@@ -362,9 +373,22 @@ export function buildAggregationChart(
   });
 
   if (entry.type === 'terms') {
-    if (second) return { ok: false, code: 'secondaryUnsupported' };
     const bars = plotTerms(selected, entry.buckets);
     if (bars.items.length === 0) return refused(bars.skipped);
+    if (!finiteValueSpan(bars.items)) return { ok: false, code: 'valueDomainOutOfRange' };
+    let secondaryBars: ChartMeasureBars | null = null;
+    if (second) {
+      const other = plotTerms(second, entry.buckets);
+      if (other.items.length === 0) {
+        return { ok: false, code: 'secondaryNoValues', buckets: entry.buckets.length, skipped: other.skipped };
+      }
+      if (!finiteValueSpan(other.items)) return { ok: false, code: 'secondaryDomainOutOfRange' };
+      secondaryBars = {
+        measure: second, valueExtent: extentOf(other.items), bars: other.items,
+        skipped: other.skipped, notices: measureNotices(second, other.imprecise),
+        impreciseCount: other.imprecise, plotted: other.items.length,
+      };
+    }
     const notices = measureNotices(selected, bars.imprecise);
     if (entry.docCountError.raw === '-1') notices.push('errorUnknown');
     else if (entry.docCountError.kind === 'missing') notices.push('errorNotReported');
@@ -376,6 +400,7 @@ export function buildAggregationChart(
       chart: {
         ...plotBase(entry, selected, bars, notices), kind: 'bars',
         slots: entry.buckets.length, slotLabels: entry.buckets.map(bucketLabel), bars: bars.items,
+        secondary: secondaryBars,
       },
     };
   }
@@ -384,6 +409,7 @@ export function buildAggregationChart(
   const positions = keys.flatMap((key) => (typeof key === 'string' ? [] : [key.value]));
   const first = plotHistogram(selected, entry.buckets, keys);
   if (first.items.length === 0) return refused(first.skipped);
+  if (!finiteValueSpan(first.items)) return { ok: false, code: 'valueDomainOutOfRange' };
   const notices = measureNotices(selected, first.imprecise);
   notices.push('bucketStarts');
   if (first.skipped.length > 0) notices.push('sparseSeries');
@@ -393,6 +419,7 @@ export function buildAggregationChart(
     if (other.items.length === 0) {
       return { ok: false, code: 'secondaryNoValues', buckets: entry.buckets.length, skipped: other.skipped };
     }
+    if (!finiteValueSpan(other.items)) return { ok: false, code: 'secondaryDomainOutOfRange' };
     const otherNotices = measureNotices(second, other.imprecise);
     if (other.skipped.length > 0) otherNotices.push('sparseSeries');
     secondarySeries = {

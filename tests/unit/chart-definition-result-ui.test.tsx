@@ -72,10 +72,17 @@ describe('saving an executed aggregation through the merged library', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Aggregations' }));
     fireEvent.click(screen.getByRole('button', { name: 'Show chart' }));
     fireEvent.change(screen.getByRole('combobox', { name: 'Plotted measure' }), { target: { value: 'mean' } });
+    fireEvent.click(screen.getByRole('switch', { name: i18n.t('queryAggregationCharts:dualToggle') }));
+    expect(screen.getByRole('combobox', { name: 'Right axis measure' })).toHaveValue('doc_count');
     fireEvent.click(screen.getByRole('button', { name: i18n.t('queryCharts:saveFromResults') }));
     expect(screen.getByLabelText(enChartDefinitions.resultDefinition)).toHaveTextContent('"measure": "mean"');
     expect(screen.getByLabelText(enChartDefinitions.resultDefinition)).not.toHaveTextContent('secondary');
     expect(f.controller.save).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('checkbox', { name: enChartDefinitions.resultReviewed }));
+    fireEvent.click(screen.getByRole('button', { name: enChartDefinitions.saveAction }));
+    await waitFor(() => expect(f.controller.save).toHaveBeenCalledTimes(1));
+    expect(f.controller.save.mock.calls[0]![0]).toMatchObject({ measure: 'mean' });
+    expect(f.controller.save.mock.calls[0]![0]).not.toHaveProperty('secondary');
   });
 
   it('invalidates literal review when the name changes and blocks a conflicted library', () => {

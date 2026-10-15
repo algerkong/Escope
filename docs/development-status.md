@@ -93,7 +93,7 @@
 - C02 第二批精确版本/部署/许可报告与有界会话缓存、Q09 本地 Data Views、字段格式和有界 runtime fields 也已接入；
 - Q02 有界时间、单元格筛选草稿、服务器排序、布尔/nested 组、启停、会话绑定及平面/mapped nested/runtime 固定已接入；
 - F01/R03 最小开发依赖安全子项、Q03 Monaco 编辑器/有界补全两批和 Q05 已加载文档对比/列窗口化/结构化详情/字段能力证据已通过自动化；
-- Q06 基础图表、聚合构建和 Q06a 保存/交换已合并，折线第二度量的历史交付保留；下一批继续 terms 第二度量，保留统计范围、精度与部分状态，不增加 Dashboard 或自动执行。其余六方向任务保持开放。
+- Q06 基础图表、聚合构建和 Q06a 保存/交换已合并，折线与 terms 第二度量均已完成有界交付；下一批参考线/注释。统计范围、精度、部分状态与会话限制保持，不增加 Dashboard 或自动执行。最新前端 209 项与 Rust storage 57 项见 [terms 双轴 QA](query-aggregation-bars-dual-axis-qa.md)；其余六方向任务保持开放。
 - 真实环境、系统密钥库、原生导出及跨平台验收分开记录。
 - 依赖审计：2026-10-10 依赖批次的 `npm audit` 与 `npm audit --omit=dev` 均为 0；限定 Tailwind CLI 下 watcher 2.5.1 → 2.5.6，移除 micromatch/braces 链，source-map-js 1.2.1 → 1.2.2。随后 Monaco 0.57.0 引入，DOMPurify 锁定修复版本 3.4.16；列窗口化引入固定 react-virtual 3.14.14 / virtual-core 3.18.0，依赖审计持续保持 0。
 

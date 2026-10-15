@@ -183,10 +183,10 @@ describe('dual-axis chart panel', () => {
     expect(positionLabels(view.container)).toHaveLength(CHART_LIMITS.axisLabels);
   });
 
-  it('offers no overlay where the chart kind does not have one', () => {
+  it('offers terms overlay but leaves the second measure off until explicitly enabled', () => {
     const view = panel(terms('{"key":"a","doc_count":1,"total":{"value":2}}'));
-    expect(view.queryByRole('switch', { name: enQueryAggregationCharts.dualToggle })).toBeNull();
-    expect(view.container.querySelector('.qac-series-secondary')).toBeNull();
+    expect(view.getByRole('switch', { name: enQueryAggregationCharts.dualToggle })).not.toBeChecked();
+    expect(view.container.querySelector('.qac-bar-secondary')).toBeNull();
   });
 
   it('switches language without redrawing any plotted value', async () => {

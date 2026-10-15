@@ -26,3 +26,7 @@
 @media (max-width: 520px) {
   .qaggb-save-fields { grid-template-columns: minmax(0, 1fr); }
 }
+.chart-definition-result-name { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.chart-definition-result-preview { max-height: 320px; overflow: auto; }
+.chart-definition-result-review { display: flex; align-items: flex-start; gap: 7px; }
+.chart-definition-result-review input { flex: 0 0 auto; }

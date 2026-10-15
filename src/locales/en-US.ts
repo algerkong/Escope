@@ -121,6 +121,8 @@ export const en = {
     dataViewConnectionMissing: 'The selected connection was removed. The data view was not saved.',
     pinnedFilterConflict: 'Pinned filters changed. Reload and review them before saving again.',
     pinnedFilterConnectionMissing: 'The selected connection was removed. The filter set was not saved.',
+    savedChartConflict: 'The saved chart library changed. Reload and review it before saving again.',
+    savedChartConnectionMissing: 'The selected connection was removed. The chart definition was not saved.',
     exchangeInvalid: 'Invalid query-definition file.', exchangeVersion: 'Unsupported exchange format version.',
     exchangeTooLarge: 'The definition exchange exceeds its local limit.', exchangeSensitive: 'Credential-like content is not allowed in definition exchange.',
     exchangeMappingRequired: 'Map every source connection explicitly.', exchangeTargetChanged: 'A mapped local connection changed.',

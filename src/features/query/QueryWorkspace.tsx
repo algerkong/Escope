@@ -1,5 +1,5 @@
 import { Bookmark, Braces, ChartColumnBig, Clock3, Database, FileCheck2, FileDown, History, Layers, ListOrdered, ListTree, LoaderCircle, Pin, Play, Plus, Redo2, Save, Search, Settings, ShieldCheck, Sigma, Star, TriangleAlert, Undo2, Variable } from 'lucide-react';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ConnectionProfile } from '../../domain/connection';
 import type { AiChatBackend } from '../../domain/ai-chat';
@@ -8,6 +8,7 @@ import { createQuery, matchesQueryDraft, updateWorkspaceDocument, type Execution
 import { selectDataView } from '../../domain/data-views';
 import { IconButton, Modal } from '../../components/controls';
 import { PanelResizeHandle } from '../../components/PanelResizeHandle';
+import { ResultsResizeHandle } from '../../components/ResultsResizeHandle';
 import { PANEL_DEFAULTS } from '../../domain/workspace-panels';
 import { DATA_PREVIEW_DSL } from '../../domain/query-pagination';
 import type { SettingsRoute } from '../../app/routes';
@@ -60,6 +61,10 @@ import { useChartDefinitions } from './useChartDefinitions';
 import { createChartDefinitionService, type ChartDefinitionService } from '../../services/chart-definitions';
 import type { ChartDefinitionSelection } from '../../domain/chart-definitions';
 import { PinFiltersDialog, PinnedFiltersDialog } from './PinnedFiltersDialog';
+import { createSavedChartService, type SavedChartService } from '../../services/saved-charts';
+import { useSavedCharts } from './useSavedCharts';
+import { SavedChartsDialog } from './SavedChartsDialog';
+import { legacyChartDefinition } from '../../domain/chart-definition-sources';
 import { QueryDslEditor, type QueryDslEditorHandle, type QueryEditorHistory } from './editor/QueryDslEditor';
 import { QueryEditorModels } from './editor/query-editor-models';
 import type { QueryCompletionContext } from '../../domain/query-completions';
@@ -106,13 +111,17 @@ interface Props {
   recovery?: WorkspaceRecoveryController;
   dataViewService?: DataViewService;
   pinnedFilterService?: PinnedFilterService;
+  savedChartService?: SavedChartService;
   chartDefinitionService?: ChartDefinitionService;
   chartExchangeService?: ChartDefinitionExchangeService;
 }
 
 export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResults, toggleAI, onSettings, updateQuery, selectTab, openIndex, addQuery, closeTab, backend = desktopQueryBackend, modelService = desktopModelService, aiBackend, canQuery, active = true, onCommandReady, libraryService = defaultQueryLibraryService, snapshotExportService = desktopSnapshotExportService, exchangeService: suppliedExchangeService, restoreQuery, recovery, dataViewService: suppliedDataViewService, pinnedFilterService: suppliedPinnedFilterService,
-  chartDefinitionService: suppliedChartDefinitionService, chartExchangeService: suppliedChartExchangeService }: Props) {
+  savedChartService: suppliedSavedChartService, chartDefinitionService: suppliedChartDefinitionService, chartExchangeService: suppliedChartExchangeService }: Props) {
   const { t } = useTranslation();
+  const effectiveSavedChartService = useMemo(() => suppliedSavedChartService ?? createSavedChartService(), [suppliedSavedChartService]);
+  const savedCharts = useSavedCharts(effectiveSavedChartService);
+  const [chartsOpen, setChartsOpen] = useState(false);
   const [closing, setClosing] = useState<QueryDocument | null>(null);
   const [checked, setChecked] = useState<Record<string, { source: string; error: QueryDslError | null }>>({});
   const [editorHistory, setEditorHistory] = useState<QueryEditorHistory | null>(null);
@@ -123,6 +132,8 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const [visualDrafts, setVisualDrafts] = useState<Record<string, VisualEditorDraft>>({});
   const startupView = useRef(preferences.startView);
   const [homeView, setHomeView] = useState(startupView.current);
+  const [resultsMaximized, setResultsMaximized] = useState(false);
+  const [resultsHeight, setResultsHeight] = useState<number | null>(null);
   const editor = useRef<QueryDslEditorHandle | null>(null);
   const panel = useRef<HTMLDivElement>(null);
   const scroll = useRef(new Map<string, number>());
@@ -178,6 +189,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
   const reviewingSort = sortSource?.query.id === queryId;
   const reviewingBuild = buildSource?.query.id === queryId;
   const showingQuery = tab?.kind === 'query';
+  const expandedResults = showingQuery && resultsMaximized;
   const recoveryTab = recovery?.workspace.tabs.find((item) => item.document.id === queryId);
   const editorMode = recoveryTab?.editorMode ?? editorModes[queryId] ?? 'dsl';
   const visualDraft = recoveryTab?.visualDraft ?? visualDrafts[queryId];
@@ -507,10 +519,20 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
       </div>
       <div ref={panel} id="workspace-panel" role="tabpanel" aria-labelledby={workspaceTabId(state.activeTabId)}
         className="workspace-panel" data-kind={tab?.kind ?? 'home'}
+        data-results-maximized={showingQuery && resultsMaximized}
+        data-results-resized={showingQuery && !resultsMaximized && resultsHeight !== null}
+        style={{
+          ...(showingQuery && !resultsMaximized && resultsHeight
+            ? ({
+                '--results-height': `${resultsHeight}px`,
+                '--results-flex': `0 0 ${resultsHeight}px`,
+              } as CSSProperties)
+            : {}),
+        }}
         onScroll={(event) => {
           scroll.current.set(queryId, event.currentTarget.scrollTop);
         }}>
-      {showingQuery ? <section className="query-editor-section">
+      {showingQuery && !resultsMaximized ? <section className="query-editor-section">
         <div className="query-heading"><div className="query-title-block">
           <input className="query-name" aria-label={t('query:name')} value={query.name} placeholder={t('query:title')}
             onChange={(event) => patchQuery({ name: event.target.value })} maxLength={120} />
@@ -596,13 +618,13 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
             updateQuery(query.id, definition ? { index: definition.index, dataView: selectDataView(definition) } : { dataView: null }, query);
           }} />
         {query.timeRange ? <TimeRangeSummary time={query.timeRange} managed /> : null}
-        <div hidden={editorMode !== 'visual'}>
+        <div hidden={editorMode !== 'visual'} className="query-editor-body">
           {editorMode === 'visual' || editorModes[query.id] !== undefined ? <VisualQueryEditor key={query.id} rawDsl={query.dsl}
             fields={queryFields.status === 'ready' ? queryFields.data.fields : []}
             draft={visualDraft ?? undefined} onDraftChange={updateVisualDraft}
             onChange={(dsl) => patchQuery({ dsl })} onValidityChange={updateVisualValidity} /> : null}
         </div>
-        <div hidden={editorMode !== 'dsl'}>
+        <div hidden={editorMode !== 'dsl'} className="query-editor-body">
           <QueryDslEditor ref={editor} models={editorModels} queryId={queryId} value={query.dsl} preferences={preferences}
             active={active && editorMode === 'dsl'} readOnly={Boolean(restoring)} diagnostic={currentCheck?.error ?? null}
             completions={completions}
@@ -619,14 +641,25 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
           {currentCheck && !currentCheck.error ? <span role="status">{t('query:dslValid')}</span> : null}
           <span className="status-spacer" /><span>JSON</span><span>UTF-8</span></div>
       </section> : null}
-      {hasPendingFilters && pendingFilters ? <QueryFilterDraftBar count={pendingFilters.filters.length}
+      {!expandedResults && hasPendingFilters && pendingFilters ? <QueryFilterDraftBar count={pendingFilters.filters.length}
         enabled={pendingFilters.filters.filter(queryFilterEnabled).length}
         onReview={() => reviewFilters()}
         onDiscard={() => discardFilters(query.id)} />
-        : boundFilters ? <QueryFilterBindingBar count={boundFilters.filters.length} enabled={boundFilters.filters.filter(queryFilterEnabled).length}
+        : !expandedResults && boundFilters ? <QueryFilterBindingBar count={boundFilters.filters.length} enabled={boundFilters.filters.filter(queryFilterEnabled).length}
           conflict={!matchesQueryFilterBinding(boundFilters, query, endpoint)}
           onReview={() => reviewFilters()} onDetach={() => setFilterDetach(boundFilters)} /> : null}
-      {'snapshot' in execution && execution.snapshot.timeRange ? <TimeRangeSummary time={execution.snapshot.timeRange} /> : null}
+      {!expandedResults && 'snapshot' in execution && execution.snapshot.timeRange ? <TimeRangeSummary time={execution.snapshot.timeRange} /> : null}
+      {showingQuery && !resultsMaximized ? (
+        <ResultsResizeHandle
+          label={t('queryLive:resizeResults')}
+          height={resultsHeight}
+          minHeight={200}
+          maxHeight={Math.max(200, (panel.current?.clientHeight ?? 600) - 160)}
+          active={active && showingQuery}
+          onResize={(h) => setResultsHeight(h)}
+          onReset={() => setResultsHeight(null)}
+        />
+      ) : null}
       <QueryResults kind={showingQuery ? 'query' : 'preview'} query={query} entry={entry}
         available={available} stale={stale} endpointChanged={endpointChanged} documentIds={documentIds} active={active} wrapJson={preferences.wrapJson}
         onFilterCell={canFilterCell ? openCellFilter : undefined}
@@ -650,7 +683,10 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
           onConnections={() => onSettings('connections')}>{controls}</DataPreview>}
         onCancel={() => cancel(query.id)} onRun={() => { if (canRun) void runQuery(); }}
         onViewChange={(view) => tab ? updateQuery(query.id, { resultView: view }) : setHomeView(view)}
-        onLoadMore={() => { void loadMore(query); }} />
+        onLoadMore={() => { void loadMore(query); }}
+        chartDefinitionsController={target ? chartDefinitions : undefined}
+        maximized={showingQuery ? resultsMaximized : undefined}
+        onToggleMaximize={showingQuery ? () => setResultsMaximized((v) => !v) : undefined} />
       </div>
     </main>
     <PanelResizeHandle side="ai" label={t('query:resizeAI')} controls="workspace-ai"
@@ -828,6 +864,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
       onClose={() => setHistoryOpen(false)} onRestore={restoreQuery} /> : null}
     {chartDefinitionsOpen ? <ChartDefinitionsDialog library={chartDefinitions} kind={chartDefinitionService.kind}
       profiles={profiles} activeTarget={active && showingQuery ? { connectionId: query.connectionId, index: query.index } : null}
+      onLegacyLibrary={() => { setChartDefinitionsOpen(false); setChartsOpen(true); }}
       onReuse={(definition) => {
         if (!target || !active || restoring || tab?.kind !== 'query') return;
         if (definition.connectionId !== query.connectionId || definition.index !== query.index.trim()) return;
@@ -853,5 +890,26 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
       <div className="dialog-actions"><button className="secondary" onClick={() => setClosing(null)}>{t('cancel')}</button>
         <button className="danger" onClick={() => { if (closing) closeDocument(closing.id); setClosing(null); }}>{t('query:discard')}</button></div>
     </Modal>
+    {chartsOpen && active ? (
+      <SavedChartsDialog
+        open={chartsOpen}
+        onClose={() => setChartsOpen(false)}
+        currentIndex={query.index}
+        controller={savedCharts}
+        legacy
+        canApplyChart={(chart) => Boolean(active && showingQuery && target && !restoring && !saveBlockedByVisual
+          && !hasPendingFilters && chart.connectionId === query.connectionId && chart.index === query.index.trim()
+          && legacyChartDefinition(chart))}
+        onApplyChart={(chart) => {
+          if (!target || !active || restoring || !showingQuery || hasPendingFilters || saveBlockedByVisual
+            || chart.connectionId !== query.connectionId || chart.index !== query.index.trim()) return;
+          const definition = legacyChartDefinition(chart);
+          if (!definition) return;
+          setChartsOpen(false);
+          setBuildSource({ query: structuredClone(query), endpoint: target.endpoint,
+            seed: freezeChartDefinitionSelection(selectChartDefinition(definition)) });
+        }}
+      />
+    ) : null}
   </div>;
 }

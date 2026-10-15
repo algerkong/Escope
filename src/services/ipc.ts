@@ -5,6 +5,7 @@ export type ErrorCode = 'invalidInput' | 'invalidName' | 'invalidEndpoint' | 'in
   | 'invalidIndex' | 'invalidQuery' | 'invalidRuntimeFields' | 'duplicateRequest' | 'diagnosticsStale'
   | 'storageUnavailable' | 'workspaceConflict' | 'libraryConflict' | 'dataViewConflict' | 'dataViewConnectionMissing'
   | 'pinnedFilterConflict' | 'pinnedFilterConnectionMissing'
+  | 'savedChartConflict' | 'savedChartConnectionMissing'
   | 'chartDefinitionConflict' | 'chartDefinitionConnectionMissing'
   | 'exchangeInvalid' | 'exchangeVersion' | 'exchangeTooLarge' | 'exchangeSensitive'
   | 'exchangeMappingRequired' | 'exchangeTargetChanged' | 'importFailed'

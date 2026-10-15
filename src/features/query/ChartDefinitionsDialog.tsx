@@ -1,4 +1,4 @@
-import { Copy, FileDown, FileUp, LoaderCircle, Pencil, RefreshCw, Repeat2, Save, Trash2 } from 'lucide-react';
+import { Archive, Copy, FileDown, FileUp, LoaderCircle, Pencil, RefreshCw, Repeat2, Save, Trash2 } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { IconButton, Modal } from '../../components/controls';
@@ -15,6 +15,7 @@ interface Props {
   activeTarget: { connectionId: string | null; index: string } | null;
   onReuse: (definition: ChartDefinition) => void;
   onExchange: (mode: 'export' | 'import') => void;
+  onLegacyLibrary?: () => void;
   onClose: () => void;
 }
 
@@ -25,7 +26,7 @@ const shapeLabel = (definition: ChartDefinition, noGroup: string) => definition.
   ? `${definition.draft.group.type} · ${definition.draft.metrics.length}`
   : `${noGroup} · ${definition.draft.metrics.length}`;
 
-export function ChartDefinitionsDialog({ library, kind, profiles, activeTarget, onReuse, onExchange, onClose }: Props) {
+export function ChartDefinitionsDialog({ library, kind, profiles, activeTarget, onReuse, onExchange, onLegacyLibrary, onClose }: Props) {
   const { t, i18n } = useTranslation();
   const [panel, setPanel] = useState<Panel>({ kind: 'list' });
   const [name, setName] = useState('');
@@ -69,6 +70,8 @@ export function ChartDefinitionsDialog({ library, kind, profiles, activeTarget, 
             title={t('chartDefinitions:exportDefinitions')} onClick={() => onExchange('export')} />
           <IconButton icon={FileUp} label={t('chartDefinitions:importDefinitions')} disabled={!canEdit}
             title={t('chartDefinitions:importDefinitions')} onClick={() => onExchange('import')} />
+          {onLegacyLibrary ? <IconButton icon={Archive} label={t('chartDefinitions:legacyLibrary')}
+            onClick={onLegacyLibrary} /> : null}
         </div>
         {atLimit ? <span className="chart-definitions-bound" role="status">{t('chartDefinitions:limit', { count: MAX_CHART_DEFINITIONS })}</span> : null}
         {library.status === 'ready' && entries.length === 0

@@ -86,6 +86,9 @@ export const enLive = {
   pitExpired: 'The search snapshot expired or is unavailable. Run the query again to start a new one.',
   loadedPages_one: '{{count}} page loaded', loadedPages_other: '{{count}} pages loaded',
   rawLatestPage: 'Latest response page',
+  maximizeResults: 'Maximize results (full height)',
+  restoreResults: 'Restore results height',
+  resizeResults: 'Resize query results panel height',
 } as const;
 
 export const zhLive: Record<keyof typeof enLive, string> = {
@@ -172,4 +175,7 @@ export const zhLive: Record<keyof typeof enLive, string> = {
   pitExpired: '搜索快照已过期或不可用，请重新执行查询以开启新快照。',
   loadedPages_one: '已加载 {{count}} 页', loadedPages_other: '已加载 {{count}} 页',
   rawLatestPage: '最新响应页',
+  maximizeResults: '占满高度（展开结果）',
+  restoreResults: '还原高度（收起结果）',
+  resizeResults: '调整查询结果面板高度',
 };

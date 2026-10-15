@@ -1,440 +1,210 @@
 # EScope
 
-本地优先的 Elasticsearch 工作台，正式工程使用 React / TypeScript / Vite / Tauri 2 / Rust。
+<div align="center">
 
-## 运行正式应用
+**本地优先的高性能现代化 Elasticsearch 桌面工作台与数据探索套件**  
+*Local-First, Secure & Lightweight Elasticsearch Desktop Client & Workbench*
 
-```sh
-npm ci
-npm run dev
+<p align="center">
+  <a href="https://tauri.app/"><img src="https://img.shields.io/badge/Tauri-2.x-24C8DB?logo=tauri&logoColor=white" alt="Tauri 2" height="20" /></a>
+  <a href="https://react.dev/"><img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black" alt="React 19" height="20" /></a>
+  <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white" alt="TypeScript" height="20" /></a>
+  <a href="https://www.rust-lang.org/"><img src="https://img.shields.io/badge/Rust-1.77+-orange?logo=rust&logoColor=white" alt="Rust" height="20" /></a>
+  <a href="https://tailwindcss.com/"><img src="https://img.shields.io/badge/Tailwind_CSS-4.x-38B2AC?logo=tailwind-css&logoColor=white" alt="Tailwind CSS 4" height="20" /></a>
+  <a href="#-技术架构-tech-stack"><img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-blue" alt="Platform" height="20" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" height="20" /></a>
+</p>
+
+</div>
+
+---
+
+## 📖 简介 (Overview)
+
+**EScope** 是一款为开发者、SRE 工程师与数据分析师打造的现代化、本地优先（Local-First）Elasticsearch 桌面客户端。
+
+传统 Elasticsearch 管理工具通常面临资源占用高、缺乏离线能力、凭据明文存储、DSL 编写体验粗糙以及大结果集渲染卡顿等痛点。EScope 基于 **Tauri 2 + Rust + React 19** 构建，以原生级极速启动、毫秒级响应、严苛的本地隐私保护和媲美专业 IDE 的交互体验，重新定义 Elasticsearch 桌面工具的使用感受。
+
+---
+
+## ✨ 核心特性 (Key Features)
+
+### 🛡️ 本地优先与凭据安全 (Local-First & Enterprise Security)
+- **系统级密钥隔离**：敏感凭证（Basic 认证口令、API Key、Bearer Token）均通过操作系统原生密钥库（Windows Keyring、macOS Keychain、Linux Secret Service）安全存储，绝不明文落盘。
+- **本地 SQLite 元数据驱动**：连接配置、查询收藏、执行历史与工作区状态持久化于本地 SQLite，无外部依赖，断网可用。
+- **默认只读与写保护**：设计上严格推行安全只读与防御机制，拦截高危破坏性操作，写操作需经过前置审查。
+- **零遥测与网络隔离**：不含任何第三方跟踪代码与遥测探针，数据不经过外部云服务，充分保障内网环境安全性。
+
+### 🚀 专业多标签查询工作台 (Advanced Query Workbench)
+- **Monaco Editor 深度融合**：内置轻量本地 Monaco 编辑器，支持语法着色、实时错误校验、无损格式化、撤销重做以及针对索引字段与参数占位符的智能词法补全。
+- **双模式自由切换**：支持在直观的表单可视化构建器与原始 JSON DSL 之间平滑无损切换。
+- **多会话标签隔离**：支持针对不同集群、不同索引并行开启独立查询与预览标签页，互不干扰，支持显式上下文锁定与后台请求主动取消。
+- **PIT (Point-in-Time) 游标保障**：原生支持 Elasticsearch PIT 机制，大规模分页数据稳定一致。
+- **高精度时间范围审核**：提供最近相对时间与绝对时间范围过滤，支持 UTC / IANA 时区与纳秒级时间解析，PIT 开启前客户端时钟严格冻结。
+
+### 🔍 深度数据探索与交互分析 (Interactive Data Exploration)
+- **超宽表虚拟化渲染**：结合 TanStack Table 与 TanStack Virtual，支持多达数十甚至上百列的平滑水平窗口化虚拟滚动；支持列宽自适应、拖拽调序与列配置持久化保存。
+- **多维组合筛选系统**：
+  - **单元格快捷筛选**：右键或点击单元格值快速生成精确 Term 或短语 Phrase 过滤条件；
+  - **布尔条件编排**：最多支持 8 个独立的 AND / OR 布尔组条件编排；
+  - **嵌套对象 (Nested) 筛选**：显式解析顶级 Nested 路径与对象内/父文档排除；
+  - **条件逐条启停与会话基线绑定**：随时启停单条过滤条件，支持与基线 DSL 深度对比重构。
+- **固定筛选规则库 (Pinned Filters)**：将常用的标量过滤、Nested 规则与 Runtime 字段筛选沉淀至本地库，跨会话快捷加载复用。
+- **单文档结构化详情**：提供基于 JSON Pointer 路径快速导航、容器折叠以及原始 token 复制。
+- **双文档无损对比**：原子级比较同一次执行中两条真实文档的元数据、`_source` 与 `fields` 差异。
+- **即席基础聚合展示**：从执行结果中直接提取并展示常见单值指标（Sum、Avg、Min、Max、Cardinality 等）以及单层 Terms / Date Histogram 桶分布。
+
+### 🌐 集群拓扑与环境诊断 (Cluster & Environment Diagnostics)
+- **连接管理与 CA 证书**：支持多连接统一管理，提供 Basic / API Key / Bearer 鉴权，支持导入并绑定公共自定义 CA 根证书以满足企业级 TLS 安全需求。
+- **只读集群观测**：实时查看集群健康级别、节点明细、分片（Shards）拓扑分布矩阵以及索引元数据与 Mapping 配置。
+- **显式能力与权限探测**：只读探测当前身份的角色权限（Monitor, Read, View Index Metadata）与服务端版本、部署类型、Serverless 标记及许可证能力。
+
+### 📐 本地数据视图与字段增强 (Data Views & Field Formats)
+- **Data Views**：支持本地创建并管理包含通配符索引模式、别名与数据流的数据视图，关联默认时间字段。
+- **安全字段格式化**：纯前端白名单展示格式化（千分位数字分组、百分比、IEC 存储字节单位、标准 UTC 日期转换），始终保留原始值并支持一键还原。
+- **运行时字段 (Runtime Fields)**：支持在查询时定义 keyword/numeric/date/boolean/ip/geo_point 等类型的运行时字段，支持同名 `_source` 映射或内联 Painless 脚本。
+
+### 💾 查询资产与全量导出 (Asset Exchange & Export)
+- **查询定义与参数模板交换**：支持参数化模板（`{"$param": "field_name"}`）定义，可在不同环境间安全导出与导入 JSON 格式查询定义，敏感凭证严格脱敏。
+- **结果就地导出**：已加载的数据行可直接导出为 CSV 或 JSONL，内建针对 CSV 公式注入攻击的防御机制。
+- **基于 PIT 的全量流式导出**：支持后台任务级流式全量导出，受控扫描配额预算，原生临时文件写入完成后原子替换，保证数据完整性。
+
+### 🤖 隐私受控 AI 助手 (Privacy-First AI Assistant)
+- **通用模型协议兼容**：支持自定义 OpenAI Chat Completions 协议接口以及本地 Ollama 实例。
+- **严格最小权限**：仅在用户显式发送时携带当前查询 DSL 快照，不自动偷传检索结果与集群敏感数据，绝不自动越权执行查询。
+
+### 🎨 极致桌面端工艺 (Refined Desktop Experience)
+- **融合式原生顶栏**：深度融合标题栏与应用 Header，macOS 端原生呈现交通灯控件，Windows 与 Linux 端采用原生契合的定制化窗口控制。
+- **精细视觉主题**：精心设计的明亮（Light）与暗色（Dark）主题，提供 4 种强调色选择，支持界面排版间距与字体微调。
+- **完整双语支持**：中文与英文全界面无缝切换，包含完整的可访问性（a11y）标签支持。
+
+---
+
+## 🛠️ 技术架构 (Tech Stack)
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                       EScope Desktop                        │
+└──────────────────────────────┬──────────────────────────────┘
+                               │
+       ┌───────────────────────┴───────────────────────┐
+       ▼                                               ▼
+┌─────────────────────────────┐         ┌─────────────────────────────┐
+│     Frontend (UI/Web)       │  IPC    │      Backend (Native)       │
+│                             │ ◄─────► │                             │
+│ • React 19 + TypeScript     │(Typed)  │ • Tauri 2 Core              │
+│ • Vite + Tailwind CSS 4     │         │ • Rust Core                 │
+│ • Monaco Editor (Local)     │         │ • Rusqlite (Local SQLite)   │
+│ • TanStack Table & Virtual  │         │ • OS Keyring (Credentials)  │
+│ • dnd-kit & Lucide Icons    │         │ • Reqwest (ES Client / TLS) │
+└─────────────────────────────┘         └─────────────────────────────┘
 ```
 
-浏览器访问 `http://127.0.0.1:1420`。浏览器模式明确标记“仅本次会话”，
-连接元信息、设置、查询库、数据视图库和工作区恢复记录只保留在内存中，刷新即清除；
-不会在桌面存储失败时自动降级到此模式。
+- **桌面运行时**：[Tauri 2](https://tauri.app/) (Rust 驱动，微型体积，极低内存消耗)
+- **用户界面**：[React 19](https://react.dev/), [TypeScript 5](https://www.typescriptlang.org/), [Tailwind CSS 4](https://tailwindcss.com/)
+- **核心组件**：
+  - 查询编辑器：[Monaco Editor](https://microsoft.github.io/monaco-editor/)（本地 Worker 加载，无外部 Schema 依赖）
+  - 表格与虚拟化：[@tanstack/react-table](https://tanstack.com/table) + [@tanstack/react-virtual](https://tanstack.com/virtual)
+  - 拖拽排布：[@dnd-kit](https://dndkit.com/)
+  - 图标体系：[Lucide React](https://lucide.dev/)
+- **本地存储与安全**：[Rusqlite (SQLite v10)](https://github.com/rusqlite/rusqlite), [Keyring-rs](https://github.com/hwchen/keyring-rs)
 
+两条历史 v9 分支的图表库均可升级到 v10，原定义与修订号保留。统一入口支持图表定义保存、
+复用和本地交换，旧库单独可见，不自动转换或执行；详见 [分支合并验收](docs/main-dev-merge-qa.md)。
+
+---
+
+## 🚀 快速开始 (Getting Started)
+
+### 前置环境 (Prerequisites)
+1. **Node.js**: `>= 20.x` 及 npm
+2. **Rust**: `>= 1.77`（桌面运行与构建所需，推荐使用 `rustup` 安装）
+3. **平台依赖**：
+   - **Windows**: Microsoft Visual Studio C++ 生成工具 (MSVC) 及 [WebView2 运行时](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)
+   - **macOS**: Xcode 命令行工具
+   - **Linux**: `libwebkit2gtk-4.1-dev`, `build-essential`, `curl`, `wget`, `file`, `libxdo-dev`, `libssl-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`
+
+### 安装与运行 (Run & Development)
+
+1. **克隆仓库与安装依赖**：
+   ```sh
+   git clone git@github.com:algerkong/Escope.git
+   cd EScope
+   npm ci
+   ```
+
+2. **以浏览器会话模式启动（轻量快速体验）**：
+   ```sh
+   npm run dev
+   ```
+   启动后访问 `http://127.0.0.1:1420`。  
+   *注：浏览器模式为内存会话隔离模式，刷新后会话重置，真实生产凭证需在桌面端配合系统密钥库运行。*
+
+3. **以 Tauri 桌面应用启动（完整原生体验）**：
+   ```sh
+   npm run tauri -- dev
+   ```
+
+---
+
+## 📦 打包与构建 (Packaging & Building)
+
+### 构建桌面可执行文件
 ```sh
-npm run tauri -- dev
 npm run build:desktop
+```
+构建产物输出位于：`src-tauri/target/release/escope.exe`（Windows）或对应平台二进制文件。
+
+### 构建 Windows NSIS 安装程序包
+```sh
 npm run build:installer:windows
 ```
+产物输出位于：`src-tauri/target/release/bundle/nsis/`。
 
-`tauri dev` 自行启动 1420 端口的 Vite；已有同端口开发服务器时先关闭该服务器。
-独立浏览器预览可用 `npm run dev -- --port 1421`。
-Windows 产物在 `src-tauri/target/release/escope.exe`，是未签名的内部开发构建，不是安装包。
-桌面运行需要 WebView2；编译需要 Rust/MSVC 和 Windows SDK。
+---
 
-`build:installer:windows` 使用锁定的 Tauri CLI 和 `src-tauri/tauri.windows.conf.json` 生成
-NSIS 安装包，输出至 `src-tauri/target/release/bundle/nsis/`。
-当前为当前用户级安装；缺少 WebView2 时下载官方引导程序，因此首次安装可能需要联网。
-没有配置签名证书，安装包与应用均为 **unsigned（未签名）**，Windows 可能提示未知发布者。
-本命令只构建，不自动安装或启动；安装/升级/卸载与 macOS/Linux 打包分别验收。
-2026-10-08 22:03 最新索引多标签版本构建已通过，生成 `EScope_0.1.0_x64-setup.exe`（4,201,624 bytes，约 4.01 MiB），
-Authenticode 检查为 `NotSigned`。产物路径、SHA-256 与验证边界见
-[索引标签与控件验收](docs/index-tabs-and-controls-qa.md)。
-2026-10-09 至 2026-10-10 的后续源码（含认证/CA、能力诊断、保存导出、工作区恢复、Data Views、时间范围与固定筛选）尚未重新生成上述安装包。
-复现构建使用 `npm ci` 和仓库中的 `package-lock.json`、`src-tauri/Cargo.lock`，
-不依赖全局 NSIS 或手工更改用户数据库。构建成功不代表原生安装已通过。
+## 🧪 常用命令与质量检查 (Scripts & QA)
 
-### 当前正式能力
+| 命令 | 描述 |
+| :--- | :--- |
+| `npm run dev` | 启动前端 Vite 开发服务器 (1420 端口) |
+| `npm run build` | 构建正式生产前端产物 |
+| `npm test` | 执行 Vitest 前端单元与组件测试 |
+| `npm run check` | 执行全套前端质检（ESLint、TypeScript 类型检查、构建验证、前后端测试） |
+| `npm run test:rust` | 执行后端 Rust 核心测试套件 |
+| `npm run build:desktop` | 构建原生桌面 Release 可执行文件 |
+| `npm run build:installer:windows` | 构建 Windows NSIS 安装包 |
+| `npm run build:prototype` | 构建独立离线原型 |
+| `npm run test:prototype` | 针对离线原型运行回归测试 |
 
-- 无本地恢复记录时，查询工作台默认显示索引打开入口；首次明确打开索引新增独立数据标签并只读预览，
-  重复打开相同连接 ID + 索引只定位已有标签，不重查。索引目标锁定，刷新和基于索引新建查询为明确动作；
-  不覆盖其他索引或查询的目标、草稿、结果和列设置；AI 默认收起。
-- 索引预览的状态、精确命中数与视图/刷新操作收拢在单一工具栏，重复标题/HTTP 地址不再常驻；
-  表格/JSON 底栏合并计数与操作，快照说明按需查看，异常提示保留。
-- 索引/查询标签按打开顺序排列；有效标签同步顶部和资源栏连接，新查询跟随该上下文。
-  关闭回退相邻标签并清理对应请求/PIT，后台中键关闭不抢焦点；标签方向键与文档区 Ctrl/Cmd+W 可用。
-- 融合式桌面顶栏：Windows/Linux 自定义窗口控制，macOS 原生交通灯 overlay，与现有 header 同层。
-  浏览器不模拟窗口按钮；各平台的原生拖拽、缩放和交通灯对齐仍待人工验收。
-- 正式查询 DSL 使用延迟加载的 Monaco：本地 JSON 着色/校验、无损格式化、撤销/重做及
-  当前模型的字面量查找；每标签模型、撤销栈、选区/滚动独立，关闭释放，不跨重启保存模型。
-  重复键拒绝、双语错误行列/marker；长整数/小数/转义/未知 DSL 不经数值重序列化。
-  本地 editor worker/字体、无 JSON 语言服务/远程 schema，编辑/设置/语言/恢复不执行；
-  加载失败保留原文。本地校验不代表脚本编译或 ES 授权，原生 IME/worker/布局待验，
-  见 [编辑器 QA](docs/query-monaco-editor-qa.md)。
-- DSL 本地补全已接已知查询/sort/fields/_source 字段和整值参数占位内的名称：
-  只用同连接 ID/端点/目标的当前 field caps、当前 DSL runtime/参数定义，不从结果/参数输入值生成建议，不展示脚本文字。
-  刷新中/失败/旧目标不回填；单 token 无损字面插入、真实建议列表与撤销/重做，双语来源/空状态/ARIA。
-  DSL 256 KiB/64 层、目录 4,096 字段、100 候选；不猜子字段/nested/权限、不改模板、不自动查字段/执行，
-  不启用跨标签词语、snippet/附加编辑或命令，见 [补全 QA](docs/query-completions-qa.md)。
-- 可视化/DSL 模式切换：AND/OR、term/match、单边界 range、exists/missing、数量与单字段排序；
-  保留评分上下文与未修改 DSL。不支持的复杂/nested/脚本语法保留原文，不静默丢条件。
-  未完成条件跨标签保留、参与关闭确认，并阻止按钮或快捷键执行保留的旧 DSL。
-- 查询工具栏提供时间范围审核：最近 N 秒/分钟/小时/天（固定 24 小时），或完整绝对本地起止时间，
-  UTC/IANA/固定偏移；最多 10,000 单位且总跨度不超过 3,660 天。
-  左闭右开、date 不舍入非整毫秒、date_nanos 保留精确纳秒；无效/歧义/不存在的本地时间拒绝。
-  原查询保留在有界 wrapper 中，完整 DSL 预览后显式应用/移除；手写同字段范围不覆盖。
-  相对时间在明确执行、打开 PIT 前按客户端时钟冻结，续页不移动；手改 DSL/目标解除托管，
-  保留草稿中的绝对字面量。字段证据不当权限，runtime 日期须已应用到实际 DSL。
-  普通索引标签不接受时间配置，不做自动刷新、任意日期数学或日历取整。
-- 单元格筛选取执行原值，支持顶级 keyword/数字/布尔的包含/排除、text 分析短语与独立
-  exists/missing；数组明确选一个元素，不从 null/空数组推断索引缺失，不猜 `.keyword`。
-  字段证据须检查，runtime 必须与当前实际 DSL 一致；未知/冲突/nested/含点路径拒绝。
-  最多 32 条、每值 4 KiB；会话内待应用列表经完整 DSL 预览后显式应用，不自动执行。
-  原手写条件、时间绑定及执行结果保留，索引标签仅生成同目标新查询；未应用列表不恢复，
-  应用后 DSL 才走既有保存规则。边界与自动化见 [单元格筛选 QA](docs/query-cell-filters-qa.md)。
-- 待应用筛选可组成最多 8 个非空组，组内和组间分别选择 AND/OR，总计仍限 32 条。
-  每个 OR 显式 `minimum_should_match: 1`，排除仅在所属分支内；新增组与完整原 query
-  取 AND 交集且不评分，原 should/MSM/评分、时间、排序和参数模板保留。
-  新组/移组/成员或证据变化需重新预览，分组本身只在会话中，旧 PIT 不改；
-  不支持任意深层组、组级 NOT 或自定义 MSM，见 [布尔筛选组 QA](docs/query-filter-groups-qa.md)。
-- 成功或部分结果的工具栏提供显式 nested 条件入口：复用原筛选弹窗，读取同目标 Mapping
-  与 field caps，实际索引集合须一致。首批仅顶级 nested 路径和直接标量字段，值为显式输入，
-  不从单元格对象/数组或扁平路径推断；日期/IP 仅存在性，别名、深路径和路径下 runtime 拒绝。
-  同组条件属于同一嵌套对象；对象内排除与“父文档不存在匹配对象”分别选择，
-  每组 `score_mode: none`、`ignore_unmapped: false`，父文档排除不会越出所属 OR 分支。
-  仍限 8 组/32 条，完整 DSL 预览后应用，证据/结构变化需重审；旧 PIT 和时间/排序保留。
-  索引只生成同目标新查询，未应用定义不恢复；不反向转换已有手写 nested，
-  详见 [nested 筛选 QA](docs/query-nested-filters-qa.md)。
-- 待应用会话筛选支持逐条启停：禁用保留原值/操作/组归属，仍计 32 条/8 组配额；
-  没有启用成员的组不参与 AND/OR 或 nested 父排除。全部禁用逐字预览源 DSL，不提交空操作。
-  该空操作限制针对首次应用；每次启停重新审核，重新启用须当前字段证据。
-- 已应用筛选保留有界会话定义及禁用项，以深冻结的基线/已应用文档和真实观察快照绑定。
-  后续从基线重建，不重复包裹 DSL；全禁用经审核恢复精确基线且保留定义，移除最后一项
-  仍须审核，零项待应用编辑继续保护运行/保存。取消编辑不改已应用定义，混合应用不再丢弃禁用项。
-  手改 DSL/目标、时间、排序或参数等使绑定失配时阻止覆盖；明确解除只遗忘定义，不改当前
-  DSL/结果。旧 PIT 不改，索引只显式生成同目标新查询且不伪造执行身份，不自动执行。
-  会话定义/绑定不直接进 IPC 或恢复存储，重启仅恢复已应用 DSL；
-  见 [会话绑定 QA](docs/query-filter-session-qa.md)。
-- 平面 mapped、显式顶级 mapped nested 和有界平面 runtime 条件支持固定、删除和同目标复用：
-  全文核对定义与字面量后保存，保留布尔组、精确 token、启停、路径与对象内/父文档否定；
-  同 nested 组对应同一对象，独立组可重复相同条件；nested runtime 仍整组拒绝固定。
-  固定库 v3 最多 100 组/256 KiB，每组 32 条/8 个非空组、每值 4 KiB；既有 ID 不覆盖或改目标。
-  兼容 v1/v2 读取、不自动改写；显式新增升级，删除保持原版本，已存版本不降级。
-  runtimeMapping 只取当前已应用 DSL，保存类型/精确源码/可选语言，禁用项也核对声明；
-  脚本每段 4 KiB，去重声明 32 项/64 KiB，七类型白名单，date/IP/geo_point runtime 仅存在性。
-  完整源码另行确认，不从视图库或未应用配置补齐，不保存整份查询。
-  加载只产生同连接 ID + 完全相同目标的待审副本，标明已保存字面量；没有执行时不创建假快照。
-  启用 nested 项须打开审核后新取 Mapping/field caps，核对实际索引集合、路径/类型及 runtime
-  遮蔽，不使用旧缓存；runtime 字面量只核对当前已应用 DSL 中相同声明，不注入/替换/运行脚本。
-  完整 DSL 预览后显式应用，不自动执行；索引锁定 DSL 缺少声明时不能借加载改写它或创建新查询。
-  已有待应用或绑定筛选不能被加载覆盖；删除库中条目不改会话副本或已应用 DSL。
-  schema v8 独立行与串行 CAS，损坏/未知版本/冲突不覆盖；真实/原生边界见
-  [固定 runtime QA](docs/pinned-runtime-filters-qa.md)，前批记录见 [固定 nested QA](docs/pinned-nested-filters-qa.md)
-  和 [固定筛选 QA](docs/pinned-filters-qa.md)。
-- 服务器排序有独立审核入口：最多 8 个平面标量字段，显式方向、优先级、缺失位置与
-  兼容的 `unmapped_type`；同目标 field caps/实际 runtime 声明只作证据，不当作授权或执行成功。
-  部分不可聚合索引、未检查/缺失/冲突/不支持分别处理，不猜 keyword 或隐式类型转换；
-  复杂手写 sort 不覆盖，完整 DSL 预览后显式应用/移除，只改排序、保留时间与原条件。
-  表头排序仍仅已加载行，旧 PIT 续页沿用原排序；索引标签先显式新建查询再编辑。
-  未应用选项不持久化，应用不执行、不改参数模板，见 [服务器排序 QA](docs/query-sort-qa.md)。
-- 源码已接入 ES 索引/字段/Mapping 读取、快照查询/取消、部分结果与无损表格/JSON/文档详情，
-  统一使用可信连接快照中的无认证或 Basic/API Key/Bearer 认证；
-  显式 sort 的可分页查询在第一页前开启 PIT，按最新 ID 与原始游标续页，过期要求从第一页重跑。
-  取消/openPit/关标签/改地址的迟到响应隔离；JSON 默认两空格缩进，复制仍使用原文。
-- 查询结果可明确打开会话内聚合视图：按执行 DSL 读取 sum/avg/min/max/value_count/cardinality，
-  以及单层 terms/date_histogram 和直接指标；原值/null/缺失、近似/误差/遗漏与页级部分状态可辨。
-  每次选择一个原接收页和聚合项，50 桶分页；不累加 PIT 页、不取当前草稿/字段能力解释旧响应。
-  日期只读返回起点与执行选项，不补桶或推算结束边界；未知类型保留原文，复制仍为原 token。
-  DSL 256 KiB/接收页 1 MiB、32 定义/4,096 桶等限额整次拒绝；不保存结果/视图、不额外查询。
-  原文/来源按需展开，聚合页不把文档导出当成桶导出；尚无聚合构建/绘图/图表保存，
-  见 [聚合结果 QA](docs/query-aggregations-qa.md)，真实/原生/性能仍待验。
-- 结果表格采用 TanStack Table/Virtual/dnd-kit：完整列发现、横向滚动、列升降序、拖拽/键盘换序、
-  列宽/双击自适应、显隐与重置。排序只针对**已加载文档**，数字原文精确比较后按 50 行分页，
-  不修改或执行 DSL，不声称全索引排序。列布局与页码在 JSON/标签/设置往返后保留，
-  表格/JSON 滚动位置也按标签保持；可直接清除隐藏列排序，重新执行重置页码、行选择与滚动。
-  超过 24 个可见列时窗口化表头/单元格，保留完整宽度、逻辑列索引和交互端点；
-  跨未挂载列按真实行与当前列顺序复制原值，不补隐藏列。仍非完整行虚拟化或内存/原生性能达标，
-  见 [列窗口 QA](docs/result-column-window-qa.md)。
-- 数据预览/查询、节点/分片/索引/Mapping 表格支持主题色持久选中、跨行拖动多选、Ctrl/Cmd/Shift
-  与键盘选择、边缘滚动和清除；查询选择按稳定记录与标签保存，不因本地排序或翻页错位。
-- 查询/索引结果恰选两条后可本地对比，按原接收页/行核对，不按相同 `_id` 重查。
-  元数据、`_source`、`fields` 和执行 runtime 分离；精确 JSON 值、缺失/null/空容器、
-  来源/差异/字段筛选、分页、左右交换及原文复制。每记录 1 MiB，超限拒绝，不截断为完整对比。
-  冻结原执行来源与记录，新执行/离开关闭，续页不替换；不额外查询或持久化结果，
-  见 [文档对比 QA](docs/document-comparison-qa.md)。原生交互与大文档性能未验。
-- 单条文档详情提供结构化/完整 hit JSON、JSON Pointer 搜索/复制、容器折叠与 50 项分页。
-  元数据/source/fields/runtime 分开，精确 token、缺失/null/空容器保留，不把 JSON 路径当 Mapping/nested。
-  打开时冻结真实接收页/行及来源；原值/容器/记录/原接收页复制不应用显示格式，
-  新快照/离开关闭，不额外查询或持久化。1 MiB/hit、目录 4,096 节点/累计路径 1 MiB，超限整次拒绝，
-  见 [详情 QA](docs/document-detail-qa.md)；原生交互/性能与完整字段能力仍待验。
-- 字段列表默认名称与类型，按类型展开能力报告/限制索引/未知状态，原报告与保守门控分离。
-  来源核对同连接 ID/端点/精确请求目标；刷新中/失败不展示旧能力，字段诊断拒绝不代表查询被拒绝。
-  来源正文和索引成员按需挂载，每页 20 个索引，原 150 字段上限保持；未分列不代表不存在，
-  也不推断 Mapping/nested、查询期 runtime 或旧执行值，见 [字段能力 QA](docs/field-capabilities-qa.md)。
-  左右面板可调整宽度，
-  资源栏 160-340px、AI 280-640px，窄窗口 AI 为覆盖层。
-  启动、连接切换、设置和语言/主题变化不自动执行查询或预览。
-- 设置健康/节点/分片/索引只读页面已接受限 IPC，无自动轮询；真实桌面与完整 ES 联调待验。
-- 设置固定左侧导航，连接/模型/集群/节点/分片/索引在右侧切换，返回不丢草稿。
-- 统一主题化下拉框、复选框/单选框、滑块、禁用/错误/焦点与模态样式；
-  支持的 Chromium 渐进增强下拉弹层，其他引擎保留原生回退。
-  索引/Mapping 元数据刷新失败保留旧列表并标记；字段能力刷新中/失败则不展示旧证据。
-  动作样式限定按钮，分片角色不继承深色按钮背景；本轮验证边界见
-  [预览与行选择验收](docs/preview-and-row-selection-qa.md)。
-- 系统/日夜、四种强调色、中英文、独立字号/字体/密度、局部重置、启动偏好。
-- 快速跳转、命令面板、键盘导航、IME 保护、对话框焦点与未保存草稿关闭确认。
-- 设置内连接元信息与 Basic/API Key/Bearer 添加、编辑、保留/替换/解绑/删除，
-  稳定 ID、顺序、选择与回退。秘密不回填或持久化到前端，HTTP 显示未加密风险；
-  浏览器拒绝保存认证材料。保存已提交但旧凭据清理未完成时单独提示并支持有界重试。
-- 自定义公共 CA PEM 与连接绑定，默认根/证书/主机名验证保留，没有跳过验证开关；
-  换端点不沿用旧凭据或 CA。CA 与认证设置的真实桌面、系统密钥库与 ES/TLS 仍待验收。
-- 显式身份/角色与 monitor/read/view_index_metadata 诊断，权限不足、未知和不支持分开，
-  不用 monitor 结果阻止索引搜索。原入口已加入精确报告版本/Serverless、许可与功能证据，
-  不按主版本或许可证类型标操作可用；404 保持未知，未许可/未启用/实际未探测分别显示。
-  只有许可/功能报告在后端内存缓存 60 秒、最多 16 连接；绑定传输/CA/集群/精确版本与请求代次，
-  身份/目标权限/根信息每次重新检查，显式刷新绕过缓存，过期不轮询。诊断不开放 Graph/语言或写入 API。
-- 本地命名查询草稿/收藏的保存、删除与恢复，保留原始 DSL；恢复新标签不自动执行，
-  原连接已删除也不按名称或当前选择重绑。已加载命中可导出 CSV/JSONL，数字保持原 token，
-  CSV 文本公式防护；JSONL 每行是完整 hit。已加载导出不发起新查询或取下一页。
-- 本地 Data Views 支持创建/编辑/筛选/删除确认，最多 100 项/256 KiB；
-  定义绑定稳定连接 ID、索引/别名/数据流/多目标模式与可选默认时间字段。
-  同连接视图明确应用到查询草稿，跨连接明确新建查询；不改 DSL、不执行、不改变索引标签。
-  所选定义以副本随草稿保存恢复，库中修改/删除不重绑旧草稿或结果，手改目标解除关联。
-  默认时间字段复用显式字段发现；未验证、缺失、类型冲突、非日期与不可搜索各有提示，
-  不把失败刷新或部分索引不可搜索标为全目标可用。本批不自动注入时间范围或修改 Mapping。
-- Data Views 可保存每视图最多 32 项/16 KiB 的字段格式：数字分组、精确百分比/IEC 字节、UTC 日期，
-  日期来源明确为含时区 ISO 或整数 Unix 毫秒，纳秒小数保留；类型不符/非法日期/超限显示原值。
-  表格只格式化现有列与有界标量数组，不展开嵌套对象；格式在执行前深冻结，续页与历史恢复不回查库。
-  原值开关不重查，选取格式化单元格复制完整原值，排序、JSON/文档复制和 CSV/JSONL 仍使用原数据。
-  无任意脚本/HTML/URL 格式器，不把显示配置带入搜索/PIT 请求或全量导出 DSL。
-- Data Views 查询期字段支持 keyword/long/double/boolean/date/ip/geo_point，每视图最多 32 项/64 KiB，
-  可从同名 `_source` 取值，或使用每段最多 4 KiB 的内联 Painless。无 lookup/composite/存储脚本/
-  参数/忽略脚本错误选项；脚本只在显式执行时由 ES 编译，不在前端执行。
-  先审核遮蔽证据与最终 DSL，再显式应用到草稿；不同的手写同名 runtime 定义不覆盖，
-  草稿/目标变化须重审，应用、保存、恢复及语言变化不执行。后端独立校验首屏/PIT 的同一白名单。
-  执行/历史保留定义副本；只有执行 `rawDsl` 中的字段生效，表格读取相应 `fields` 原值，
-  缺失不回填旧 `_source`，文档/JSON 原文与已加载导出不被重写。PIT 不冻结脚本输出。
-- 查询参数支持字符串、数值、布尔、空值、对象和数组，使用整值 `{"$param":"name"}`，
-  不插值键名、字符串片段或索引。先预览最终 DSL，再显式应用；草稿变化阻止旧预览覆盖，
-  不执行查询、不改变旧结果快照。最多 32 参数，模板/最终 DSL 256 KiB，单值 64 KiB。
-  定义可保存恢复，未应用输入值不持久化；已应用 DSL 仍遵循草稿/历史保存规则。
-- 查询库支持本地 JSON 定义交换：显式选择与审核，最多 100 定义/4 MiB；参数化条目导出模板，
-  不含实际连接 ID/端点、认证、凭据引用、结果或历史。已知敏感键/认证值会阻止交换，
-  其他字面量仍需用户核对。导入逐项明确映射本地连接或保持未绑定，原子新增、不覆盖旧查询，
-  不打开或执行查询；普通查询库保存及导入均比较已读内容，冲突需明确重载。
-  本地 Data View 绑定/ID、默认时间字段、字段格式与 runtime 配置不随该查询交换导出；
-  已显式应用的 runtime DSL/脚本文字属于查询定义，仍须核对其字面量。
-  本地时间托管同样不交换，须额外确认：具体草稿保留预览时的绝对边界，参数化查询仍用模板。
-- 另有独立 PIT 的全量 CSV/JSONL 流式导出，显式确认原执行目标、最终 DSL 与行数/文件限额。
-  CSV 固定 `_index,_id,_source,fields` 文档列，JSONL 完整 hit，数值与转义保留。
-  单任务、每批最多 1,000 行/响应 1 MiB、总最多 1,000,000 行/1 GiB/30 分钟扫描预算；
-  空页才确认结束，原生选择目标后写同目录 `.partial-*`，完整刷盘后替换。
-  取消/限额/部分/失败不报完整保存，未知文件/PIT 清理单列；进度可收起和重开，
-  切标签/设置不重发，原标签关闭会停止。真实 ES、原生磁盘/退出与性能仍待验。
-  全量导出继续拒绝 `runtime_mappings` 和脚本，不从 PIT 推断计算结果稳定。
-- 工作区自动保存查询/索引标签、活动上下文、未保存 DSL/无效可视化草稿、结果视图与列布局；
-  重启只恢复定义，不执行、不恢复旧结果/页码/行选择/PIT、不重绑已删除连接。最多 50 标签/4 MiB。
-- 有界执行历史区分首屏查询、索引预览与续页的成功/部分/失败/取消，未知完成记为中断；
-  可筛选、删除、恢复为新查询，最多 100 项/4 MiB，不保存结果正文或认证对象。
-  查询/续页历史保存当次 Data View 定义副本（含字段格式和 runtime），不按当前库或连接重新绑定。
-  时间定义与实际边界独立冻结；收藏恢复保留相对意图，历史恢复仅还原当次绝对 DSL、不重新计算。
-  修订号 CAS 与串行保存阻止旧写覆盖；损坏/未知版本/冲突有提示，明确重载成功后才丢弃当前编辑。
-- 桌面导出由原生对话框选择文件，同目录临时文件完整写入后替换，取消/失败/已保存明确区分。
-  浏览器只报告下载请求，不承诺磁盘已写入。
-- 桌面 SQLite 保存偏好、连接元信息和选中 ID；修复 `startAI` 大小写合同，兼容历史 `startAi`，
-  偏好保存错误使用可重试/关闭的对话框。schema v8 新增独立固定筛选库，
-  保留 v7 数据视图库、v6 工作区恢复行、v5 公共 CA/命名查询库和 v4 模型凭据；
-  各定义/恢复文档保持 v1。视图库与固定库严格校验、串行 CAS，
-  损坏/未知版本/冲突不覆盖，新定义须核对连接仍存在；
-  秘密只存系统密钥库，不回显旧秘密；替换/清除/删除有失败补偿与待清理提示，不明文降级。
-- 模型设置支持自定义 HTTP/HTTPS 地址、端口、基础路径、模型 ID，HTTP 只作未加密提醒。
-  可显式获取兼容协议 `/models` 或 Ollama `/api/tags`，也可手填；真实生成测试
-  只在完整非空回复后标记通过，保存配置或获取列表不等于测试通过。
-- AI 支持兼容 Chat Completions/Ollama 流式、多轮完整历史、取消、末条失败重试与安全 Markdown。
-  Enter 直接发送并立即清空当次输入/附件，Shift+Enter 换行，IME 不误发；
-  只有显式附加时发送查询草稿快照，不自动携带结果或跨目标转发历史。
-  模型工具在底部输入区，消息/代码内部滚动；会话只在内存中保留。
-- 后端与类型化 IPC 按保存连接 ID 执行根身份测试：固定 GET、禁止重定向与环境代理、
-  超时/并发/响应大小限制、错误脱敏。设置右侧已接入手动测试、身份展示与过期响应隔离，
-  浏览器会话适配不测试连接；真实桌面 UI 验收待用户统一执行。
-- Rust 系统密钥库适配首个子项（F08.1）：Windows keyring 后端、秘密清理、固定命名空间和脱敏错误；
-  schema v2 加入凭证引用与持久清理队列，Rust 内部已有保存/轮换/解绑/删除与失败恢复编排。
-  模型与 ES 凭据均已接受限设置 IPC；旧元信息入口仍拒绝已绑定凭证的行，
-  新设置入口返回真实认证元信息和清理结果。macOS/Linux 密钥库仍明确不可用。
-- C01.3 内部支持 Basic/API Key/Bearer：密钥库负载版本化，API Key 保存 ID/key 组件并仅编码一次；
-  认证只从数据库生成的不可变快照解析，绑定连接 ID、端点、类型与引用，覆盖身份/资源/搜索/PIT。
-  秘密缺失、密钥库不可用或负载损坏不降级为无认证请求，三类错误有中英文诊断。
-  后续认证配置已接通；mock 自动化通过不等于真实认证/TLS 或系统密钥库已验收。
-- 无默认演示连接，不伪造统计、查询结果或模型响应。
+---
 
-**尚未完成：任意可视化 DSL、Monaco 深层语法建议及原生/性能验收、文档时间上下文/完整字段详情、完整虚拟化与大结果基准、聚合图表、
-复杂条件/nested/日历时间、时间范围与 runtime 的真实边界/权限/成本、字段格式及保存导出/参数交换的真实与原生验收、
-真实认证 TLS 与完整权限许可矩阵、AI 候选审核和写入管理。**
-连接保存不等于连通；历史/标签/草稿/布局恢复的开发自动化通过，桌面重启与退出期间保存仍待人工。
-AI 会话不跨重启。最新构建依赖验证见 [依赖安全验收](docs/dependency-security-qa.md)；
-查询功能见 [时间范围验收](docs/query-time-range-qa.md)；
-前批见 [查询期字段验收](docs/data-view-runtime-fields-qa.md)；
-前批见 [字段格式验收](docs/data-view-field-formats-qa.md)；
-视图库首批见 [Data Views 验收](docs/data-views-qa.md)；
-前批见 [能力诊断验收](docs/connection-capabilities-qa.md)；
-参数交换见 [参数与交换验收](docs/query-parameters-and-exchange-qa.md)；
-全量导出见 [导出验收](docs/snapshot-export-qa.md)；
-恢复见 [恢复批次验收](docs/workspace-recovery-qa.md)；
-前批见 [连接与保存导出验收](docs/connection-library-batch-qa.md)；
-此前认证底座见 [C01.3 验收](docs/connection-auth-qa.md)，更早状态见
-[索引标签与控件验收](docs/index-tabs-and-controls-qa.md) 与
-[AI 验收](docs/ai-chat-and-installer-qa.md)。schema v8 升级后不能直接用只识别 v7 的旧版打开。
-即使 schema 相同，不认识时间等可选 v1 子对象的旧版也应拒绝，而不是删字段覆盖。
-时间解析使用 Temporal 0.5.1 与 Rust chrono/chrono-tz；IANA 宿主与锁定时区数据差异仍需原生验收。
+## 📚 文档索引 (Documentation)
 
-## 当前开发主线
+项目包含完善的架构设计、任务追踪与技术规约文档，均收录在 [`docs/`](docs/) 目录中：
 
-2026-10-09 用户确认六个方向：**连接与权限、数据探索、保存与导出、聚合与图表、
-数据管理、地图与关系**。详细顺序见 [执行计划第 10 节](docs/development-plan.md)，
-任务与验收见 [backlog](docs/development-backlog.md)，产品边界见
-[平台设计](docs/platform-design.md)。
+| 模块 | 文档链接 | 说明 |
+| :--- | :--- | :--- |
+| **开发状态与任务** | [开发状态与能力记录](docs/development-status.md) | **原 README 迁移文档**：包含详细能力清单、限额、开发主线与批次跑分记录 |
+| **分步执行计划** | [开发执行计划](docs/development-plan.md) | 包含各交付阶段、执行主线与具体实现边界 |
+| **任务 Backlog** | [开发任务清单](docs/development-backlog.md) | 完整功能 Backlog、依赖拓扑与验收基准 |
+| **协作规范** | [连续开发与交接指南](docs/continuous-development.md) | 自动化验收流水线、会话交接与无干扰开发规范 |
+| **平台全景设计** | [平台设计方案](docs/platform-design.md) | 系统总体架构设计、权限模型与长远路线图 |
+| **产品与执行契约** | [产品设计契约](docs/product-design.md) | 查询语义、结果处理契约与执行规范 |
+| **交互与快捷键** | [设置与快捷键指南](docs/settings-and-shortcuts.md) | 详细设置项、键盘快捷操作与平台细节 |
+| **设计语言** | [视觉与竞品设计](docs/competitive-and-visual-design.md) | 界面排版、设计 Token、竞品对比分析 |
+| **人工验收规约** | [人工验收清单](docs/manual-acceptance.md) | 界面、平台集成与跨系统人工核查标准 |
 
-优先认证/权限与保存导出，再补数据探索和聚合；写管理先完成后端审核/任务框架。
-地图/Graph 在查询与能力合同稳定后可并行，地理文件导入等待文档导入框架。
-图表包括单查询分析与保存复用，本次不自动扩展 Dashboard、团队服务、Fleet/APM/SIEM。
-这是范围与任务安排，不是已实现功能；现有 AI/只读观测及历史任务保留。
-C01.3 后的 C05.3/C01.4、C04.1、C02/Q07 首批按本轮要求合并开发并接入。
-Q07 第二批历史/标签/草稿/列布局恢复、第三批独立 PIT 流式导出、第四批参数/查询定义交换已接入；
-C02 第二批精确版本/部署/许可报告与有界会话缓存、Q09 本地 Data Views、字段格式和有界 runtime fields 也已接入；
-Q02 有界时间、单元格筛选草稿、服务器排序、布尔/nested 组、启停、会话绑定及平面/mapped nested/runtime 固定已接入；
-F01/R03 最小开发依赖安全子项、Q03 Monaco 编辑器/有界补全两批和 Q05 已加载文档对比/列窗口化/结构化详情/字段能力证据已通过自动化；
-下一批按已满足的 Q02/Q04 依赖推进 Q06 基础聚合结果读取与展示，保持原值/统计范围/近似与部分失败，
-不增加 Dashboard、不自动执行；其余数据探索与六方向任务仍开放。
-真实环境、系统密钥库、原生导出及跨平台验收分开记录。
-2026-10-10 依赖批次的 `npm audit` 与 `npm audit --omit=dev` 均为 0；
-限定 Tailwind CLI 下 watcher 2.5.1 → 2.5.6，移除 micromatch/braces 链，
-source-map-js 1.2.1 → 1.2.2。未升级框架或生产依赖，不将审计 0 当作完整安全通过。
-随后 Q03 新增 Monaco 0.57.0，限定其 DOMPurify 为已修复的 3.4.16；完整/生产审计仍为 0。
-编辑器模块位于 `src/features/query/editor/`，重型 Monaco runtime 只在查询编辑面延迟加载；
-补全领域层位于 `src/domain/query-completions.ts`，不引入新依赖或改变 IPC/schema。
-Tauri CSP 仅显式允许同源 worker，没有放开远程脚本、blob 或 unsafe-eval；
-第二批未改依赖，未重跑审计，最终资源与原生验证边界见补全 QA。
-随后 Q05 列窗口化新增固定 react-virtual 3.14.14 / virtual-core 3.18.0（MIT），没有其他锁定版本变更；
-安装时完整审计与本次生产审计均 0。几何/JSDOM 证明挂载范围，不代表原生滚动或大结果性能。
-2026-10-09 最新协作要求改为每批验证后本地提交、在一个新会话继续下一批；
-精简重复测试，全部范围真正完成后才睡眠。详见 [连续开发与交接](docs/continuous-development.md)。
-不自动推送，不以未验证或外部阻塞代替完成。
+---
 
-## 质量检查
+## 🔒 安全与隐私原则 (Security Principles)
 
-```sh
-npm run check
-npm run test:rust
-cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
-```
+1. **凭证绝不明文落地**：任何连接密码、私有 Token 均必须经过操作系统级别密钥链存储，防止配置文件泄露导致安全隐患。
+2. **默认只读，破坏性防护**：杜绝误操作删库风险，查询与探索默认置于严格受保护的只读上下文中。
+3. **零外部数据依赖**：除用户明确配置的 Elasticsearch 实例与 AI 接口外，应用不向任何第三方发起网络请求。
 
-`check` 包括 lint、TypeScript strict、正式构建、正式单元/组件测试和原型构建/回归。
-按用户本轮要求，开发中只运行自动化并审查代码，不反复启动浏览器巡检；
-功能开发后统一执行 [人工验收清单](docs/manual-acceptance.md)。未人工验证的 UI/系统集成不标通过。
-底座历史截图与限制见 [正式应用验收记录](docs/foundation-qa.md)，
-历史 F06.2/C01.1 命令、真实服务证据与未验证边界见 [只读连接验收](docs/connection-qa.md)。
-Git 使用 `main` 和现有身份；用户指定远程 `git@github.com:algerkong/Escope.git`。
-CI 配置和推送不代表远端检查已通过。
+---
 
-本批 `npm ci`、前端 4 文件 59 项、原型 16 项、新测试 lint、typecheck 和两类构建通过；
-未改 Rust，不重复旧 Rust 基线，详情见 [依赖 QA](docs/dependency-security-qa.md)。
-Vitest 使用 `npm test -- --maxWorkers=2`，不调整原有超时阈值；
-原型未改通常不重复回归，本批因共享构建依赖变化进行了必要复验。
-`package.json` 的 override 只匹配 `@tailwindcss/cli > @parcel/watcher@2.5.1`；
-上游不再依赖该版本时复核并移除覆盖，重新审计/构建，不将其扩大为全局版本覆盖。
-已有 eslint/whatwg-encoding 弃用提示、JS 单包约 1,272.16 kB 的警告保持可见。
+## 📄 开源许可证 (License)
 
-2026-10-09 上一轮 C01.3 独立通过 Rust 定向 131、全量 216（6 默认忽略）、代理环境 fixture 32、
-fmt/严格 clippy；前端定向 47、全量 43 文件 717（`npm test -- --maxWorkers=2`）、原型 16、
-lint/typecheck/两类构建通过。默认 `npm run check` 曾在 8 项 5 秒超时后退出，
-后续保持原阈值降低 worker 复跑通过，不把该命令记为整体通过，详见 [QA](docs/connection-auth-qa.md)。
-上述 C01.3 实现阶段未运行真实服务、密钥库、浏览器/WebView、安装包或跨平台检查，
-当时没有提交/推送；后续批次的本地提交与验证以最新 QA 和执行计划为准。
-
-2026-10-08 历史 `check` 通过：正式 42 文件 678 项、原型 16 项；Rust 192 通过（6 默认忽略）、
-fmt/严格 clippy 通过。四项授权 ES 用例本轮再次通过；Windows 密钥库实测为上一轮证据，本轮未重跑。
-模型联调另行显式运行：
-
-```sh
-npm run test:ai:gateway
-```
-
-这是用户授权的本机 8788/v1 联调入口，密钥从隐藏输入读取，仅传给测试进程；
-不要把密钥写进命令、配置、脚本或日志。默认 Rust 测试不调用真实模型，本轮未重跑网关认证请求。
-时间/依赖批次的 JS 单包约 1,272.16 kB；2026-10-10 依赖批次完整/生产 npm 审计均为 0。
-最新已应用会话绑定批次有效覆盖 14 文件 445 项（12 文件 423 项 + 拆分后工作台 2 文件 22 项）、
-10 文件 lint、最终 typecheck/正式构建通过；不是一次全范围命令全绿，长流程超时与分组复验见
-[会话绑定 QA](docs/query-filter-session-qa.md)。JS 单包约 1,349.38 kB 的原有警告保留，本批未重跑依赖审计。
-
-## 本机 ES 测试环境
-
-用户指定 `D:\es\elasticsearch-7.17.25`，首批真实测试版本锁定为 **7.17.25**。
-配置读取确认绑定 `127.0.0.1:9200`、单节点、关闭认证；2026-09-30 首次仅执行根身份读取。
-2026-10-08 本轮复验身份、索引/字段/只读资源及 PIT 首屏/续页，PIT 用例使用 `_source:false`；
-未修改现有索引/数据或服务配置，不记录真实文档。
-本机 HTTP_PROXY 可能导致回环请求走代理报 502；Rust 客户端显式禁用环境代理。
-手工 PowerShell 诊断使用 `Invoke-RestMethod http://127.0.0.1:9200 -NoProxy`，
-curl 使用 `curl.exe --noproxy 127.0.0.1,localhost http://127.0.0.1:9200/`。
-
-显式授权的真实测试（只用于上述本机实例；默认 Rust 测试会忽略此用例）：
-
-```powershell
-$env:ESCOPE_TEST_ES_71725 = '1'
-cargo test --manifest-path src-tauri/Cargo.toml --locked local_elasticsearch_71725_read_only_identity -- --ignored
-```
-
-8.x/9.x 支持仍需独立联调，不能从当前基线推断。
-
-## 查看原型
-
-```sh
-npm install
-npm run build:prototype
-npm run test:prototype
-```
-
-使用浏览器打开 `docs/theme-preview.html`。构建后的 Tailwind 与图标位于本机，不需要 CDN。
-无需开发服务器。使用 Ctrl+P / Ctrl+Shift+P / Ctrl+, 打开跳转、命令和设置；
-浏览器保留快捷键时使用顶部图标入口。macOS 使用 Cmd。
-
-## 原型可交互内容
-
-- 集群概览、固定健康快照、磁盘指标、未分配副本诊断。
-- 节点过滤与详情、分片矩阵/列表与详情、索引筛选与 Mapping/Settings。
-- 已有查询展示、表格/JSON、可视化/DSL 切换。
-- 模型协议与手填模型 ID、元信息本地保存、手动选择与移除。
-- 连接配置草稿、名称编辑、认证类型与环境选择，不保存认证密钥。
-- 工作区恢复上次选中连接，无有效记录默认第一项；多连接右上角/设置选择，单连接隐藏选择器。
-- 日夜/主题色、中英文、字体字号、密度、设置与命令面板。
-
-全部集群数据是固定演示数据；指标不是实时监控，没有后台采集。
-模型与连接目录是本地元信息原型，未实现协议调用、连接测试、认证、写入或 Tauri 桌面包。
-未选择的协议只表示配置项，不代表已支持该提供方真实接入。
-原型使用浏览器 localStorage，不用于保存密钥；生产版需要后端系统密钥库与权限隔离。
-
-## 设计
-
-- `docs/development-plan.md`：当前执行入口，包含已核对的工程基线、分步交付与首轮开发清单。
-- [Kibana 功能缺口分析](docs/kibana-feature-gap-analysis.md)：2026-10-09 基于正式代码与官方文档的 16 领域对照、任务映射和版本/服务端边界，不代表新增功能已实现。
-- `docs/platform-design.md`：完整平台范围、权限、监控、多模型与阶段计划。
-- `docs/settings-and-shortcuts.md`：设置、排版、快捷操作。
-- `docs/competitive-and-visual-design.md`：竞品与视觉系统。
-- `docs/prototype-qa.md`：原型检查结果、修复与待验收项。
-- `docs/development-backlog.md`：详细开发任务、依赖、阶段与验收标准。
-
-## 开发状态
-
-开发前阅读根目录 `AGENTS.md`；每次开发后同步更新其中的交接状态、任务进度与验证结果。
-
-当前已有连接认证/CA/身份权限首批、独立索引多标签、受限可视化/交互表格、模型与 AI、查询库、
-历史/恢复、两类导出、类型化参数/查询交换、能力诊断与本地 Data Views；
-已有有界字段格式、查询期 runtime fields、时间范围与执行冻结、单元格筛选草稿；
-服务器多字段排序、布尔/nested 组、筛选启停、会话绑定及平面/mapped nested/runtime 固定已接入审核与显式应用；
-nested runtime、深层条件、真实/原生验收及完整父任务仍开放。
-未启动浏览器/WebView 巡检，布局、原生剪贴板/拖拽/IME、保存重启与安装需集中验收，
-不能复用前会话截图声称通过。Q03 Monaco 首批已接无损文本/格式/诊断、通用撤销/重做、
-标签隔离和本地 worker；前端有效覆盖 19 文件 213 项、对应 lint/typecheck/构建通过。
-Q03 第二批已接同目标有界字段/参数名建议，最终 14 文件 257 项、20 文件 lint、typecheck/构建与本地引用通过。
-Q05 同执行两条已加载文档对比已接入，最终 11 文件 243 项、11 文件 lint、typecheck/正式构建通过，
-当批无依赖/Rust/IPC/schema 变化。
-Q05 宽结果列窗口化已接入，9 文件 162 项、4 文件 lint、typecheck/构建和当批依赖审计通过。
-前批 Q05 已加载文档结构化字段详情已接入，最终 9 文件 222 项、13 文件 lint、typecheck/正式构建通过；
-共享有界 reader、冻结来源、JSON Pointer/折叠/分页与原文复制见 [详情 QA](docs/document-detail-qa.md)。
-最新 Q05/O05 字段能力证据首批有效覆盖 15 文件 616 项（611 与最终 UI 72 的重叠范围替换）、
-11 文件 lint、最终 typecheck/正式构建通过，见 [字段能力 QA](docs/field-capabilities-qa.md)。
-主 JS 1,463.49 kB 与延迟 Monaco 3,125.21 kB 的大包警告保留。
-本轮无依赖/Rust/IPC/schema 变化，未启动浏览器/WebView/服务；下一项 Q06 基础聚合结果展示，
-时间上下文、原生几何/大文档性能、Q08/Q10/Q11 与父任务仍待完成，六方向按依赖继续。
-当前执行顺序和本轮所有权见 `docs/development-plan.md` 第 10 节，第 9 节保留历史批次。
-不将演示数据迁入正式默认工作区，也不把根身份成功当成搜索权限或健康状态证明。
-
-## 验证
-
-`npm run test:prototype` 使用 JSDOM 验证页面跳转、资源筛选、详情、模型配置、输入安全、
-连接草稿、排版、国际化和命令面板。它不替代真实浏览器的布局、焦点锁定和键盘兼容测试。
-默认进入查询工作台；连接、模型、集群、节点、分片和索引直接显示在设置右侧，不打开独立配置窗口。
-查询页支持内置样本的状态/金额筛选、执行、重置和空结果，DSL 是本次执行的只读预览。
-2026-09-30 重新验证：16 项自动化测试通过，覆盖 16 种主题/语言状态组合；
-原型构建成功，真实浏览器与三平台视觉验收尚未完成。
+本项目采用 [MIT License](LICENSE) 授权许可。

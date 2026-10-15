@@ -24,6 +24,7 @@ mod query_time_range;
 mod read_only;
 mod resources;
 mod runtime_fields;
+mod saved_charts;
 mod saved_queries;
 mod storage;
 mod workspace_recovery;
@@ -386,6 +387,8 @@ pub fn run() {
             data_views::data_views_save,
             pinned_filters::pinned_filters_load,
             pinned_filters::pinned_filters_save,
+            saved_charts::saved_charts_load,
+            saved_charts::saved_charts_save,
             chart_definitions::chart_definitions_load,
             chart_definitions::chart_definitions_save,
             chart_definition_exchange::chart_definition_exchange_read,

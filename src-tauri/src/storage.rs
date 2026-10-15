@@ -4,6 +4,7 @@ use crate::credentials::CredentialRef;
 use crate::data_views::{DataViewLibrary, DataViewRecord};
 use crate::error::AppError;
 use crate::pinned_filters::{PinnedFilterLibrary, PinnedFilterRecord};
+use crate::saved_charts::{SavedChartLibrary, SavedChartRecord};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -13,7 +14,7 @@ use uuid::Uuid;
 
 /// Highest schema version this build understands. A file above it fails closed instead of being
 /// opened with an unknown layout.
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 
 /// Hard upper bound for one credential cleanup batch, so no caller can request unbounded work.
 pub const MAX_CLEANUP_BATCH: usize = 64;
@@ -651,6 +652,7 @@ impl Database {
                 7 => tx.execute_batch(include_str!("../migrations/007_data_views.sql"))?,
                 8 => tx.execute_batch(include_str!("../migrations/008_pinned_filters.sql"))?,
                 9 => tx.execute_batch(include_str!("../migrations/009_chart_definitions.sql"))?,
+                10 => merge_chart_library_schemas(&tx)?,
                 _ => return Err(AppError::new("unsupported")),
             }
             tx.commit()?;
@@ -991,13 +993,67 @@ impl Database {
         Ok(revision)
     }
 
+    pub(crate) fn saved_charts(&self) -> Result<SavedChartRecord, AppError> {
+        read_saved_charts(&self.0)
+    }
+
+    /// Save saved chart definitions. Checks revision CAS and ensures connection ID exists if present.
+    pub(crate) fn save_saved_charts(
+        &mut self,
+        expected_revision: u64,
+        library: &SavedChartLibrary,
+    ) -> Result<u64, AppError> {
+        library.validate()?;
+        if expected_revision >= crate::saved_charts::MAX_REVISION {
+            return Err(AppError::new("invalidInput"));
+        }
+        let json = serde_json::to_string(library).map_err(|_| AppError::new("invalidInput"))?;
+        let tx = self
+            .0
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let current = read_saved_charts(&tx)?;
+        if expected_revision != current.revision {
+            return Err(AppError::new("savedChartConflict"));
+        }
+        if current.revision > 0 && library.version < current.library.version {
+            return Err(AppError::new("invalidInput"));
+        }
+        for entry in &library.entries {
+            if let Some(previous) = current
+                .library
+                .entries
+                .iter()
+                .find(|previous| previous.id == entry.id)
+            {
+                if entry != previous {
+                    return Err(AppError::new("invalidInput"));
+                }
+            } else if let crate::workspace_recovery::Nullable(Some(ref cid)) = entry.connection_id {
+                let exists: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM connections WHERE id=?1)",
+                    [cid],
+                    |row| row.get(0),
+                )?;
+                if !exists {
+                    return Err(AppError::new("savedChartConnectionMissing"));
+                }
+            }
+        }
+        let revision = expected_revision + 1;
+        tx.execute(
+            "INSERT INTO saved_chart_library(singleton,revision,json) VALUES (1,?1,?2)
+             ON CONFLICT(singleton) DO UPDATE SET revision=excluded.revision,json=excluded.json",
+            params![revision, json],
+        )?;
+        tx.commit()?;
+        Ok(revision)
+    }
+
     pub(crate) fn chart_definitions(&self) -> Result<ChartDefinitionRecord, AppError> {
         read_chart_definitions(&self.0)
     }
 
-    /// Validate the stored document and immutable connection ownership under the same CAS lock.
-    /// New definitions require an existing connection; saved definitions survive deletion without
-    /// ever rebinding to a different one.
+    /// Validate stored definitions and their immutable connection ownership under the CAS lock.
     pub(crate) fn save_chart_definitions(
         &mut self,
         expected_revision: u64,
@@ -2215,6 +2271,77 @@ fn read_data_views(connection: &Connection) -> Result<DataViewRecord, AppError> 
         }
     }
 }
+
+fn read_saved_charts(connection: &Connection) -> Result<SavedChartRecord, AppError> {
+    let row = connection
+        .query_row(
+            "SELECT revision,
+           CASE WHEN length(CAST(json AS BLOB)) <= ?1 THEN json ELSE NULL END
+         FROM saved_chart_library WHERE singleton=1",
+            [crate::saved_charts::MAX_BYTES as i64],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()
+        .map_err(|error| match error {
+            rusqlite::Error::InvalidColumnType(..)
+            | rusqlite::Error::IntegralValueOutOfRange(..)
+            | rusqlite::Error::FromSqlConversionFailure(..) => AppError::new("invalidResponse"),
+            _ => AppError::new("storageUnavailable"),
+        })?;
+    match row {
+        None => Ok(SavedChartRecord {
+            revision: 0,
+            library: SavedChartLibrary::empty(),
+        }),
+        Some((revision, json)) => {
+            if revision <= 0 || revision as u64 > crate::saved_charts::MAX_REVISION {
+                return Err(AppError::new("invalidResponse"));
+            }
+            Ok(SavedChartRecord {
+                revision: revision as u64,
+                library: crate::saved_charts::decode_stored(&json)?,
+            })
+        }
+    }
+}
+
+/// Both branches shipped a different v9 table. Accept only their known DDL fingerprints, then
+/// add the missing table without reading or rewriting either library's document or revision.
+fn merge_chart_library_schemas(tx: &rusqlite::Transaction<'_>) -> Result<(), AppError> {
+    let reference = Connection::open_in_memory()?;
+    reference.execute_batch(include_str!("../migrations/009_saved_charts.sql"))?;
+    reference.execute_batch(include_str!("../migrations/009_chart_definitions.sql"))?;
+    let mut found = false;
+    for name in ["saved_chart_library", "chart_definition_library"] {
+        let actual: Option<(String, String)> = tx
+            .query_row(
+                "SELECT type, sql FROM sqlite_schema WHERE name=?1",
+                [name],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((kind, sql)) = actual {
+            let expected: String = reference.query_row(
+                "SELECT sql FROM sqlite_schema WHERE type='table' AND name=?1",
+                [name],
+                |row| row.get(0),
+            )?;
+            if kind != "table" || sql != expected {
+                return Err(AppError::new("storageUnavailable"));
+            }
+            found = true;
+        }
+    }
+    if !found {
+        return Err(AppError::new("storageUnavailable"));
+    }
+    tx.execute_batch(include_str!("../migrations/010_merged_chart_libraries.sql"))?;
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "storage/chart_library_merge_tests.rs"]
+mod chart_library_merge_tests;
 
 #[cfg(test)]
 mod tests {
@@ -4230,5 +4357,43 @@ mod tests {
             read_workspace_recovery_row(&connection).unwrap_err().code,
             "invalidResponse"
         );
+    }
+
+    fn v8_database(path: &Path) -> (Connection, String, String) {
+        let (conn, connection_id, model_id) = v7_database(path);
+        conn.execute_batch(include_str!("../migrations/008_pinned_filters.sql"))
+            .unwrap();
+        conn.execute(
+            "INSERT INTO pinned_filter_library(singleton,revision,json) VALUES(1,3,?1)",
+            [r#"{"version":3,"entries":[]}"#],
+        )
+        .unwrap();
+        (conn, connection_id, model_id)
+    }
+
+    #[test]
+    fn saved_charts_migration_preserves_v8_rows_and_reopens() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("v8-charts.sqlite");
+        let (conn, connection_id, model_id) = v8_database(&path);
+        drop(conn);
+        for _ in 0..2 {
+            let database = Database::open(&path).unwrap();
+            assert_eq!(
+                database
+                    .0
+                    .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                    .unwrap(),
+                SCHEMA_VERSION
+            );
+            assert_eq!(database.saved_charts().unwrap().revision, 0);
+            assert_eq!(database.pinned_filters().unwrap().revision, 3);
+            assert_eq!(database.data_views().unwrap().revision, 5);
+            assert_eq!(
+                database.connection_summaries().unwrap()[0].profile.id,
+                connection_id
+            );
+            assert_eq!(database.models().unwrap().profiles[0].id, model_id);
+        }
     }
 }

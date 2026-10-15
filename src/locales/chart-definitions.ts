@@ -62,6 +62,13 @@ export const enChartDefinitions = {
   exchangeStorageUnavailable: 'Local storage is unavailable. The import was not confirmed.',
   exchangeUnsupported: 'Definition exchange is unavailable in this environment.',
   exchangeFailed: 'The operation was not confirmed. Your saved definitions were left unchanged.',
+  resultDefinition: 'Definition from this execution',
+  resultReviewed: 'I reviewed this definition and its literals. Save the definition only, without results.',
+  resultUnsupported: 'This executed aggregation cannot be saved as a supported definition without changing its meaning. Its original DSL is unchanged.',
+  legacyLibrary: 'Previous chart library',
+  legacyDefinition: 'Original saved definition',
+  legacyBoundary: 'Previous definitions remain in their original library. No automatic conversion or deletion has occurred.',
+  legacyReuseBoundary: 'Reuse requires the same connection and target and a lossless supported shape. Ordering, minimum bucket counts and mixed groups remain available in the original definition.',
 };
 
 export const zhChartDefinitions: typeof enChartDefinitions = {
@@ -128,4 +135,11 @@ export const zhChartDefinitions: typeof enChartDefinitions = {
   exchangeStorageUnavailable: '本地存储不可用，尚未确认导入完成。',
   exchangeUnsupported: '当前环境不支持定义交换。',
   exchangeFailed: '尚未确认操作完成，已保存的定义保持不变。',
+  resultDefinition: '本次执行的定义',
+  resultReviewed: '已核对定义及其字面量，仅保存定义，不保存结果。',
+  resultUnsupported: '无法在保持原意的前提下将该执行聚合保存为受支持的定义，原始 DSL 未改变。',
+  legacyLibrary: '旧版图表库',
+  legacyDefinition: '原始保存定义',
+  legacyBoundary: '旧定义仍保留在原库，未自动转换或删除。',
+  legacyReuseBoundary: '复用须连接和目标相同，且能无损转换为受支持的结构；排序、最少桶计数和混合分组仍可在原定义中查看。',
 };

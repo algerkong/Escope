@@ -26,6 +26,7 @@ import { enQuerySort, zhQuerySort } from './query-sort';
 import { enChartDefinitions, zhChartDefinitions } from './chart-definitions';
 import { enQueryAggregationBuild, zhQueryAggregationBuild } from './query-aggregation-build';
 import { enPinnedFilters, zhPinnedFilters } from './pinned-filters';
+import { enQueryCharts, zhQueryCharts } from './query-charts';
 import { enQueryHistory, enWorkspaceRecovery, zhQueryHistory, zhWorkspaceRecovery } from './workspace-recovery';
 
 export const i18n = i18next.createInstance();
@@ -33,10 +34,10 @@ void i18n.use(initReactI18next).init({
   resources: {
     'zh-CN': { ...zh, queryLive: zhLive, cluster: zhCluster, models: zhModels, aiChat: zhAiChat, visualQuery: zhVisualQuery, resultGrid: zhResultGrid,
       documentComparison: zhDocumentComparison, documentDetail: zhDocumentDetail, queryAggregations: zhQueryAggregations, queryAggregationCharts: zhQueryAggregationCharts, connectionSettings: zhConnectionSettings, connectionAccess: zhConnectionAccess, queryLibrary: zhQueryLibrary, queryParameters: zhQueryParameters, queryExchange: zhQueryExchange,
-      workspaceRecovery: zhWorkspaceRecovery, queryHistory: zhQueryHistory, queryExport: zhQueryExport, dataViews: zhDataViews, runtimeFields: zhRuntimeFields, timeRange: zhTimeRange, queryFilters: zhQueryFilters, querySort: zhQuerySort, queryAggregationBuild: zhQueryAggregationBuild, chartDefinitions: zhChartDefinitions, pinnedFilters: zhPinnedFilters },
+      workspaceRecovery: zhWorkspaceRecovery, queryHistory: zhQueryHistory, queryExport: zhQueryExport, dataViews: zhDataViews, runtimeFields: zhRuntimeFields, timeRange: zhTimeRange, queryFilters: zhQueryFilters, querySort: zhQuerySort, queryAggregationBuild: zhQueryAggregationBuild, chartDefinitions: zhChartDefinitions, pinnedFilters: zhPinnedFilters, queryCharts: zhQueryCharts },
     'en-US': { ...en, queryLive: enLive, cluster: enCluster, models: enModels, aiChat: enAiChat, visualQuery: enVisualQuery, resultGrid: enResultGrid,
       documentComparison: enDocumentComparison, documentDetail: enDocumentDetail, queryAggregations: enQueryAggregations, queryAggregationCharts: enQueryAggregationCharts, connectionSettings: enConnectionSettings, connectionAccess: enConnectionAccess, queryLibrary: enQueryLibrary, queryParameters: enQueryParameters, queryExchange: enQueryExchange,
-      workspaceRecovery: enWorkspaceRecovery, queryHistory: enQueryHistory, queryExport: enQueryExport, dataViews: enDataViews, runtimeFields: enRuntimeFields, timeRange: enTimeRange, queryFilters: enQueryFilters, querySort: enQuerySort, queryAggregationBuild: enQueryAggregationBuild, chartDefinitions: enChartDefinitions, pinnedFilters: enPinnedFilters },
+      workspaceRecovery: enWorkspaceRecovery, queryHistory: enQueryHistory, queryExport: enQueryExport, dataViews: enDataViews, runtimeFields: enRuntimeFields, timeRange: enTimeRange, queryFilters: enQueryFilters, querySort: enQuerySort, queryAggregationBuild: enQueryAggregationBuild, chartDefinitions: enChartDefinitions, pinnedFilters: enPinnedFilters, queryCharts: enQueryCharts },
   },
   lng: navigator.language.toLowerCase().startsWith('zh') ? 'zh-CN' : 'en-US',
   fallbackLng: 'en-US',

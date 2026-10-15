@@ -8,6 +8,25 @@ import { add, apply, applyStatusFilter, fixture, inspect, preview } from './quer
 const any = (label: string) => fireEvent.click(within(screen.getByRole('radiogroup', { name: label })).getByRole('radio', { name: 'Any (OR)' }));
 
 describe('cell filters in the workspace', () => {
+  it('does not hide a locked-index pending filter bar after maximizing a query result', async () => {
+    const f = await fixture();
+    f.mount();
+    await f.saved();
+    fireEvent.click(screen.getByRole('button', { name: 'Run query' }));
+    await screen.findByText('9,007,199,254,740,993');
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('queryLive:maximizeResults') }));
+    fireEvent.click(await screen.findByRole('button', { name: 'events' }));
+    await screen.findByText('ready', { selector: '.rg-cell' });
+    f.clickCell('ready', 'status');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Add to pending filters' })).toBeEnabled());
+    add();
+    await f.user.keyboard('{Escape}');
+    expect(screen.getByRole('group', { name: '1 pending filters' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Review pending filters' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Refresh index' })).toBeDisabled();
+    expect(f.backend.execute).toHaveBeenCalledTimes(2);
+  });
+
   it('preserves pending state across settings and connections, then applies exact originals without executing', async () => {
     const f = await fixture(true);
     f.mount();

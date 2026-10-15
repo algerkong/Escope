@@ -1,4 +1,4 @@
-import { Check, CheckCheck, ChevronDown, Copy, Download, FileDown, Info, ListTree, LoaderCircle, MonitorX, Search, TriangleAlert, XCircle } from 'lucide-react';
+import { Check, CheckCheck, ChevronDown, Copy, Download, FileDown, Info, ListTree, LoaderCircle, Maximize2, Minimize2, MonitorX, Search, TriangleAlert, XCircle } from 'lucide-react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { EmptyState, IconButton } from '../../components/controls';
@@ -19,6 +19,7 @@ import { DocumentComparisonDialog } from './DocumentComparisonDialog';
 import { inspectLoadedDocument, type DocumentDetailResult } from '../../domain/document-detail';
 import { DocumentDetailDialog } from './DocumentDetailDialog';
 import { QueryAggregations } from './QueryAggregations';
+import type { ChartDefinitionsController } from './useChartDefinitions';
 
 const IDLE: ExecutionState = { status: 'idle' };
 const EMPTY_PAGES: readonly ExecutionPage[] = [];
@@ -50,6 +51,9 @@ interface Props {
   /** Persisted layout only. Pages, selection and scroll belong to this live execution. */
   layout?: ResultGridLayout;
   onLayoutChange?: (layout: ResultGridLayout) => void;
+  chartDefinitionsController?: ChartDefinitionsController;
+  maximized?: boolean;
+  onToggleMaximize?: () => void;
 }
 
 /**
@@ -58,7 +62,7 @@ interface Props {
  * number. Failed, cancelled and partial executions stay visually distinct from success, and
  * an unavailable (browser) workspace offers neither a request nor a retry.
  */
-export function QueryResults({ kind = 'query', active = true, documentIds, wrapJson = false, grouping = true, renderToolbar, query, entry, available, stale, endpointChanged, onCancel, onRun, canRun = true, onViewChange, onLoadMore, exportService, onSnapshotExport, onFilterCell, onNestedFilters, layout, onLayoutChange }: Props) {
+export function QueryResults({ kind = 'query', active = true, documentIds, wrapJson = false, grouping = true, renderToolbar, query, entry, available, stale, endpointChanged, onCancel, onRun, canRun = true, onViewChange, onLoadMore, exportService, onSnapshotExport, onFilterCell, onNestedFilters, layout, onLayoutChange, chartDefinitionsController, maximized, onToggleMaximize }: Props) {
   const { t, i18n } = useTranslation();
   const copy = useCopyText(query.id);
   const [gridStates, setGridStates] = useState<Record<string, { executionKey: string; value: ResultGridState }>>({});
@@ -225,7 +229,7 @@ export function QueryResults({ kind = 'query', active = true, documentIds, wrapJ
       {query.resultView === 'json' ? rawBlock : null}
     </>;
   } else if (showAggregations && detailSnapshot) {
-    content = <QueryAggregations snapshot={detailSnapshot} endpoint={entry?.endpoint ?? null} pages={pages} wrapJson={wrapJson} />;
+    content = <QueryAggregations snapshot={detailSnapshot} endpoint={entry?.endpoint ?? null} pages={pages} wrapJson={wrapJson} chartDefinitionsController={chartDefinitionsController} />;
   } else if (query.resultView === 'json') {
     content = rawBlock;
   } else if (summary === null) {
@@ -264,6 +268,14 @@ export function QueryResults({ kind = 'query', active = true, documentIds, wrapJ
           {canShowAggregations ? <button type="button" aria-pressed={showAggregations}
             onClick={() => setAggregationSnapshot(detailSnapshot)}>{t('queryAggregations:title')}</button> : null}
         </div>
+        {onToggleMaximize ? (
+          <IconButton
+            icon={maximized ? Minimize2 : Maximize2}
+            label={t(maximized ? 'queryLive:restoreResults' : 'queryLive:maximizeResults')}
+            aria-pressed={maximized}
+            onClick={onToggleMaximize}
+          />
+        ) : null}
       </div>;
 
   return <section className="results-section" data-kind={kind} aria-label={title}>

@@ -25,6 +25,7 @@ export interface AggregationChartScope {
 interface Props {
   entry: AggregationResult;
   scope: AggregationChartScope;
+  onMeasureChange?: (measure: string) => void;
 }
 
 /** A bucket key is shared by both series, so its own caveat is listed once for a dual chart. */
@@ -35,7 +36,7 @@ const SHARED_NOTICE = 'bucketStarts';
  * from the already bounded reader output, so a refused value is reported instead of drawn as zero,
  * and nothing here queries, reorders buckets or persists a chart definition.
  */
-export function AggregationChart({ entry, scope }: Props) {
+export function AggregationChart({ entry, scope, onMeasureChange }: Props) {
   const { t } = useTranslation();
   const controls = useId();
   const [measure, setMeasure] = useState<string | null>(null);
@@ -144,7 +145,9 @@ export function AggregationChart({ entry, scope }: Props) {
         <code>{scope.bounds.from}</code><code>{scope.bounds.to}</code></li> : null}
     </ul>
     {measures.length > 1 ? <label className="qac-measure">{t('queryAggregationCharts:measure')}
-      <SelectControl value={measure ?? DOC_COUNT_MEASURE} onChange={(event) => setMeasure(event.currentTarget.value)}>
+      <SelectControl value={measure ?? DOC_COUNT_MEASURE} onChange={(event) => {
+        setMeasure(event.currentTarget.value); onMeasureChange?.(event.currentTarget.value);
+      }}>
         {measures.map((item) => <option key={item.name} value={item.name}>{measureText(item)}</option>)}
       </SelectControl>
     </label> : null}

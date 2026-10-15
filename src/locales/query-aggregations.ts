@@ -65,6 +65,15 @@ export const enQueryAggregations = {
   error_tooComplex: 'Aggregation reading exceeds 32 definitions, 4,096 buckets, 1 KiB names, 100,000 tokens or 4,096 characters per number. No truncated interpretation was produced.',
   error_invalidDsl: 'The execution DSL is not unambiguous JSON with a single aggregation container.',
   error_invalidResponse: 'The received response is not unambiguous JSON with an aggregation object.',
+  viewMode: 'View mode',
+  tableView: 'Bucket table',
+  chartView: 'Chart',
+  metricCard: 'Metric: {{name}}',
+  barChartTitle: 'Terms bar chart: {{name}}',
+  lineChartTitle: 'Date histogram chart: {{name}}',
+  chartMetric: 'Chart metric',
+  unplottableNotice: '{{count}} bucket(s) cannot be plotted with finite numbers',
+  noInferredEnd: 'Returned intervals only. No missing buckets or end boundaries are inferred.',
 };
 
 export const zhQueryAggregations: Record<keyof typeof enQueryAggregations, string> = {
@@ -134,4 +143,13 @@ export const zhQueryAggregations: Record<keyof typeof enQueryAggregations, strin
   error_tooComplex: '聚合读取超过 32 个定义、4,096 个桶、1 KiB 名称、100,000 个 token 或每个数字 4,096 字符的限制，未生成截断的解释。',
   error_invalidDsl: '执行 DSL 不是含单一聚合容器的无歧义 JSON。',
   error_invalidResponse: '接收页不是含聚合对象的无歧义 JSON。',
+  viewMode: '视图模式',
+  tableView: '聚合表格',
+  chartView: '图表',
+  metricCard: '指标：{{name}}',
+  barChartTitle: 'Terms 条形图：{{name}}',
+  lineChartTitle: '日期折线图：{{name}}',
+  chartMetric: '图表数值',
+  unplottableNotice: '{{count}} 个桶含有非有限数值，无法绘制',
+  noInferredEnd: '仅显示已返回区间，不推算缺失桶或结束边界。',
 };

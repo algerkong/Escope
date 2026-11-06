@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Command as CommandIcon, Database, LoaderCircle, ScanLine, Search, Settings, ShieldCheck, TriangleAlert } from 'lucide-react';
+import { Command as CommandIcon, Database, LoaderCircle, Search, Settings, ShieldCheck, TriangleAlert } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   addWorkspaceTab, closeWorkspaceTab, createIndexTab, createQuery, createWorkspace,
@@ -287,7 +287,7 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
 
   return <div className="app-shell">
     <WindowTitleBar>
-      <div className="brand"><span className="brand-symbol"><ScanLine size={20} /></span><strong>EScope</strong><span className="brand-divider" />
+      <div className="brand"><img className="brand-logo" src="/icon.svg" alt="" width={30} height={30} /><strong>EScope</strong><span className="brand-divider" />
         <span className="workspace-title">{t('workspace')}</span></div>
       <div className="header-actions">
         <div className="active-connection"><Database size={15} />

@@ -146,7 +146,7 @@ th { color: var(--muted); font-weight: 500; background: var(--subtle); }
 .app-header { min-height: 58px; padding: 10px 20px; display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--border); }
 .brand { display: flex; align-items: center; gap: 11px; min-width: 0; }
 .brand strong { font-size: 18px; font-weight: 600; }
-.brand-symbol { width: 30px; height: 30px; border-radius: 6px; display: grid; place-items: center; background: var(--accent); color: var(--on-accent); }
+.brand-logo { width: 30px; height: 30px; display: block; flex-shrink: 0; }
 .brand-divider { height: 18px; width: 1px; background: var(--border); margin: 0 6px; }
 .workspace-title { font-size: .85rem; color: var(--muted); }
 .header-actions { display: flex; align-items: center; gap: 6px; min-width: 0; }
@@ -390,7 +390,7 @@ kbd { border: 1px solid var(--border); background: var(--subtle); border-radius:
   .connection-identity > div { grid-template-columns: minmax(0, 1fr); gap: 0; }
 }
 @media (max-width: 520px) {
-  .brand-symbol { display: none; }
+  .brand-logo { display: none; }
   .brand strong { font-size: 17px; }
   .header-actions { gap: 1px; }
   .active-connection { max-width: 114px; font-size: .75rem; }

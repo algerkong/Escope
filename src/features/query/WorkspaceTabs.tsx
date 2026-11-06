@@ -12,6 +12,7 @@ interface Props {
   profiles: readonly ConnectionProfile[];
   entries: Readonly<Record<string, ExecutionEntry>>;
   aiOpen: boolean;
+  aiEnabled?: boolean;
   dirtyIds: ReadonlySet<string>;
   onSelect: (id: string | null) => void;
   onClose: (id: string) => void;
@@ -21,7 +22,7 @@ interface Props {
 
 export const workspaceTabId = (id: string | null) => `workspace-tab-${id ?? 'home'}`;
 
-export function WorkspaceTabs({ state, profiles, entries, aiOpen, dirtyIds, onSelect, onClose, onAdd, onToggleAI }: Props) {
+export function WorkspaceTabs({ state, profiles, entries, aiOpen, aiEnabled = false, dirtyIds, onSelect, onClose, onAdd, onToggleAI }: Props) {
   const { t } = useTranslation();
   const list = useRef<HTMLDivElement>(null);
   const ids = [null, ...state.tabs.map((tab) => tab.document.id)];
@@ -92,7 +93,7 @@ export function WorkspaceTabs({ state, profiles, entries, aiOpen, dirtyIds, onSe
           onClick={() => activate(activePosition + 1)} />
       </> : null}
       <IconButton icon={Plus} label={t('newQuery')} onClick={onAdd} />
-      <IconButton icon={PanelRight} label={t('query:toggleAI')} aria-pressed={aiOpen} onClick={onToggleAI} />
+      {aiEnabled ? <IconButton icon={PanelRight} label={t('query:toggleAI')} aria-pressed={aiOpen} onClick={onToggleAI} /> : null}
     </div>
   </div>;
 }

@@ -84,6 +84,8 @@ interface Props {
   profiles: ConnectionProfile[];
   preferences: Preferences;
   aiOpen: boolean;
+  /** AI entry points are opt-in; the app keeps them hidden until the assistant is release-ready. */
+  aiEnabled?: boolean;
   testResults: Record<string, ConnectionTestState>;
   toggleAI: () => void;
   onSettings: (route: SettingsRoute) => void;
@@ -116,7 +118,7 @@ interface Props {
   chartExchangeService?: ChartDefinitionExchangeService;
 }
 
-export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResults, toggleAI, onSettings, updateQuery, selectTab, openIndex, addQuery, closeTab, backend = desktopQueryBackend, modelService = desktopModelService, aiBackend, canQuery, active = true, onCommandReady, libraryService = defaultQueryLibraryService, snapshotExportService = desktopSnapshotExportService, exchangeService: suppliedExchangeService, restoreQuery, recovery, dataViewService: suppliedDataViewService, pinnedFilterService: suppliedPinnedFilterService,
+export function QueryWorkspace({ state, profiles, preferences, aiOpen, aiEnabled = false, testResults, toggleAI, onSettings, updateQuery, selectTab, openIndex, addQuery, closeTab, backend = desktopQueryBackend, modelService = desktopModelService, aiBackend, canQuery, active = true, onCommandReady, libraryService = defaultQueryLibraryService, snapshotExportService = desktopSnapshotExportService, exchangeService: suppliedExchangeService, restoreQuery, recovery, dataViewService: suppliedDataViewService, pinnedFilterService: suppliedPinnedFilterService,
   savedChartService: suppliedSavedChartService, chartDefinitionService: suppliedChartDefinitionService, chartExchangeService: suppliedChartExchangeService }: Props) {
   const { t } = useTranslation();
   const effectiveSavedChartService = useMemo(() => suppliedSavedChartService ?? createSavedChartService(), [suppliedSavedChartService]);
@@ -142,7 +144,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
     indicesFor, fieldsFor, mappingFor,
   } = useQueryResources(backend);
   const { entries, run, cancel, release, reconcile, loadMore } = useQueryExecutions(backend, recovery?.onHistory);
-  const panels = useWorkspacePanels(aiOpen, active);
+  const panels = useWorkspacePanels(aiEnabled && aiOpen, active);
   const library = useQueryLibrary(libraryService);
   const dataViewService = useMemo(() => suppliedDataViewService ?? createDataViewService(), [suppliedDataViewService]);
   const dataViews = useDataViews(dataViewService);
@@ -475,7 +477,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
     setChecked((current) => ({ ...current, [query.id]: { source: result.formatted, error: null } }));
     editor.current?.focus();
   };
-  return <div className={`query-layout ${aiOpen ? 'ai-open' : ''}`} ref={panels.containerRef} style={panels.style}>
+  return <div className={`query-layout ${aiEnabled && aiOpen ? 'ai-open' : ''}`} ref={panels.containerRef} style={panels.style}>
     <aside className="resource-sidebar" id="workspace-resources">
       <div className="sidebar-heading"><span>{t('query:resources')}</span><IconButton icon={Plus} label={t('connections:add')} onClick={() => onSettings('connections')} /></div>
       <button className="resource-connection" onClick={() => onSettings('connections')}><Database size={17} />
@@ -498,7 +500,7 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
       onResize={(width) => panels.resize('resources', width)}
       onReset={() => panels.resize('resources', PANEL_DEFAULTS.resources)} />
     <main className="query-main">
-      <WorkspaceTabs state={state} profiles={profiles} entries={entries} aiOpen={aiOpen}
+      <WorkspaceTabs state={state} profiles={profiles} entries={entries} aiOpen={aiOpen} aiEnabled={aiEnabled}
         dirtyIds={dirtyDraftIds}
         onSelect={selectTab} onClose={requestClose} onAdd={() => addQuery()} onToggleAI={toggleAI} />
       <div className="workspace-recovery-bar">
@@ -690,11 +692,11 @@ export function QueryWorkspace({ state, profiles, preferences, aiOpen, testResul
       </div>
     </main>
     <PanelResizeHandle side="ai" label={t('query:resizeAI')} controls="workspace-ai"
-      {...panels.layout.ai} active={active && aiOpen}
+      {...panels.layout.ai} active={active && aiEnabled && aiOpen}
       onResize={(width) => panels.resize('ai', width)}
       onReset={() => panels.resize('ai', PANEL_DEFAULTS.ai)} />
-    <AiChatPanel modelService={modelService} backend={aiBackend} open={aiOpen} active={active} query={showingQuery ? query : null}
-      onClose={toggleAI} onSettings={() => onSettings('models')} />
+    {aiEnabled ? <AiChatPanel modelService={modelService} backend={aiBackend} open={aiOpen} active={active} query={showingQuery ? query : null}
+      onClose={toggleAI} onSettings={() => onSettings('models')} /> : null}
     <SaveDraftDialog open={saveDraftOpen} entry={linkedEntry} initialName={query.name} status={library.status}
       loadError={library.loadError} saveStatus={library.saveStatus} onClose={() => setSaveDraftOpen(false)}
       onSave={saveDraftValues} onRetrySave={library.retrySave} />

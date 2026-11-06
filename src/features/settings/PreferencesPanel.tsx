@@ -4,8 +4,8 @@ import { defaultPreferences, type Preferences } from '../../domain/preferences';
 import { IconButton, SelectControl, SettingRow, Toggle } from '../../components/controls';
 import type { SettingsRoute } from '../../app/routes';
 
-export function PreferencesPanel({ route, preferences: p, update }:
-  { route: SettingsRoute; preferences: Preferences; update: (patch: Partial<Preferences>) => void }) {
+export function PreferencesPanel({ route, preferences: p, update, aiEnabled = false }:
+  { route: SettingsRoute; preferences: Preferences; update: (patch: Partial<Preferences>) => void; aiEnabled?: boolean }) {
   const { t } = useTranslation();
   const toggle = (key: 'grouping' | 'startAI' | 'wrapJson' | 'reduceMotion') =>
     <SettingRow label={t(`settings:${key}`)} htmlFor={key}>
@@ -41,7 +41,7 @@ export function PreferencesPanel({ route, preferences: p, update }:
     </div>
     <div className="section-heading"><h2>{t('settings:startup')}</h2></div>
     <div className="settings-section">
-      {toggle('startAI')}
+      {aiEnabled ? toggle('startAI') : null}
       <SettingRow label={t('settings:startView')} htmlFor="startView">{select('startView', [
         { value: 'table', label: t('query:table') }, { value: 'json', label: 'JSON' },
       ])}</SettingRow>

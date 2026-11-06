@@ -7,6 +7,7 @@ import {
 } from '../domain/query';
 import { selectConnection, type ConnectionInput, type ConnectionSecurityChange } from '../domain/connection';
 import { parsePreferences, resolveLocale, type Preferences } from '../domain/preferences';
+import { AI_ASSISTANT_ENABLED } from '../domain/feature-flags';
 import type { AiChatBackend } from '../domain/ai-chat';
 import type { StorageService, StoredState } from '../services/storage';
 import { errorCode, testConnection, type QueryBackend } from '../services/ipc';
@@ -47,11 +48,12 @@ export function applyPreferences(p: Preferences) {
 export function App({ service, initial, connectionProbe = testConnection, queryBackend, aiBackend, modelService: suppliedModelService,
   queryLibraryService: suppliedQueryLibraryService, workspaceRecoveryService: suppliedRecoveryService,
   dataViewService: suppliedDataViewService, pinnedFilterService: suppliedPinnedFilterService,
-  chartDefinitionService: suppliedChartDefinitionService, chartExchangeService: suppliedChartExchangeService }:
+  chartDefinitionService: suppliedChartDefinitionService, chartExchangeService: suppliedChartExchangeService,
+  aiEnabled = AI_ASSISTANT_ENABLED }:
   { service: StorageService; initial: StoredState; connectionProbe?: typeof testConnection; queryBackend?: QueryBackend;
     aiBackend?: AiChatBackend; modelService?: ModelService; queryLibraryService?: QueryLibraryService;
     workspaceRecoveryService?: WorkspaceRecoveryService; dataViewService?: DataViewService; pinnedFilterService?: PinnedFilterService;
-    chartDefinitionService?: ChartDefinitionService; chartExchangeService?: ChartDefinitionExchangeService }) {
+    chartDefinitionService?: ChartDefinitionService; chartExchangeService?: ChartDefinitionExchangeService; aiEnabled?: boolean }) {
   const { t } = useTranslation();
   const [preferences, setPreferences] = useState(initial.preferences);
   const preferencesRef = useRef(preferences);
@@ -69,7 +71,7 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
   const { workspace: state, workspaceRef, updateWorkspace: setState } = recovery;
   const [view, setView] = useState<'query' | 'settings'>('query');
   const [route, setRoute] = useState<SettingsRoute>('general');
-  const [aiOpen, setAI] = useState(initial.preferences.startAI);
+  const [aiOpen, setAI] = useState(aiEnabled && initial.preferences.startAI);
   const [palette, setPalette] = useState<'jump' | 'command' | null>(null);
   const [queryCommand, setQueryCommand] = useState<QueryCommand | null>(null);
   const [busy, setBusy] = useState(false);
@@ -267,7 +269,7 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
         keywords: tab.kind === 'index' ? 'index data 索引 数据' : 'query 查询',
         run: () => { selectTab(tab.document.id); backToQuery(); },
       })),
-      ...settingsRoutes.map((item) => ({
+      ...settingsRoutes.filter((item) => aiEnabled || item !== 'models').map((item) => ({
         id: item, title: t(`settings:${item}`), keywords: `settings 设置 ${item}`,
         run: () => openSettings(item),
       })),
@@ -275,7 +277,9 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
     : [
       { id: 'new', title: t('newQuery'), keywords: 'new query 新建查询', run: addQuery },
       { id: 'settings', title: t('settings'), keywords: 'settings 设置', run: () => openSettings('general') },
-      { id: 'ai', title: t('query:toggleAI'), keywords: 'assistant AI 助手', run: () => { setAI((value) => !value); backToQuery(); } },
+      ...(aiEnabled ? [
+        { id: 'ai', title: t('query:toggleAI'), keywords: 'assistant AI 助手', run: () => { setAI((value) => !value); backToQuery(); } },
+      ] : []),
       { id: 'execute', title: t('query:run'), keywords: 'execute query 执行查询',
         run: () => queryCommand?.run(),
         disabledReason: queryCommand?.enabled ? undefined : queryCommand?.reason ?? t('queryLive:runUnavailable') },
@@ -309,7 +313,7 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
     <PreferencesSaveError code={saveError} saving={savingPreferences} onRetry={persistPreferences}
       onClose={() => setSaveError(null)} />
     <div className="view-container" hidden={view !== 'query'}>
-      <QueryWorkspace key={recovery.restoreVersion} state={state} profiles={profiles} preferences={preferences} aiOpen={aiOpen} testResults={connectionTests.results}
+      <QueryWorkspace key={recovery.restoreVersion} state={state} profiles={profiles} preferences={preferences} aiOpen={aiEnabled && aiOpen} aiEnabled={aiEnabled} testResults={connectionTests.results}
         backend={queryBackend} canQuery={service.kind === 'desktop'} active={view === 'query'} onCommandReady={setQueryCommand}
         modelService={modelService} aiBackend={aiBackend}
         libraryService={queryLibraryService}
@@ -322,7 +326,7 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
         selectTab={selectTab} openIndex={openIndex} addQuery={addQuery} restoreQuery={restoreQuery} closeTab={closeTab} />
     </div>
     {view === 'settings' ? <SettingsView route={route} navigate={openSettings} back={backToQuery} preferences={preferences}
-      modelService={modelService} aiBackend={aiBackend}
+      modelService={modelService} aiBackend={aiBackend} aiEnabled={aiEnabled}
       updatePreferences={updatePreferences} connections={profiles} activeId={state.activeConnectionId} busy={busy}
       cleanupPending={cleanupPending} cleanupBusy={cleanupBusy} cleanupCredentials={cleanupCredentials}
       canTest={service.kind === 'desktop'} testResults={connectionTests.results}

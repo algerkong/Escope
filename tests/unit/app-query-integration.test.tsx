@@ -35,7 +35,7 @@ async function mount(kind: StorageService['kind'] = 'desktop', twoConnections = 
     })),
     closePit: vi.fn(async () => {}),
   } satisfies QueryBackend;
-  render(<I18nextProvider i18n={i18n}><App service={{ ...session, kind }} initial={initial} queryBackend={backend} /></I18nextProvider>);
+  render(<I18nextProvider i18n={i18n}><App service={{ ...session, kind }} initial={initial} queryBackend={backend} aiEnabled /></I18nextProvider>);
   return { backend, profile, second, user: userEvent.setup() };
 }
 

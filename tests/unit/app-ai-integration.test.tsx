@@ -27,7 +27,7 @@ async function mount(desktopModels = false) {
     available: true, chat: vi.fn(), cancel: vi.fn().mockResolvedValue(true),
   };
   render(<I18nextProvider i18n={i18n}>
-    <App service={service} initial={initial} modelService={modelService} aiBackend={aiBackend} />
+    <App service={service} initial={initial} modelService={modelService} aiBackend={aiBackend} aiEnabled />
   </I18nextProvider>);
   const user = userEvent.setup();
   await user.click(screen.getAllByRole('tab')[1]!);

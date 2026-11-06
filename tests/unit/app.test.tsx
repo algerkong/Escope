@@ -8,10 +8,10 @@ import { createSessionStorage, type StorageService } from '../../src/services/st
 
 beforeEach(async () => { await i18n.changeLanguage('zh-CN'); });
 
-async function mount(service: StorageService = createSessionStorage()) {
+async function mount(service: StorageService = createSessionStorage(), aiEnabled = false) {
   const initial = await service.load();
   initial.preferences.locale = 'zh-CN';
-  render(<I18nextProvider i18n={i18n}><App service={service} initial={initial} /></I18nextProvider>);
+  render(<I18nextProvider i18n={i18n}><App service={service} initial={initial} aiEnabled={aiEnabled} /></I18nextProvider>);
   return userEvent.setup();
 }
 async function settings(user: ReturnType<typeof userEvent.setup>, name = '常规') {
@@ -20,17 +20,21 @@ async function settings(user: ReturnType<typeof userEvent.setup>, name = '常规
 }
 
 describe('workbench', () => {
-  it('starts empty, keeps AI closed and never sends a request', async () => {
-    await mount();
+  it('starts empty with the unfinished AI entries hidden', async () => {
+    const user = await mount();
     expect(screen.getByRole('tab', { name: '数据预览' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.queryByRole('textbox', { name: '查询 DSL' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '打开索引' })).toBeDisabled();
     expect(screen.queryByRole('complementary', { name: 'AI 助手' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '显示或隐藏 AI 面板' })).not.toBeInTheDocument();
+    await user.click(screen.getAllByRole('button', { name: '设置' })[0]!);
+    expect(screen.queryByRole('button', { name: 'AI 模型' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('switch', { name: '下次启动时展开 AI' })).not.toBeInTheDocument();
     expect(screen.getByText('浏览器预览 · 仅本次会话', { selector: '.session-banner' })).toBeInTheDocument();
     expect(screen.queryByLabelText('当前连接')).not.toBeInTheDocument();
   });
   it('retains query text, target, result view and AI state across settings', async () => {
-    const user = await mount();
+    const user = await mount(undefined, true);
     await user.click(screen.getAllByRole('tab')[1]!);
     const editor = screen.getByLabelText('查询 DSL');
     fireEvent.change(editor, { target: { value: '{"id":9007199254740993}' } });
@@ -158,7 +162,7 @@ describe('workbench', () => {
     expect(screen.queryByLabelText('当前连接')).not.toBeInTheDocument();
   });
   it('renders the model settings panel and keeps a stored profile across settings round trips', async () => {
-    const user = await mount();
+    const user = await mount(undefined, true);
     await settings(user, 'AI 模型');
     expect(await screen.findByText('尚未配置模型')).toBeInTheDocument();
     expect(screen.queryByText('当前构建尚未接入模型服务。')).not.toBeInTheDocument();
@@ -178,7 +182,7 @@ describe('workbench', () => {
   });
 
   it('keeps startup defaults unchanged until next launch and supports keyboard tabs', async () => {
-    const user = await mount();
+    const user = await mount(undefined, true);
     await settings(user);
     await user.selectOptions(screen.getByLabelText('下次启动时的结果视图'), 'json');
     await user.click(screen.getByRole('switch', { name: '下次启动时展开 AI' }));

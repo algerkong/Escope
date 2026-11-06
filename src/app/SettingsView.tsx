@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { settingsGroups, type SettingsRoute } from './routes';
 import type { ConnectionInput, ConnectionProfile, ConnectionSecurityChange } from '../domain/connection';
 import type { Preferences } from '../domain/preferences';
+import { AI_ASSISTANT_ENABLED } from '../domain/feature-flags';
 import type { AiChatBackend } from '../domain/ai-chat';
 import { ConnectionPanel } from '../features/connections/ConnectionPanel';
 import { ConnectionAccess } from '../features/connections/ConnectionAccess';
@@ -40,12 +41,18 @@ interface Props {
   /** Model profile persistence; the app passes the desktop/session service created once at startup. */
   modelService?: ModelService;
   aiBackend?: AiChatBackend;
+  /** Hides the AI model route while the assistant is not release-ready. */
+  aiEnabled?: boolean;
 }
 
 export function SettingsView(props: Props) {
   const { t } = useTranslation();
   const [search, setSearch] = useState('');
-  const { route } = props;
+  const { aiEnabled = AI_ASSISTANT_ENABLED } = props;
+  const route = !aiEnabled && props.route === 'models' ? 'general' : props.route;
+  const groups = aiEnabled ? settingsGroups
+    : settingsGroups.map((group) => ({ ...group, routes: group.routes.filter((item) => item !== 'models') }))
+      .filter((group) => group.routes.length > 0);
   const isManagement = ['connections', 'models', 'cluster', 'nodes', 'shards', 'indices'].includes(route);
   const activeProfile = props.connections.find((item) => item.id === props.activeId) ?? null;
   const Icon = icons[route];
@@ -55,7 +62,7 @@ export function SettingsView(props: Props) {
       <label className="search-input settings-search"><Search size={16} /><input aria-label={t('settings:search')}
         placeholder={t('settings:search')} value={search} onChange={(event) => setSearch(event.target.value)} /></label>
       <nav aria-label={t('settings')}>
-        {settingsGroups.map((group) => {
+        {groups.map((group) => {
           const routes = group.routes.filter((item) => `${t(`settings:${item}`)} ${item}`.toLowerCase().includes(search.toLowerCase()));
           return routes.length ? <div className="settings-nav-group" key={group.id}>
             <h2>{t(`settings:${group.id}`)}</h2>
@@ -66,7 +73,7 @@ export function SettingsView(props: Props) {
             })}
           </div> : null;
         })}
-        {!settingsGroups.some((group) => group.routes.some((item) => `${t(`settings:${item}`)} ${item}`.toLowerCase().includes(search.toLowerCase()))) ?
+        {!groups.some((group) => group.routes.some((item) => `${t(`settings:${item}`)} ${item}`.toLowerCase().includes(search.toLowerCase()))) ?
           <p className="muted settings-no-matches">{t('noMatches')}</p> : null}
       </nav>
       <div className="settings-version"><Settings2 size={15} />{t('settings:about')}</div>
@@ -74,7 +81,7 @@ export function SettingsView(props: Props) {
     <main className="settings-main"><div className={`settings-content ${isManagement ? 'wide' : ''}`}>
       <h1 tabIndex={-1} id="settings-title"><Icon size={21} />{t(`settings:${route}`)}</h1>
       {route === 'general' || route === 'appearance' || route === 'typography' || route === 'shortcuts' ?
-        <PreferencesPanel route={route} preferences={props.preferences} update={props.updatePreferences} /> :
+        <PreferencesPanel route={route} preferences={props.preferences} update={props.updatePreferences} aiEnabled={aiEnabled} /> :
         route === 'connections' ? <ConnectionPanel connections={props.connections} activeId={props.activeId} busy={props.busy}
           canTest={props.canTest} testResults={props.testResults} timeZone={props.preferences.timeZone} onTest={props.testConnection}
           cleanupPending={props.cleanupPending} cleanupBusy={props.cleanupBusy} onCleanup={props.cleanupCredentials}

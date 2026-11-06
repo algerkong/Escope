@@ -8,7 +8,7 @@
 F01/R03 仅更新共享开发依赖：Tailwind CLI 下 watcher 2.5.1 → 2.5.6，
 source-map-js 1.2.1 → 1.2.2，CLI/Tailwind 4.3.3 保持。原型源文件和构建脚本未修改。
 本次 `npm run build:prototype` 成功，`npm run test:prototype` **16 项通过**；
-完整/生产 npm 审计均 0，安装与定向证据见 [依赖 QA](dependency-security-qa.md)。
+完整/生产 npm 审计均 0，安装与定向证据见 [依赖 QA](acceptance/foundation-and-connections.md)。
 没有启动浏览器或 WebView；下列手工、布局、屏幕阅读器和跨平台关卡仍未验收。
 以下 2026-09-30 的修复与结果保持为历史记录，不当作本次新增成果。
 

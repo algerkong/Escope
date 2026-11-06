@@ -15,7 +15,7 @@
   过期、语言/主题、打开/重开对话框不自动发请求。
 - 连接或目标输入变化时旧结果不冒充当前诊断；取消/关闭/卸载隔离迟到结果。
   中英文、窄窗口/大字号、原生滚动/键盘/焦点待集中验收，自动化见
-  [能力诊断 QA](connection-capabilities-qa.md)。
+  [能力诊断 QA](acceptance/foundation-and-connections.md)。
 
 ## 预览与表格选择（2026-10-09）
 
@@ -58,7 +58,7 @@
   显式重载有丢弃当前会话编辑/结果并停止请求的确认，读取失败仍保留当前编辑。
   浏览器为明确的 session 内存适配，不承诺刷新后恢复，也不作为 SQLite 失败降级。
 
-自动化与待人工边界见 [恢复批次 QA](workspace-recovery-qa.md)。
+自动化与待人工边界见 [恢复批次 QA](acceptance/results-and-workspace.md)。
 
 ## 固定筛选（2026-10-10）
 
@@ -76,8 +76,8 @@
   v1 读取不改写；显式新增升级为 v2，删除旧 v1 不升级，已存 v2 不降级。
 - 关闭保存过程不会伪报成功；中英文、窄窗口/大字号、长值、原生焦点/键盘与重启升级单列待验。
 
-开发证据和限制见 [固定 nested QA](pinned-nested-filters-qa.md)；
-平面首批记录见 [固定筛选 QA](pinned-filters-qa.md)。
+开发证据和限制见 [固定 nested QA](acceptance/query-filters.md)；
+平面首批记录见 [固定筛选 QA](acceptance/query-filters.md)。
 
 ## 查询参数与本地交换（2026-10-09）
 
@@ -93,7 +93,7 @@
 - 原生文件工作未返回前阻止关闭；取消、已保存、导入未确认与浏览器下载请求分开反馈。
   窄窗口、大字号、下拉/IME、焦点返回和真实原生选择/覆盖单列人工验收。
 
-开发证据与文件/秘密边界见 [参数与交换 QA](query-parameters-and-exchange-qa.md)。
+开发证据与文件/秘密边界见 [参数与交换 QA](acceptance/query-editor-and-parameters.md)。
 
 ## 全量导出（2026-10-09）
 
@@ -108,7 +108,7 @@
 - 原生选择框与阻塞磁盘调用不能被强制中止；取消/预算在安全边界检查并等待已有写入退出。
   重启不恢复或自动重跑导出。浏览器没有全量扫描降级路径。
 
-本批自动化与原生/性能未验范围见 [导出 QA](snapshot-export-qa.md)。
+本批自动化与原生/性能未验范围见 [导出 QA](acceptance/results-and-workspace.md)。
 
 ## 融合式窗口顶栏（2026-09-30）
 
@@ -238,14 +238,14 @@ HTML 原型实现前三项及 Esc，其他为规划，不宣称生效。
 不解释正则，不改变 DSL 或执行。默认 Tab 可离开编辑器，不要求用户通过快捷键解除键盘捕获。
 查询执行与关闭标签在 Monaco 前仲裁，共用已有门控，不变成插入行命令；IME/229/模态/
 隐藏工作区仍不执行。设置/语言/字体变化保留模型与撤销，原生按键与焦点尚未人工验证，
-自动化范围见 [编辑器 QA](query-monaco-editor-qa.md)。
+自动化范围见 [编辑器 QA](acceptance/query-editor-and-parameters.md)。
 
 Q03 第二批增加本地补全图标与 Monaco 建议列表，仅取同目标当前字段证据、当前 DSL runtime
 和参数定义；不自动取字段或执行。默认不预选，方向键定位后 Tab/点击明确接受，Esc 关闭；
 普通 Enter、提交字符、行内建议与 Tab 自动补全关闭。字段/参数名称按 JSON token 字面插入，
 不附带脚本、命令或额外编辑，不改参数模板；源/目标/证据失效与只读/隐藏/IME 保持守卫。
 来源/空状态/ARIA 跟随语言；列表布局与原生键盘、屏幕阅读器仍待人工，
-边界及真实 Monaco 实例自动化见 [补全 QA](query-completions-qa.md)。
+边界及真实 Monaco 实例自动化见 [补全 QA](acceptance/query-editor-and-parameters.md)。
 
 ## 验收
 

@@ -135,7 +135,7 @@ Q02 显式 nested 首批限顶级 nested 路径及直接标量字段，Mapping �
 报告的实际索引集合须一致。内部否定仍可能被其他对象满足；“不存在匹配对象”的父文档
 排除使用外层 `must_not`，且不越出所属 OR 分支。每组 `score_mode: none`、
 `ignore_unmapped: false`；完整预览后显式应用，不执行、不反向改写手写 nested。
-限制与未验语义见 [nested QA](query-nested-filters-qa.md)。
+限制与未验语义见 [nested QA](acceptance/query-filters.md)。
 
 待应用筛选的逐条启停保留定义、精确值和组归属，禁用仍占条件/组配额；
 组内没有启用成员时不参与任何组合，包括 OR 与 nested 父文档排除，不生成空查询。
@@ -151,8 +151,8 @@ Q02 显式 nested 首批限顶级 nested 路径及直接标量字段，Mapping �
 明确解除绑定只遗忘会话定义，当前 DSL 和结果保持原样。
 新执行的时间冻结、旧 PIT/历史与绑定副本独立；索引入口仅明确生成同目标新查询，保留
 原始观察身份，不伪造新查询已经执行。绑定不进 IPC/持久化，反序列化形状不恢复托管，
-重启仅恢复已应用 DSL。会话证据见 [会话绑定 QA](query-filter-session-qa.md)；
-[启停 QA](query-filter-enablement-qa.md) 保留第六批历史证据。
+重启仅恢复已应用 DSL。会话证据见 [会话绑定 QA](acceptance/query-filters.md)；
+[启停 QA](acceptance/query-filters.md) 保留第六批历史证据。
 
 第八批固定库 v1 接平面 mapped，第九批 v2 增加显式顶级 mapped nested/直接标量字段，
 第十批 v3 增加平面查询期 runtimeMapping。保留路径、同对象组与父文档匹配；
@@ -175,8 +175,8 @@ runtime 遮蔽拒绝；启用 runtime 项须匹配当前 DSL 的精确声明，�
 完整最终 DSL 审核后显式应用，不自动执行；库删除不改已加载副本。
 索引仅生成同目标新查询，随后真实新观察保留其实际身份，不从恢复数据重新信任会话绑定。
 锁定索引 DSL 缺少查询期声明时，加载后预览拒绝，不生成新查询或改写原索引标签。
-证据与未验范围见 [固定 runtime QA](pinned-runtime-filters-qa.md)，
-v1/v2 证据保留于 [固定筛选 QA](pinned-filters-qa.md) 和 [固定 nested QA](pinned-nested-filters-qa.md)。
+证据与未验范围见 [固定 runtime QA](acceptance/query-filters.md)，
+v1/v2 证据保留于 [固定筛选 QA](acceptance/query-filters.md) 和 [固定 nested QA](acceptance/query-filters.md)。
 
 ### 6.3 时间与聚合
 
@@ -187,7 +187,7 @@ v1/v2 证据保留于 [固定筛选 QA](pinned-filters-qa.md) 和 [固定 nested
 收藏保留相对时间意图，每次执行重新解析，历史记录保留本次实际边界。
 历史恢复只还原本次绝对 DSL，不重新启用相对范围。相对天为 24 小时持续时间，
 绝对时间使用明确 UTC/IANA/固定偏移，拒绝不存在/歧义本地时间；date 不舍入纳秒。
-本批支持/限额和未验范围见 [时间范围 QA](query-time-range-qa.md)，不据此宣称完整 Q02 完成。
+本批支持/限额和未验范围见 [时间范围 QA](acceptance/query-editor-and-parameters.md)，不据此宣称完整 Q02 完成。
 
 基础聚合通过“分组 + 指标”完成，支持 terms、date_histogram、count、sum、avg。
 高级管道聚合通过 DSL 使用；不能支持的类型仍可查看原始响应与通用聚合树。
@@ -205,7 +205,7 @@ v1/v2 证据保留于 [固定筛选 QA](pinned-filters-qa.md) 和 [固定 nested
 预览按行与字段读取身份绑定，行/目标/草稿/证据变化即作废需重审，审核打开期间禁用运行与保存；
 未应用行不进入恢复存储，应用后的 DSL 沿用既有草稿/历史/恢复规则；索引标签仍只用显式新建同目标查询。
 **通用聚合树、进阶公式/同比环比/图层仍待开发；图表定义保存与有界双轴范围见下文**，
-证据与待验项见 [聚合构建 QA](query-aggregation-build-qa.md)。
+证据与待验项见 [聚合构建 QA](acceptance/aggregations-and-charts.md)。
 
 2026-10-10 Q06 首批只完成**已有查询聚合结果的有界读取/展示**，不是上述构建/绘图闭环：
 按执行 rawDsl 识别 sum/avg/min/max/value_count/cardinality、单层 terms/date_histogram
@@ -217,7 +217,7 @@ post_filter、脚本/runtime、页级部分/超时/分片/跨集群限制可辨�
 **通用聚合树仍待开发**（首批单值/条形/折线绘图见 8.3）。
 DSL 256 KiB、原页 1 MiB、32 定义/4,096 桶、64 层/100,000 token/数字 4,096 字符，
 每页 50 桶，超限整次解释拒绝；会话视图/选择/页码不进恢复，操作不额外请求或执行。
-证据与真实/原生/性能待验项见 [聚合结果 QA](query-aggregations-qa.md)。
+证据与真实/原生/性能待验项见 [聚合结果 QA](acceptance/aggregations-and-charts.md)。
 
 2026-10-11 Q06a 首批把“这次图是怎么来的”收为可选的本地版本化定义：一条定义记录连接 ID + 目标模式 +
 分组 + 指标 + 绘图度量，只保存名称/类型/字段与 size/间隔/时区字面量。**不保存**解析结果、绘制数值、
@@ -245,8 +245,8 @@ size/间隔/时区字面量、绘图度量和不透明来源标签，不含端�
 两种图型的任一值轴跨度溢出均整次拒绘，不产生 NaN 几何。
 通用聚合树与剩余进阶图型（参考线/注释/图例筛选、同比环比、
 公式、图层）仍待开发，若需持久化第二度量必须先版本化定义（v2），
-证据与待验项见 [图表定义 QA](chart-definitions-qa.md)、[图表定义交换 QA](chart-definition-exchange-qa.md)
-与 [折线双轴 QA](query-aggregation-chart-dual-axis-qa.md)、[terms 双轴 QA](query-aggregation-bars-dual-axis-qa.md)。
+证据与待验项见 [图表定义 QA](acceptance/aggregations-and-charts.md)、[图表定义交换 QA](acceptance/aggregations-and-charts.md)
+与 [折线双轴 QA](acceptance/aggregations-and-charts.md)、[terms 双轴 QA](acceptance/aggregations-and-charts.md)。
 
 ## 7. 可视化、DSL 与 AI 的状态契约
 
@@ -285,7 +285,7 @@ DSL 模式首版编辑 `_search` 请求体，索引与连接仍由明确的上�
 保留 50 行本地分页；Table 决定列宽/顺序/显隐，完整宽度占位与逻辑列 ARIA 同步。
 焦点/拖拽/原生选区端点按列身份暂留，跨未挂载列按可见列顺序和真实行复制原值，不补隐藏列。
 新执行清理旧窗口/选区和滚动，列偏好保留；不通过滚动查询，不持久化结果/窗口状态。
-见 [列窗口 QA](result-column-window-qa.md)，不代表解析/内存/列设置列表、完整行虚拟化或原生性能完成。
+见 [列窗口 QA](acceptance/results-and-workspace.md)，不代表解析/内存/列设置列表、完整行虚拟化或原生性能完成。
 
 ### 8.2 文档详情
 
@@ -301,7 +301,7 @@ DSL 模式首版编辑 `_search` 请求体，索引与连接仍由明确的上�
 等价转义不影响相等，数组顺序保留，数值按精确十进制比较，显示/复制仍取原 token。
 每 hit 1 MiB/64 层/100,000 token/数字 4,096 字符，合计 4,096 项；超限整次拒绝，
 50 项分页。副本仅会话内存在，续页不偷换记录，新执行/离开关闭，不自动读取、执行或恢复。
-证据与未验范围见 [文档对比 QA](document-comparison-qa.md)，不代表完整详情/时间上下文或 Q05 完成。
+证据与未验范围见 [文档对比 QA](acceptance/results-and-workspace.md)，不代表完整详情/时间上下文或 Q05 完成。
 
 2026-10-10 Q05 结构化详情首批：复用同一有界 hit reader，核对真实接收页/行，
 打开时冻结完整记录、原接收页与执行来源；不按 `_id` 或显示序号重查。
@@ -314,7 +314,7 @@ DSL 模式首版编辑 `_search` 请求体，索引与连接仍由明确的上�
 原 hit 继续限 1 MiB/64 层/100,000 token/数字 4,096 字符，超限整次拒绝。
 搜索只匹配已加载路径，覆盖折叠项；原值/完整容器/完整记录/原接收页复制保留原 token，
 JSON 显示仅缩进，不带显示格式。新快照/离开关闭，续页不换捕获，不查询或持久化目录/搜索/结果。
-见 [详情 QA](document-detail-qa.md)；字段能力证据、时间上下文、原生交互与大文档性能仍待后续。
+见 [详情 QA](acceptance/results-and-workspace.md)；字段能力证据、时间上下文、原生交互与大文档性能仍待后续。
 
 ### 8.3 精度与图表
 
@@ -336,12 +336,12 @@ Top N、仅桶起点、精度损失计数与接收页限制随图显示，图范
 绘制比返回桶数和冻结绝对时间边界原文。最多 200 桶整次拒绘不截断，轴标签最多 12 个且截断仅为显示，
 tooltip/复制/表格仍取完整原 token。绘图运行时是延迟加载的纯 SVG 独立 chunk，无 canvas 测量、无 eval、
 无远程脚本；首批只提供显式开关与度量选择器，**不含点击/悬停查询、导出或图表定义保存**，
-不新建 Dashboard，也不把已加载文档导出冒充桶导出。证据与待验项见 [聚合图表 QA](query-aggregation-charts-qa.md)。2026-10-11 聚合构建首批沿用同一精度与配额口径：构建出的分组与直接指标只作为下一批已核对接收页的绘图输入，绘制仍保留原 token、不补桶、不解析日期（见 6.3）。Q06a 首批允许把“目标 + 分组 + 指标 + 绘图度量”存为本地定义并在明确复用后再次预览应用；定义不含图型与解析结果，换页或换快照仍需重新核对接收页（见 6.3 与 [图表定义 QA](chart-definitions-qa.md)）。
+不新建 Dashboard，也不把已加载文档导出冒充桶导出。证据与待验项见 [聚合图表 QA](acceptance/aggregations-and-charts.md)。2026-10-11 聚合构建首批沿用同一精度与配额口径：构建出的分组与直接指标只作为下一批已核对接收页的绘图输入，绘制仍保留原 token、不补桶、不解析日期（见 6.3）。Q06a 首批允许把“目标 + 分组 + 指标 + 绘图度量”存为本地定义并在明确复用后再次预览应用；定义不含图型与解析结果，换页或换快照仍需重新核对接收页（见 6.3 与 [图表定义 QA](acceptance/aggregations-and-charts.md)）。
 2026-10-11 进阶图型首批在同一已核对条目上为日期折线叠加第二度量作独立右轴：两序列各自保留原 token 与精度判定，
 未绘制清单与近似/断线提示按度量分列不互相掩盖，左右值轴各自定标（仍含 0）且不共用刻度、不做归一化或百分比换算，
 轴标题与图范围行点名各轴归属度量并声明无共用单位；200 桶与 12 个轴标签上限不因双轴放宽或减半，
 开关与选择器仍是纯读图控件，不请求、不开 PIT、不执行、不改 DSL，且双轴不写入定义、存储或交换文档（见 6.3 与
-[双轴图表 QA](query-aggregation-chart-dual-axis-qa.md)）。
+[双轴图表 QA](acceptance/aggregations-and-charts.md)）。
 
 ## 9. 分页、性能与导出
 
@@ -361,7 +361,7 @@ PIT 过期提示重新执行，不静默换快照拼接数据；关闭标签或�
 取消或失败保留显式标记的部分文件，不将其冒充完整成功文件。
 原始响应与解码缓存设上限；不能同时无限保留全量原文、对象树和表格行。
 
-2026-10-09 的 Q07 第三批已实现该全量子项的开发闭环，见 [导出 QA](snapshot-export-qa.md)：
+2026-10-09 的 Q07 第三批已实现该全量子项的开发闭环，见 [导出 QA](acceptance/results-and-workspace.md)：
 CSV 为固定 `_index,_id,_source,fields` 文档列，JSONL 保留完整 hit；与已加载导出的展开字段列区分。
 每批最多 1,000 行、响应最多 1 MiB；单任务最多 1,000,000 行/1 GiB，30 分钟扫描预算。
 只有有效空页和成功刷盘/替换才构成完整文件；限额、部分分片、失败、未知清理分别报告。
@@ -370,7 +370,7 @@ CSV 为固定 `_index,_id,_source,fields` 文档列，JSONL 保留完整 hit；�
 
 ### 9.1 参数与本地查询定义交换
 
-2026-10-09 Q07 第四批开发自动化通过，证据见 [参数与交换 QA](query-parameters-and-exchange-qa.md)。
+2026-10-09 Q07 第四批开发自动化通过，证据见 [参数与交换 QA](acceptance/query-editor-and-parameters.md)。
 参数定义为独立版本化模板与名称/类型列表，整值占位 `{"$param":"name"}` 不插值键名、
 字符串片段、连接或索引；支持六种 JSON 类型，数值和嵌套 JSON 的 token 不经浮点重写。
 最多 32 参数/1,000 占位，单值 64 KiB，模板和最终 DSL 256 KiB，深度/节点也有界。

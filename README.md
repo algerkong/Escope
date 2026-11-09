@@ -26,7 +26,7 @@ EScope is a lightweight desktop client for the everyday Elasticsearch workflow: 
 
 It is intentionally **not** a Kibana replacement, a dashboard builder, or a complete cluster-management suite. EScope focuses on making the daily query loop fast, clear and pleasant.
 
-> **Project status:** early development (`0.1.0`). The query workflow is usable, but APIs, storage schemas and UI details may still change. The current release is **read-only** — it never writes documents, mappings or cluster settings.
+> **Project status:** early development (`0.1.1`). The query workflow is usable, but APIs, storage schemas and UI details may still change. The current release is **read-only** — it never writes documents, mappings or cluster settings.
 
 ## Why EScope
 
@@ -51,6 +51,10 @@ It is intentionally **not** a Kibana replacement, a dashboard builder, or a comp
 | **Assets** | Save queries with parameter templates, browse bounded execution history, restore the previous workspace, and exchange definitions as local JSON files. |
 | **Export** | Copy loaded results as CSV/JSONL, or run a separate bounded PIT scan for a full export with explicit target, DSL and size/row limits. |
 | **Desktop experience** | Light/dark themes, four accent colors, density and font controls, Chinese/English UI, keyboard-first dialogs and a fused native title bar. |
+
+## Download
+
+Installers are published on [GitHub Releases](https://github.com/algerkong/Escope/releases): an NSIS installer for Windows x64, DMG images for Apple Silicon and Intel Macs, and `.deb` / AppImage packages for Linux x64. Builds are unsigned for now; see the release notes for first-launch steps.
 
 ## Quick start
 
@@ -89,9 +93,12 @@ npm run build:desktop
 
 # Windows NSIS installer (unsigned, current-user install)
 npm run build:installer:windows
+
+# macOS DMG / Linux deb + AppImage, run on the matching platform
+npm run tauri -- build
 ```
 
-Artifacts are written to `src-tauri/target/release/` (`escope.exe` on Windows) and `src-tauri/target/release/bundle/nsis/` for the installer.
+Artifacts are written to `src-tauri/target/release/` (`escope.exe` on Windows) and the installers to `src-tauri/target/release/bundle/`. Pushing a `v*` tag runs the [release workflow](.github/workflows/release.yml), which checks the tag against the app version and attaches all platform installers to a draft release.
 
 ## Architecture
 

@@ -105,18 +105,16 @@ npm run test:prototype
 
 ## 当前交接状态
 
-- 更新日期：2026-11-06。
-- 本批任务：v0.1.0 首个公开版本收口，基线 `6968816`（未推送部分已线性化）；发布准备，不关闭六方向父任务。
-- 实际交付：`src/domain/feature-flags.ts` 的 `AI_ASSISTANT_ENABLED = false` 隐藏 AI 面板/切换/模型路由/启动展开开关
-  （实现与测试保留，测试以 `aiEnabled` 开启）；新应用图标（暗色 e 形放大镜，源 `src-tauri/icons/icon.svg` 与
-  macOS 栅格 `icon-macos.svg`，`node scripts/generate-icon.mjs` 重新生成）与标题栏 logo；中英文 README、MIT LICENSE。
-- 历史：未推送的检查点/合并提交整理为线性 `1144378`/`b884a44`/`6968816`（与原树一致），首次发布提交（含旧图标）
-  丢弃重做；原提交保留在本地 `backup/pre-cleanup-2026-11-06` 与标签 `backup/v0.1.0-original`，已推送历史未改。
-- 文档：功能契约迁入 `docs/engineering-contracts.md`；约 40 份批次 QA 按领域合并为 `docs/acceptance/` 7 份；
-  plan/backlog/status/续接/人工清单/Kibana 对照去重，`docs` 与本文件 Markdown 由约 1.0 MB 降至约 0.57 MB。
-- 本机 seeder 移至已忽略的 `scripts/local/`（`node scripts/local/seed-es-test-data.mjs`），`.vscode/`、`*.stackdump` 同样忽略。
-- 验证：lint、typecheck/正式构建、Vitest 148 文件 2696 项、`cargo check`/fmt 通过；Rust 459 项（6 ignored）为同日
-  图标替换前记录，Rust 代码未改。原型未改，不重跑。
-- 未验证：安装包实机安装/卸载、真实 ES、原生布局/焦点/IME/高对比/性能、macOS/Linux、代码签名；大包警告保留。
-- 下次手动接续：Q06a 会话级注释；AI 入口待运行时/上下文策略/拒绝处理完善后再开启；
-  图例筛选、同比环比/公式与图层按服务端语义/定义版本依赖推进。
+- 更新日期：2026-11-09。
+- 本批任务：v0.1.1 正式发布准备（R01 子项 + F02.2 标题栏），基线 `2a91f29`；不关闭六方向父任务。
+- 实际交付：版本升至 0.1.1（已推送的 `v0.1.0` 标签保留在 `2a91f29`，不移动）；`.github/workflows/release.yml`
+  （标签/手动触发、版本一致性校验、`docs/releases/<tag>.md` 草稿 Release、Windows NSIS/macOS arm64+x64 DMG/
+  Linux deb+AppImage）；`tauri.macos.conf.json` 加 dmg 打包与 `trafficLightPosition`，新增 `tauri.linux.conf.json`；
+  标题栏 macOS 交通灯居中与 78px 安全区、Windows/Linux 按下态；界面版本由 `src/domain/app-version.ts` 读 package.json；
+  中英文 README 下载与打包说明。
+- 验证：lint、正式构建、Vitest 149 文件 2699 项、cargo fmt 通过；本机 NSIS `EScope_0.1.1_x64-setup.exe` 构建成功。
+  Rust 代码未改（仅版本号），未重跑 Rust 测试；原型未改。
+- 未验证：GitHub 工作流未运行（本机 `gh` 令牌访问 `algerkong/Escope` 返回 404，需换有权限的令牌或在网页查看）；
+  macOS 交通灯位置按 tao 源码推算需实机核对；DMG/deb/AppImage、安装/卸载、真实 ES、签名均未验。
+- 下一步：用户确认后推送 main 与 `v0.1.1` 标签 → 核对草稿 Release 资产与说明 → 公开；之后 Q06a 会话级注释，
+  AI 入口待运行时/上下文策略/拒绝处理完善后再开启。

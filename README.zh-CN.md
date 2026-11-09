@@ -26,7 +26,7 @@ EScope 是一个轻量的 Elasticsearch 桌面客户端，围绕日常查询流�
 
 它**不是** Kibana 的替代品，也不是 Dashboard 搭建器或完整的集群管理套件。EScope 只把“连上、查清、拿走”这条日常链路做得更快、更清楚、更顺手。
 
-> **项目状态：** 早期开发（`0.1.0`）。查询工作流已经可用，但 API、存储 schema 和界面细节仍可能调整。当前版本为**只读**——不会写入文档、Mapping 或集群设置。
+> **项目状态：** 早期开发（`0.1.1`）。查询工作流已经可用，但 API、存储 schema 和界面细节仍可能调整。当前版本为**只读**——不会写入文档、Mapping 或集群设置。
 
 ## 为什么选择 EScope
 
@@ -51,6 +51,10 @@ EScope 是一个轻量的 Elasticsearch 桌面客户端，围绕日常查询流�
 | **查询资产** | 保存带参数模板的查询，浏览有界执行历史，恢复上次工作区，并以本地 JSON 文件交换查询定义。 |
 | **导出** | 将已加载结果复制为 CSV/JSONL，或使用独立的有界 PIT 扫描执行全量导出，明确展示目标、DSL 与行数/文件限额。 |
 | **桌面体验** | 明暗主题、四种强调色、密度与字体控制、中英文界面、键盘优先的对话框，以及与顶栏融合的原生窗口控制。 |
+
+## 下载
+
+安装包发布在 [GitHub Releases](https://github.com/algerkong/Escope/releases)：Windows x64 的 NSIS 安装包、Apple Silicon 与 Intel Mac 的 DMG，以及 Linux x64 的 `.deb` / AppImage。当前构建未签名，首次启动步骤见对应版本说明。
 
 ## 快速开始
 
@@ -89,9 +93,12 @@ npm run build:desktop
 
 # Windows NSIS 安装包（未签名，当前用户安装）
 npm run build:installer:windows
+
+# macOS DMG / Linux deb + AppImage，需在对应平台运行
+npm run tauri -- build
 ```
 
-产物位于 `src-tauri/target/release/`（Windows 下为 `escope.exe`）以及 `src-tauri/target/release/bundle/nsis/`。
+可执行文件位于 `src-tauri/target/release/`（Windows 下为 `escope.exe`），安装包位于 `src-tauri/target/release/bundle/`。推送 `v*` 标签会运行 [发布工作流](.github/workflows/release.yml)：校验标签与应用版本一致后，把各平台安装包上传到草稿 Release。
 
 ## 技术架构
 

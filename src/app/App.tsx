@@ -8,6 +8,7 @@ import {
 import { selectConnection, type ConnectionInput, type ConnectionSecurityChange } from '../domain/connection';
 import { parsePreferences, resolveLocale, type Preferences } from '../domain/preferences';
 import { AI_ASSISTANT_ENABLED } from '../domain/feature-flags';
+import { APP_VERSION } from '../domain/app-version';
 import type { AiChatBackend } from '../domain/ai-chat';
 import type { StorageService, StoredState } from '../services/storage';
 import { errorCode, testConnection, type QueryBackend } from '../services/ipc';
@@ -341,7 +342,7 @@ export function App({ service, initial, connectionProbe = testConnection, queryB
         <span className="status-dot" />
         {t(active ? connectionTestLabel(connectionTests.results[active.id]) : 'notConnected')}</span> : null}
       <span className="footer-spacer" /><span>{savingPreferences ? <LoaderCircle size={13} className="spin" /> : null}
-        {t(service.kind === 'desktop' ? 'desktop' : 'session')}</span><span>v0.1.0</span></footer>
+        {t(service.kind === 'desktop' ? 'desktop' : 'session')}</span><span>v{APP_VERSION}</span></footer>
     {palette ? <CommandPalette key={palette} kind={palette} commands={commands} onClose={() => setPalette(null)} /> : null}
   </div>;
 }

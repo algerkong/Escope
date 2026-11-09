@@ -11,7 +11,12 @@
       "visible": true,
       "decorations": true,
       "titleBarStyle": "Overlay",
-      "hiddenTitle": true
+      "hiddenTitle": true,
+      "trafficLightPosition": { "x": 20, "y": 29 }
     }]
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["dmg"]
   }
 }

@@ -33,7 +33,7 @@ export const en = {
     modelPending: 'Model connections are not available in this build.',
     resourcePending: 'Resource discovery is not available in this build.',
     noMetrics: 'No cluster data', connectionRequired: 'Select a connection to continue.',
-    noRequests: 'No request has been sent.', about: 'EScope 0.1.0',
+    noRequests: 'No request has been sent.', about: 'EScope {{version}}',
   },
   connections: {
     title: 'Connections', add: 'Add connection', edit: 'Edit connection',

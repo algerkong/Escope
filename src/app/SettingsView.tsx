@@ -14,6 +14,7 @@ import { ModelPanel } from '../features/models/ModelPanel';
 import { PreferencesPanel } from '../features/settings/PreferencesPanel';
 import type { ClusterBackend } from '../services/cluster';
 import type { ModelService } from '../services/models';
+import { APP_VERSION } from '../domain/app-version';
 
 const icons = { general: Globe, appearance: Monitor, typography: Type, shortcuts: Keyboard,
   connections: Cable, models: Sparkles, cluster: Database, nodes: Server, shards: Boxes, indices: Layers };
@@ -76,7 +77,7 @@ export function SettingsView(props: Props) {
         {!groups.some((group) => group.routes.some((item) => `${t(`settings:${item}`)} ${item}`.toLowerCase().includes(search.toLowerCase()))) ?
           <p className="muted settings-no-matches">{t('noMatches')}</p> : null}
       </nav>
-      <div className="settings-version"><Settings2 size={15} />{t('settings:about')}</div>
+      <div className="settings-version"><Settings2 size={15} />{t('settings:about', { version: APP_VERSION })}</div>
     </aside>
     <main className="settings-main"><div className={`settings-content ${isManagement ? 'wide' : ''}`}>
       <h1 tabIndex={-1} id="settings-title"><Icon size={21} />{t(`settings:${route}`)}</h1>

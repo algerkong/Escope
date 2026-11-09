@@ -3,13 +3,17 @@
 
 .window-titlebar-content { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex: 1; min-width: 0; }
 
-/* macOS keeps the real traffic lights. They occupy roughly the first 62 points of the
-   title bar, so the header reserves a fixed safe area next to the brand instead of drawing
-   a second bar. Native fullscreen hides the title bar, so the safe area collapses there.
-   The placement itself is left at the macOS default; Tauri's `trafficLightPosition` option
-   (requires titleBarStyle Overlay with decorations) takes logical points and moves the close
-   button origin, so it is only worth setting from a real macOS check. */
-.window-titlebar[data-window-platform="macos"] .window-traffic-lights { flex: 0 0 auto; width: 48px; }
+/* macOS keeps the real traffic lights. Without an inset they sit in a 28 point system bar,
+   centered about 14 points from the top, while the 58px header centers its content at 29.
+   tauri.macos.conf.json therefore sets `trafficLightPosition` to x 20, y 29: the close
+   button starts at the header's own 20px inset and the row is centered on the header. Three
+   14 point buttons on a 20 point pitch end at 74, so the header drops its left padding and
+   reserves 78px; with the header gap the brand starts at least 9px after the zoom button at
+   every width. Native fullscreen hides the title bar, so the safe area collapses there and
+   the regular left padding returns. */
+.window-titlebar[data-window-platform="macos"] { padding-left: 0; }
+.window-titlebar[data-window-platform="macos"] .window-traffic-lights { flex: 0 0 auto; width: 78px; align-self: stretch; }
+.window-titlebar[data-window-platform="macos"][data-window-fullscreen="true"] { padding-left: 20px; }
 .window-titlebar[data-window-platform="macos"][data-window-fullscreen="true"] .window-traffic-lights { display: none; }
 
 /* Windows and Linux caption buttons are flush with the top right corner, so the header
@@ -23,12 +27,15 @@
 .window-controls { display: flex; align-items: center; align-self: stretch; flex: 0 0 auto; }
 .window-control { flex: 0 0 auto; background: transparent; border: 0; border-radius: 0; padding: 0; color: var(--text); }
 .window-control:not(:disabled):hover { background: var(--subtle); }
+.window-control:not(:disabled):active { background: var(--border); }
 .window-control:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
 
 /* Windows: 46px wide square-cornered buttons spanning the full height of the bar, so the
    hit area reaches the top right corner of the window. Close hovers red. */
 .window-titlebar[data-window-platform="windows"] .window-control { width: 46px; height: 100%; }
+.window-titlebar[data-window-platform="windows"] .window-control svg { stroke-width: 1.5; }
 .window-titlebar[data-window-platform="windows"] .window-control-close:not(:disabled):hover { background: #c42b1c; color: #fff; }
+.window-titlebar[data-window-platform="windows"] .window-control-close:not(:disabled):active { background: rgb(196 43 28 / 0.9); color: #fff; }
 
 /* Linux: compact rounded controls. Button order and placement differ between desktop
    environments, so this is intentionally a neutral right side layout, not a clone of one. */
@@ -36,12 +43,14 @@
 .window-titlebar[data-window-platform="unknown"] .window-controls { gap: 4px; padding-right: 8px; }
 .window-titlebar[data-window-platform="linux"] .window-control,
 .window-titlebar[data-window-platform="unknown"] .window-control { width: 32px; height: 32px; border-radius: 6px; }
-.window-titlebar[data-window-platform="linux"] .window-control-close:not(:disabled):hover { background: var(--error-bg); color: var(--error); }
+.window-titlebar[data-window-platform="linux"] .window-control-close:not(:disabled):hover,
+.window-titlebar[data-window-platform="linux"] .window-control-close:not(:disabled):active { background: var(--error-bg); color: var(--error); }
 
 @media (max-width: 760px) {
   .window-titlebar-content { gap: 8px; }
   .window-titlebar[data-window-controls="true"] .window-titlebar-content { padding: 9px 0; }
   .window-titlebar[data-window-controls="true"] .header-actions { padding-right: 12px; }
+  .window-titlebar[data-window-platform="macos"][data-window-fullscreen="true"] { padding-left: 12px; }
 }
 
 @media (max-width: 520px) {

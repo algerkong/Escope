@@ -35,7 +35,7 @@ export const zh: { [N in keyof typeof en]: Record<keyof typeof en[N], string> } 
     modelPending: '当前构建尚未接入模型服务。',
     resourcePending: '当前构建尚未接入资源发现。',
     noMetrics: '暂无集群数据', connectionRequired: '请选择连接后继续。',
-    noRequests: '尚未发送请求。', about: 'EScope 0.1.0',
+    noRequests: '尚未发送请求。', about: 'EScope {{version}}',
   },
   connections: {
     title: '连接中心', add: '添加连接', edit: '编辑连接',

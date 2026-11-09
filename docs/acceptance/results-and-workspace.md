@@ -327,3 +327,25 @@ field-formats、runtime-fields、query-time-range、query-filters、query-nested
 端点提前进入 DOM）；复审补“新请求直接完成”反例先红，字段能力明细加请求 ID key 后 72 项通过。
 特有待验：多索引/别名/类型冲突、FLS/诊断拒绝与授权查询分离、不同 ES 版本返回形状；160px 侧栏、长字段/端点/索引、20 项分页；
 大型 field caps 性能开放。
+
+## 2026-11-09 v0.1.1 发布工作流与三平台标题栏（R01/F02.2）
+
+- 版本 0.1.1：已推送的 `v0.1.0` 标签指向 `2a91f29`，不移动；package.json/lock、tauri.conf.json、Cargo.toml/lock 同步，
+  界面页脚与“关于”改由 `src/domain/app-version.ts`（读 package.json）提供，不再硬编码。
+- `.github/workflows/release.yml`：推送 `v*.*.*` 或手动指定已有标签；先校验标签格式与三份清单版本一致，
+  用 `docs/releases/<tag>.md` 建（或复用）草稿 Release，再以 tauri-action 构建 Windows NSIS、macOS arm64/x64 DMG、
+  Linux（ubuntu-22.04）deb/AppImage 上传；不生成 updater JSON，不签名，草稿需人工核对后公开。
+- 打包配置：`tauri.macos.conf.json` 加 `bundle` dmg，新增 `tauri.linux.conf.json`（deb/appimage）；基础配置仍不打包，
+  `build:desktop` 继续 `--no-bundle`。
+- 标题栏：macOS `trafficLightPosition` (20, 29) 使交通灯中线对齐 58px header，header 左内边距归零、安全区 78px，
+  全屏时恢复内边距；Windows/Linux 控件增加按下态，Windows 图标线宽 1.5、关闭按下 `rgb(196 43 28 / 0.9)`。
+
+| 检查 | 结果 |
+| --- | --- |
+| `npm run lint`、`npm run build` | 通过；大包警告保留 |
+| Vitest 全量 `--maxWorkers=2` | **149** 文件 **2699** 项通过（新增 `app-version`，`window-config` 增发布打包断言） |
+| `cargo fmt --check` | 通过；Rust 代码未改，仅版本号，未重跑 Rust 测试 |
+| `npm run build:installer:windows` | `EScope_0.1.1_x64-setup.exe` 6,010,211 bytes，未签名，未实装 |
+
+未验证：GitHub 工作流未运行（本机 `gh` 令牌无该仓库权限）；macOS 交通灯位置为按 tao `inset_traffic_lights` 推算，
+需实机核对；DMG/deb/AppImage 未构建；安装/卸载与签名未做。待验项见 [人工清单](../manual-acceptance.md)。

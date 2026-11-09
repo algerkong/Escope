@@ -8,7 +8,7 @@
 
 ## 当前状态
 
-- **版本**：v0.1.0 首个公开版本准备（2026-11-06，见批次索引末行）；发布准备不关闭任何父任务。
+- **版本**：v0.1.1 首个正式发布准备（2026-11-09，见批次索引末行）；已推送的 `v0.1.0` 标签保留不动，发布准备不关闭任何父任务。
 - **主线**：2026-10-09 确认的六方向——连接与权限、数据探索、保存与导出、聚合与图表、数据管理、地图与关系（第 10 节）。
 - **最近完成**：Q06a 会话级参考线、terms 第二度量与 main/dev 合并（schema v10），六方向进展见 10.1。
 - **待验**：真实 ES、原生 UI、性能、跨平台、安装与签名，集中见 [人工验收清单](manual-acceptance.md)。
@@ -273,6 +273,7 @@ C01.3 ES 只读认证传输底座（2026-10-09 交付；内部实现、复审与
 | 10-15 | Q06a · 10.41 | `8affb73` | terms 条形第二度量（同槽位并列柱、独立左右轴），补历史 v9 CRLF 指纹兼容 | [聚合与图表][ac] |
 | 10-15 | Q06a · 10.42 | `18f90d8` | 会话级参考线：每图 ≤4 条、明确左/右轴，不进定义/恢复/交换 | [聚合与图表][ac] |
 | 11-06 | v0.1.0 收口 · 10.43 | `6968816` | 发布准备：`AI_ASSISTANT_ENABLED = false` 隐藏 AI 入口（实现与测试保留，测试以 `aiEnabled` 开启）；新图标（`src-tauri/icons/icon.svg`/`icon-macos.svg` + `scripts/generate-icon.mjs`）与标题栏 logo；中英文 README 与 MIT LICENSE；文档按领域合并到 `acceptance/`、契约迁入 `engineering-contracts.md`；未推送历史线性化（原提交见本地 `backup/pre-cleanup-2026-11-06`）；package.json/tauri.conf.json/Cargo.toml 均 `0.1.0`，本地标签 `v0.1.0` 未推送；lint、构建、Vitest 148 文件 2696 项、cargo check/fmt 通过（Rust 459 项为同日图标前记录，代码未改）；seeder 移至忽略的 `scripts/local/`；未验安装/卸载、真实 ES、macOS/Linux 构建与凭据、签名 | [人工清单](manual-acceptance.md) |
+| 11-09 | v0.1.1 发布 · 10.44 | `2a91f29` | 版本 0.1.1（`v0.1.0` 标签已推送且指向旧提交，不移动）；`.github/workflows/release.yml` 标签/手动触发、版本一致性校验、`docs/releases/<tag>.md` 草稿 Release 与四路 tauri-action 构建；macOS `dmg`、新增 `tauri.linux.conf.json`（deb/AppImage）；标题栏三平台：macOS `trafficLightPosition` 居中与 78px 安全区，Windows/Linux 按下态与 Windows 细线图标；界面版本改由 `src/domain/app-version.ts` 读 package.json；README 下载说明；未运行 GitHub 工作流、macOS/Linux 实机 | [结果与工作台][rw] |
 
 ### 关键决策记录
 

@@ -8,6 +8,8 @@ const readJson = (relative: string) => JSON.parse(readFileSync(resolve(process.c
 
 const baseConfig = readJson('src-tauri/tauri.conf.json');
 const macosConfig = readJson('src-tauri/tauri.macos.conf.json');
+const linuxConfig = readJson('src-tauri/tauri.linux.conf.json');
+const windowsConfig = readJson('src-tauri/tauri.windows.conf.json');
 const capability = readJson('src-tauri/capabilities/main.json');
 const configSchema = readJson('node_modules/@tauri-apps/cli/config.schema.json');
 
@@ -48,6 +50,9 @@ describe('window configuration', () => {
   it('keeps the native traffic lights on macOS through an overlay title bar', () => {
     expect(macosConfig.app.windows).toHaveLength(1);
     expect(macosWindow).toMatchObject({ decorations: true, titleBarStyle: 'Overlay', hiddenTitle: true });
+    // The inset centers the traffic lights on the 58px header; window.css reserves the safe
+    // area from the same numbers.
+    expect(macosWindow.trafficLightPosition).toEqual({ x: 20, y: 29 });
     for (const field of CONTRACT_FIELDS) {
       expect(macosWindow[field]).toEqual(baseWindow[field]);
     }
@@ -66,6 +71,19 @@ describe('window configuration', () => {
     }
     expect(baseConfig.$schema).toBe('https://schema.tauri.app/config/2');
     expect(macosConfig.$schema).toBe('https://schema.tauri.app/config/2');
+  });
+});
+
+describe('release bundles', () => {
+  // The base configuration never bundles; each platform file opts in to exactly the installer
+  // formats the release workflow publishes, and none of them redefines the window or security.
+  it('bundles one installer family per platform', () => {
+    expect(baseConfig.bundle.active).toBe(false);
+    expect(windowsConfig.bundle).toMatchObject({ active: true, targets: ['nsis'] });
+    expect(macosConfig.bundle).toEqual({ active: true, targets: ['dmg'] });
+    expect(linuxConfig.bundle).toEqual({ active: true, targets: ['deb', 'appimage'] });
+    expect(linuxConfig.app).toBeUndefined();
+    expect(linuxConfig.$schema).toBe('https://schema.tauri.app/config/2');
   });
 });
 

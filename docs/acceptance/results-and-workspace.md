@@ -349,3 +349,22 @@ field-formats、runtime-fields、query-time-range、query-filters、query-nested
 
 未验证：GitHub 工作流未运行（本机 `gh` 令牌无该仓库权限）；macOS 交通灯位置为按 tao `inset_traffic_lights` 推算，
 需实机核对；DMG/deb/AppImage 未构建；安装/卸载与签名未做。待验项见 [人工清单](../manual-acceptance.md)。
+
+## 2026-11-09 v0.1.1 Release 上传修复（R01）
+
+- 现象：推送 `v0.1.1` 后 Release 运行 `42548461182` 全绿，草稿 `438679206` 却无资产。四路构建实际产出
+  `EScope_0.1.1_x64-setup.exe`、`EScope_0.1.1_aarch64.dmg`、`EScope_0.1.1_x64.dmg`、`EScope_0.1.1_amd64.deb`、
+  `EScope_0.1.1_amd64.AppImage`，均以 `No releaseId or tagName provided, skipping all uploads...` 结束。
+- 原因：`prepare` 在 `gh release create` 后立即用 releases 列表回查 id，新草稿尚未出现在列表中，输出 `id=` 为空且不报错；
+  事后同一查询可返回该草稿。
+- 修复：新建分支改为 `gh api --method POST .../releases` 并从响应取 `.id`；复用分支仍按标签查列表；
+  id 非纯数字时 `prepare` 失败，构建不再运行。标签存在性由前一步检出 `refs/tags/<tag>` 保证。
+
+| 检查 | 结果 |
+| --- | --- |
+| js-yaml 解析 `release.yml`、`bash -n` 该步骤脚本 | 通过；`releaseId` 仍取 `needs.prepare.outputs.release-id` |
+| 替身 `gh`（PATH 断言命中替身，`GH_TOKEN` 无效兜底）跑该步骤 | 6 场景符合预期：复用已有 id、多行取首个、新建取响应 id 并读到 `docs/releases/v0.1.1.md`、空 id 与 `null` 退出 1 且不写输出、缺发布说明退出 1 |
+
+未验证：真实 API 的新建分支与补传未在 GitHub 运行；修复只在 main，`v0.1.1` 标签上的工作流不变，补传需从 main 手动触发。
+另记：Checks 的 macOS `cargo test` 在 `connection::tests::oversized_search_responses_and_invalid_utf8_fail_closed` 与
+`wrong_product_invalid_json_and_large_bodies_fail_closed` 超过 60 秒后不再结束，运行 `42181754453` 至 6 小时被取消，待单独排查。

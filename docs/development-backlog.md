@@ -44,7 +44,7 @@ F02/D03 按此实现，不能再次用概览页作为默认首页。查询结果
 | Q02/Q03/Q05/Q06/Q06a/Q07/Q09 | 见第 7 节“六方向确认后的查询子项边界” | 同该节 | 同该节 |
 | A01 | 模型设置页、严格校验与同步提交锁；A01.2 API Key 系统密钥库（schema v4）、显式远程模型列表、手填与自定义 HTTP/HTTPS，生成测试只认完整非空回复 | UsagePolicy、其他提供方、保存后重启端到端 | [AI 与反馈](acceptance/ai-models-and-feedback.md) |
 | A02/A04 | A02.1/A04.1 直接发送、多轮完整历史、显式查询附件、兼容协议/Ollama 流式与取消、安全 Markdown，不自动发送结果/执行候选/跨目标转发；A02.2 一次性 Bearer wire 路径保留（非主要 UI，不落日志/文档）；A02.3 同 A01.2。v0.1.0 由 `AI_ASSISTANT_ENABLED = false` 隐藏 AI 入口，实现与测试保留 | 真实 WebView/模型；A03/A05 未开始 | [AI 与反馈](acceptance/ai-models-and-feedback.md) |
-| R01 | NSIS 配置/禁选策略；Windows x64 当前用户未签名 NSIS 已构建；v0.1.1 发布工作流（标签校验、草稿 Release、Windows NSIS/macOS arm64+x64 DMG/Linux deb+AppImage）与平台打包配置 | 实装、签名/公证、跨平台 CI 构建未运行 | [AI 与反馈](acceptance/ai-models-and-feedback.md) |
+| R01 | NSIS 配置/禁选策略；Windows x64 当前用户未签名 NSIS 已构建；v0.1.1 发布工作流（标签校验、草稿 Release、Windows NSIS/macOS arm64+x64 DMG/Linux deb+AppImage）与平台打包配置；CI 四路构建已通过，空 release id 致上传被跳过已修复 | 补传与草稿核对、实装、签名/公证 | [AI 与反馈](acceptance/ai-models-and-feedback.md) |
 
 其余任务（D02–D04、C03、O01/O06/O07、Q08/Q10/Q11、A03/A05、G01–G05、W01–W11、E01–E05、R02–R04）尚未开始。
 

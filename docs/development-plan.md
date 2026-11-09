@@ -274,6 +274,7 @@ C01.3 ES 只读认证传输底座（2026-10-09 交付；内部实现、复审与
 | 10-15 | Q06a · 10.42 | `18f90d8` | 会话级参考线：每图 ≤4 条、明确左/右轴，不进定义/恢复/交换 | [聚合与图表][ac] |
 | 11-06 | v0.1.0 收口 · 10.43 | `6968816` | 发布准备：`AI_ASSISTANT_ENABLED = false` 隐藏 AI 入口（实现与测试保留，测试以 `aiEnabled` 开启）；新图标（`src-tauri/icons/icon.svg`/`icon-macos.svg` + `scripts/generate-icon.mjs`）与标题栏 logo；中英文 README 与 MIT LICENSE；文档按领域合并到 `acceptance/`、契约迁入 `engineering-contracts.md`；未推送历史线性化（原提交见本地 `backup/pre-cleanup-2026-11-06`）；package.json/tauri.conf.json/Cargo.toml 均 `0.1.0`，本地标签 `v0.1.0` 未推送；lint、构建、Vitest 148 文件 2696 项、cargo check/fmt 通过（Rust 459 项为同日图标前记录，代码未改）；seeder 移至忽略的 `scripts/local/`；未验安装/卸载、真实 ES、macOS/Linux 构建与凭据、签名 | [人工清单](manual-acceptance.md) |
 | 11-09 | v0.1.1 发布 · 10.44 | `2a91f29` | 版本 0.1.1（`v0.1.0` 标签已推送且指向旧提交，不移动）；`.github/workflows/release.yml` 标签/手动触发、版本一致性校验、`docs/releases/<tag>.md` 草稿 Release 与四路 tauri-action 构建；macOS `dmg`、新增 `tauri.linux.conf.json`（deb/AppImage）；标题栏三平台：macOS `trafficLightPosition` 居中与 78px 安全区，Windows/Linux 按下态与 Windows 细线图标；界面版本改由 `src/domain/app-version.ts` 读 package.json；README 下载说明；未运行 GitHub 工作流、macOS/Linux 实机 | [结果与工作台][rw] |
+| 11-09 | v0.1.1 发布修复 · 10.45 | `17144dc` | Release 运行 `42548461182` 四路构建均成功，但 `prepare` 新建草稿后立即用列表接口回查拿到空 id，tauri-action 跳过全部上传仍判成功；改为从创建响应取 id，id 非数字时 `prepare` 失败；替身 `gh` 六场景通过，真实创建分支与补传未运行；记录 Checks macOS `cargo test` 两个大响应体用例挂起至 6 小时取消 | [结果与工作台][rw] |
 
 ### 关键决策记录
 

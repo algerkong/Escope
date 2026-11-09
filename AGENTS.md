@@ -106,15 +106,14 @@ npm run test:prototype
 ## 当前交接状态
 
 - 更新日期：2026-11-09。
-- 本批任务：v0.1.1 正式发布准备（R01 子项 + F02.2 标题栏），基线 `2a91f29`；不关闭六方向父任务。
-- 实际交付：版本升至 0.1.1（已推送的 `v0.1.0` 标签保留在 `2a91f29`，不移动）；`.github/workflows/release.yml`
-  （标签/手动触发、版本一致性校验、`docs/releases/<tag>.md` 草稿 Release、Windows NSIS/macOS arm64+x64 DMG/
-  Linux deb+AppImage）；`tauri.macos.conf.json` 加 dmg 打包与 `trafficLightPosition`，新增 `tauri.linux.conf.json`；
-  标题栏 macOS 交通灯居中与 78px 安全区、Windows/Linux 按下态；界面版本由 `src/domain/app-version.ts` 读 package.json；
-  中英文 README 下载与打包说明。
-- 验证：lint、正式构建、Vitest 149 文件 2699 项、cargo fmt 通过；本机 NSIS `EScope_0.1.1_x64-setup.exe` 构建成功。
-  Rust 代码未改（仅版本号），未重跑 Rust 测试；原型未改。
-- 未验证：GitHub 工作流未运行（本机 `gh` 令牌访问 `algerkong/Escope` 返回 404，需换有权限的令牌或在网页查看）；
-  macOS 交通灯位置按 tao 源码推算需实机核对；DMG/deb/AppImage、安装/卸载、真实 ES、签名均未验。
-- 下一步：用户确认后推送 main 与 `v0.1.1` 标签 → 核对草稿 Release 资产与说明 → 公开；之后 Q06a 会话级注释，
-  AI 入口待运行时/上下文策略/拒绝处理完善后再开启。
+- 本批任务：R01 v0.1.1 Release 上传修复，基线 `17144dc`；不关闭六方向父任务。
+- 实际交付：`v0.1.1` 推送后 Release 运行 `42548461182` 四路构建均成功（NSIS、arm64/x64 DMG、deb、AppImage），但
+  `prepare` 新建草稿后立即用列表接口回查拿到空 id，tauri-action 跳过全部上传仍判成功，草稿 `438679206` 无资产。
+  `release.yml` 改为从创建响应取 id，id 非数字时 `prepare` 失败。
+- 验证：js-yaml 解析与 `bash -n` 通过；替身 `gh` 跑该步骤 6 场景（复用、多行取首个、新建、空/`null` id 失败、
+  缺发布说明失败）符合预期。前端/Rust/原型未改，未重跑对应测试。
+- 未验证/风险：真实 API 新建分支与补传未运行；修复只在 main，`v0.1.1` 标签上的工作流不变；Checks 的 macOS
+  `cargo test` 在 `connection::tests` 两个大响应体用例挂起至 6 小时取消；macOS 交通灯位置、DMG/deb/AppImage 安装、
+  真实 ES、签名均未验。
+- 下一步：用户确认后推送 main，从 main 手动触发 Release（`tag=v0.1.1`）补传到现有草稿 → 核对 5 个资产与说明 → 公开；
+  排查 macOS 测试挂起；之后 Q06a 会话级注释，AI 入口待运行时/上下文策略/拒绝处理完善后再开启。

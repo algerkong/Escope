@@ -43,9 +43,12 @@ jobs:
           if [ -z "$id" ]; then
             notes="docs/releases/$RELEASE_TAG.md"
             [ -f "$notes" ] || { echo "Missing $notes"; exit 1; }
-            gh release create "$RELEASE_TAG" --draft --verify-tag --title "EScope $RELEASE_TAG" --notes-file "$notes"
-            id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq ".[] | select(.tag_name == \"$RELEASE_TAG\") | .id" | head -n1)
+            # The release list lags behind a new draft, so take the id from the create response.
+            id=$(gh api --method POST "repos/$GITHUB_REPOSITORY/releases" -f tag_name="$RELEASE_TAG" \
+              -f name="EScope $RELEASE_TAG" -F draft=true -F body=@"$notes" --jq .id)
           fi
+          # tauri-action skips every upload without failing when releaseId is empty.
+          echo "$id" | grep -Eq '^[0-9]+$' || { echo "No release id for $RELEASE_TAG"; exit 1; }
           echo "id=$id" >> "$GITHUB_OUTPUT"
 
   build:
